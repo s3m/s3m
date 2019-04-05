@@ -1,7 +1,6 @@
 # s3m
 
-**s3m** a "fault-tolerant" command line tool for storing streams of data to an s3
-bucket.
+**s3m** a "fault-tolerant" command line tool for storing streams of data in s3 buckets.
 
 Problem trying to solve
 
