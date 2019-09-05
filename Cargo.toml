@@ -1,0 +1,17 @@
+[package]
+name = "s3m"
+version = "0.0.1"
+authors = ["Nicolas Embriz <nbari@tequila.io>"]
+description = "command line tool for storing streams of data in s3 buckets"
+documentation = "https://github.com/s3m/s3m/blob/master/README.md"
+homepage = "https://s3m.stream"
+repository = "https://github.com/s3m/s3m"
+readme = "README.md"
+keywords = ["s3", "stream", "upload", "resume", "bucket"]
+categories = ["command-line-utilities", "command-line-interface"]
+license-file = "LICENSE"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
