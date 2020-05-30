@@ -1,5 +1,5 @@
 use clap::{App, Arg};
-use s3m::signature;
+use s3m::{region, signature};
 //use serde_yaml;
 use std::fs::{metadata, File};
 use std::process;
@@ -24,9 +24,12 @@ fn main() {
         process::exit(1);
     });
 
-    let mut s = signature::Signature::new("GET", "asdf");
-    s.sign();
+    let region = region::Region::UsEast1;
+    //  let s = signature::Signature::new("GET", &"asdf".parse::<region::Region>().unwrap());
+
+    let mut s = signature::Signature::new("GET", &region, "/");
     println!("{:#?}", s);
+    s.sign();
 
     /*
     let file = File::open(&config).expect("Unable to open file");
