@@ -1,6 +1,6 @@
 use crate::region::Region;
-use chrono::prelude::{DateTime, Utc};
-use ring::digest;
+use chrono::prelude::Utc;
+use ring::{digest, hmac};
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::str;
@@ -175,4 +175,23 @@ fn canonical_values(values: &[Vec<u8>]) -> String {
         }
     }
     st
+}
+
+fn hmac(key: &str, msg: &str) -> String {
+    let mut hash = String::new();
+    let s_key = hmac::Key::new(hmac::HMAC_SHA256, key.as_ref());
+    hmac::sign(&s_key, msg.as_bytes())
+        .as_ref()
+        .iter()
+        .for_each(|k| {
+            hash.push_str(&format!("{:02x}", k));
+        });
+    hash
+}
+
+fn signing_key(key: &str, secret: &str, date: &str, region: Region, service: &str) -> String {
+    let date_hmac = hmac(&format!("AWS{}", secret), date);
+    let region_hmac = hmac(&date_hmac, region.name());
+    let service_hmac = hmac(&region_hmac, service);
+    hmac(&service_hmac, "aws4_request")
 }
