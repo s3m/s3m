@@ -18,9 +18,11 @@ travis-ci = { repository = "s3m/s3m", branch = "master" }
 [dependencies]
 chrono = "0.4"
 clap = "2.33"
+http = "0.2"
+reqwest = "0.10.6"
 ring = "0.16.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8.12"
 tempfile = "3"
-tokio = "0.2.21"
-reqwest = "0.10.6"
+tokio = { version = "0.2", features = ["full"] }
+url = "2.1"

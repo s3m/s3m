@@ -1,10 +1,11 @@
 use clap::{App, Arg};
-use s3m::{region, signature};
+use s3m::{credentials, region, signature};
 //use serde_yaml;
-use std::fs::{metadata, File};
+use std::fs::metadata;
 use std::process;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let matches = App::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
         .arg(
@@ -24,12 +25,18 @@ fn main() {
         process::exit(1);
     });
 
-    let region = region::Region::UsEast1;
+    let credentials = credentials::Credentials::new("", "");
+
+    //let region = region::Region::Custom {
+    //name: "foo".to_string(),
+    // endpoint: "ds11s3.swisscom.com".to_string(),
+    //};
+    let region = region::Region::default();
     //  let s = signature::Signature::new("GET", &"asdf".parse::<region::Region>().unwrap());
 
-    let mut s = signature::Signature::new("GET", &region, "/");
-    println!("{:#?}", s);
-    s.sign();
+    let mut s = signature::Signature::new("GET", &region, "/s3mon", &credentials);
+
+    s.sign().await;
 
     /*
     let file = File::open(&config).expect("Unable to open file");

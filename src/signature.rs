@@ -1,9 +1,15 @@
+use crate::credentials::Credentials;
 use crate::region::Region;
 use chrono::prelude::Utc;
+use http::Method;
+use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
+use reqwest::{Client, Response};
 use ring::{digest, hmac};
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::str;
+use url::Url;
 
 /// https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
 ///
@@ -39,6 +45,8 @@ pub struct Signature {
     // Region and service name strings must be UTF-8 encoded.
     // <date>/<aws-region>/s3/aws4_request
     pub region: Region,
+    // AWS Credentials
+    pub creds: Credentials,
     // The HTTP request path
     pub path: String,
     // The HTTP request headers
@@ -50,10 +58,11 @@ pub struct Signature {
 }
 
 impl Signature {
-    pub fn new(method: &str, region: &Region, path: &str) -> Signature {
+    pub fn new(method: &str, region: &Region, path: &str, creds: &Credentials) -> Signature {
         Self {
             method: method.to_string(),
             region: region.clone(),
+            creds: creds.clone(),
             path: path.to_string(),
             headers: BTreeMap::new(),
             signed_headers: String::new(),
@@ -61,12 +70,12 @@ impl Signature {
         }
     }
 
-    pub fn sign(&mut self) {
+    pub async fn sign(&mut self) {
         let now = Utc::now();
         let current_date = now.format("%Y%m%d");
         let current_datetime = now.format("%Y%m%dT%H%M%SZ");
 
-        let host = format!("s3.{}.amazonas.com", self.region.name());
+        let host = format!("s3.{}.amazonaws.com", self.region.name());
         self.add_header("host", &host);
         self.add_header("x-amz-date", &current_datetime.to_string());
 
@@ -80,18 +89,67 @@ impl Signature {
             "{}\n{}\n{}\n{}\n{}\n{}",
             &self.method, &self.path, "", canonical_headers, signed_headers, digest
         );
-        println!("{}", canonical_request);
-
         let scope = format!("{}/{}/s3/aws4_request", &current_date, self.region.name());
-
         let canonical_request_hash = sha256_digest(&canonical_request);
+        println!(
+            "{}\n---\n{}\n---",
+            canonical_request, canonical_request_hash
+        );
 
         let string_to_sign = string_to_sign(
             &current_datetime.to_string(),
             &scope,
             &canonical_request_hash,
         );
-        println!("{}", string_to_sign);
+        println!("string_to_sign: \n{}\n", string_to_sign);
+
+        let signing_key = signature_key(
+            &self.creds.aws_secret_access_key(),
+            &current_date.to_string(),
+            self.region.name(),
+            "s3",
+        );
+
+        println!("signing_key: {}", write_hex_bytes(signing_key.as_ref()));
+
+        let s_key = hmac::Key::new(hmac::HMAC_SHA256, signing_key.as_ref());
+        let signature = hmac::sign(&s_key, string_to_sign.as_bytes());
+        println!("signature: {}", write_hex_bytes(signature.as_ref()));
+
+        let authorization_header = format!(
+            "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
+            self.creds.aws_access_key_id(),
+            scope,
+            signed_headers,
+            write_hex_bytes(signature.as_ref())
+        );
+
+        let client = Client::new();
+        let url = Url::parse(format!("https://{}/s3mon", host).as_str()).unwrap();
+
+        let mut headers = self
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                Ok((
+                    k.parse::<HeaderName>().unwrap(),
+                    canonical_values(v).parse::<HeaderValue>().unwrap(),
+                ))
+            })
+            .collect::<Result<HeaderMap, ()>>()
+            .unwrap();
+
+        headers.insert("Authorization", authorization_header.parse().unwrap());
+
+        let request = client
+            .request(Method::from_bytes(self.method.as_bytes()).unwrap(), url)
+            .headers(headers)
+            .body("");
+
+        println!("{:#?}", request);
+
+        let resp = request.send().await.unwrap();
+        println!("---> {:#?}", resp.text().await.unwrap());
     }
 
     pub fn add_header<K: ToString>(&mut self, key: K, value: &str) {
@@ -189,9 +247,30 @@ fn hmac(key: &str, msg: &str) -> String {
     hash
 }
 
-fn signing_key(key: &str, secret: &str, date: &str, region: Region, service: &str) -> String {
-    let date_hmac = hmac(&format!("AWS{}", secret), date);
-    let region_hmac = hmac(&date_hmac, region.name());
-    let service_hmac = hmac(&region_hmac, service);
-    hmac(&service_hmac, "aws4_request")
+fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &str) -> hmac::Tag {
+    let s_key = hmac::Key::new(
+        hmac::HMAC_SHA256,
+        format!("AWS4{}", secret_access_key).as_ref(),
+    );
+    let k_date = hmac::sign(&s_key, date.as_bytes());
+    let s_key = hmac::Key::new(hmac::HMAC_SHA256, k_date.as_ref());
+    let k_region = hmac::sign(&s_key, region.as_bytes());
+    let s_key = hmac::Key::new(hmac::HMAC_SHA256, k_region.as_ref());
+    let k_service = hmac::sign(&s_key, service.as_bytes());
+    let s_key = hmac::Key::new(hmac::HMAC_SHA256, k_service.as_ref());
+    hmac::sign(&s_key, "aws4_request".as_bytes())
+    //.as_ref()
+    //.iter()
+    //.for_each(|k| {
+    //hash.push_str(&format!("{:02x}", k));
+    //});
+    //hash
+}
+
+fn write_hex_bytes(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for byte in bytes {
+        write!(&mut s, "{:02x}", byte).expect("Unable to write");
+    }
+    s
 }
