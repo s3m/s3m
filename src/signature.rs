@@ -2,8 +2,8 @@ use crate::credentials::Credentials;
 use crate::region::Region;
 use chrono::prelude::Utc;
 use http::Method;
-use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
-use reqwest::{Client, Response};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::Client;
 use ring::{digest, hmac};
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -197,14 +197,7 @@ fn skipped_headers(header: &str) -> bool {
 
 // TODO for empty string or full payload
 fn sha256_digest(string: &str) -> String {
-    let mut hash = String::new();
-    digest::digest(&digest::SHA256, string.as_bytes())
-        .as_ref()
-        .iter()
-        .for_each(|k| {
-            hash.push_str(&format!("{:02x}", k));
-        });
-    hash
+    write_hex_bytes(digest::digest(&digest::SHA256, string.as_bytes()).as_ref())
 }
 
 fn canonical_headers(headers: &BTreeMap<String, Vec<Vec<u8>>>) -> String {
@@ -235,36 +228,19 @@ fn canonical_values(values: &[Vec<u8>]) -> String {
     st
 }
 
-fn hmac(key: &str, msg: &str) -> String {
-    let mut hash = String::new();
+fn hmac(key: &[u8], msg: &[u8]) -> hmac::Tag {
     let s_key = hmac::Key::new(hmac::HMAC_SHA256, key.as_ref());
-    hmac::sign(&s_key, msg.as_bytes())
-        .as_ref()
-        .iter()
-        .for_each(|k| {
-            hash.push_str(&format!("{:02x}", k));
-        });
-    hash
+    hmac::sign(&s_key, msg)
 }
 
 fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &str) -> hmac::Tag {
-    let s_key = hmac::Key::new(
-        hmac::HMAC_SHA256,
-        format!("AWS4{}", secret_access_key).as_ref(),
+    let k_date = hmac(
+        &format!("AWS4{}", secret_access_key).as_bytes(),
+        date.as_bytes(),
     );
-    let k_date = hmac::sign(&s_key, date.as_bytes());
-    let s_key = hmac::Key::new(hmac::HMAC_SHA256, k_date.as_ref());
-    let k_region = hmac::sign(&s_key, region.as_bytes());
-    let s_key = hmac::Key::new(hmac::HMAC_SHA256, k_region.as_ref());
-    let k_service = hmac::sign(&s_key, service.as_bytes());
-    let s_key = hmac::Key::new(hmac::HMAC_SHA256, k_service.as_ref());
-    hmac::sign(&s_key, "aws4_request".as_bytes())
-    //.as_ref()
-    //.iter()
-    //.for_each(|k| {
-    //hash.push_str(&format!("{:02x}", k));
-    //});
-    //hash
+    let k_region = hmac(k_date.as_ref(), region.as_bytes());
+    let k_service = hmac(k_region.as_ref(), service.as_bytes());
+    hmac(k_service.as_ref(), "aws4_request".as_bytes())
 }
 
 fn write_hex_bytes(bytes: &[u8]) -> String {
