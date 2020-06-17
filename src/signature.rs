@@ -11,43 +11,15 @@ use std::fmt::Write;
 use std::str;
 use url::Url;
 
-/// https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
-///
-/// 1. Create a canonical request for Signature Version 4
-///
-/// Example Canonical request pseudocode:
-///     CanonicalRequest =
-///         HTTPRequestMethod + '\n' +
-///         CanonicalURI + '\n' +
-///         CanonicalQueryString + '\n' +
-///         CanonicalHeaders + '\n' +
-///         SignedHeaders + '\n' +
-///         HexEncode(Hash(RequestPayload))
-///
-/// 2. Create a string to sign for Signature Version 4
-///
-/// Structure of string to sign:
-///     StringToSign =
-///         Algorithm + \n +
-///         RequestDateTime + \n +
-///         CredentialScope + \n +
-///         HashedCanonicalRequest
-///
-/// 3. Calculate the signature for AWS Signature Version 4
-/// 4. Add the signature to the HTTP request
 #[derive(Debug)]
 pub struct Signature {
     // The HTTPRequestMethod
     pub method: String,
-    // CredentialScope
-    // This value is a string that includes the date, the Region you are targeting, the service you
-    // are requesting, and a termination string ("aws4_request") in lowercase characters. The
-    // Region and service name strings must be UTF-8 encoded.
-    // <date>/<aws-region>/s3/aws4_request
+    // AWS Region
     pub region: Region,
     // AWS Credentials
     pub creds: Credentials,
-    // The HTTP request path
+    // The HTTP request path (/bucket/)
     pub path: String,
     // The HTTP request headers
     pub headers: BTreeMap<String, Vec<Vec<u8>>>,
@@ -79,43 +51,55 @@ impl Signature {
         self.add_header("host", &host);
         self.add_header("x-amz-date", &current_datetime.to_string());
 
+        // TODO (pass digest after reading file maybe)
         let digest = sha256_digest(&self.payload);
         self.add_header("x-amz-content-sha256", &digest);
 
         let signed_headers = signed_headers(&self.headers);
         let canonical_headers = canonical_headers(&self.headers);
 
+        // https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
+        // 1. Create a canonical request for Signature Version 4
+        //
+        //     CanonicalRequest =
+        //         HTTPRequestMethod + '\n' +
+        //         CanonicalURI + '\n' +
+        //         CanonicalQueryString + '\n' +
+        //         CanonicalHeaders + '\n' +
+        //         SignedHeaders + '\n' +
+        //         HexEncode(Hash(RequestPayload))
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             &self.method, &self.path, "", canonical_headers, signed_headers, digest
         );
+
+        // 2. Create a string to sign for Signature Version 4
+        //
+        //     StringToSign =
+        //         Algorithm + \n +
+        //         RequestDateTime + \n +
+        //         CredentialScope + \n +
+        //         HashedCanonicalRequest
+        //
         let scope = format!("{}/{}/s3/aws4_request", &current_date, self.region.name());
         let canonical_request_hash = sha256_digest(&canonical_request);
-        println!(
-            "{}\n---\n{}\n---",
-            canonical_request, canonical_request_hash
-        );
-
         let string_to_sign = string_to_sign(
             &current_datetime.to_string(),
             &scope,
             &canonical_request_hash,
         );
-        println!("string_to_sign: \n{}\n", string_to_sign);
 
+        // 3. Calculate the signature for AWS Signature Version 4
         let signing_key = signature_key(
             &self.creds.aws_secret_access_key(),
             &current_date.to_string(),
             self.region.name(),
             "s3",
         );
-
-        println!("signing_key: {}", write_hex_bytes(signing_key.as_ref()));
-
         let s_key = hmac::Key::new(hmac::HMAC_SHA256, signing_key.as_ref());
         let signature = hmac::sign(&s_key, string_to_sign.as_bytes());
-        println!("signature: {}", write_hex_bytes(signature.as_ref()));
 
+        // 4. Add the signature to the HTTP request
         let authorization_header = format!(
             "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
             self.creds.aws_access_key_id(),
@@ -126,7 +110,6 @@ impl Signature {
 
         let client = Client::new();
         let url = Url::parse(format!("https://{}/s3mon", host).as_str()).unwrap();
-
         let mut headers = self
             .headers
             .iter()
@@ -179,20 +162,13 @@ pub fn string_to_sign(timestamp: &str, scope: &str, hashed_canonical_request: &s
 
 fn signed_headers(headers: &BTreeMap<String, Vec<Vec<u8>>>) -> String {
     let mut signed = String::new();
-    headers
-        .iter()
-        .filter(|&(ref key, _)| !skipped_headers(&key))
-        .for_each(|(key, _)| {
-            if !signed.is_empty() {
-                signed.push(';');
-            }
-            signed.push_str(key);
-        });
+    headers.iter().for_each(|(key, _)| {
+        if !signed.is_empty() {
+            signed.push(';');
+        }
+        signed.push_str(key);
+    });
     signed
-}
-
-fn skipped_headers(header: &str) -> bool {
-    ["authorization", "content-length", "user-agent"].contains(&header)
 }
 
 // TODO for empty string or full payload
@@ -202,11 +178,7 @@ fn sha256_digest(string: &str) -> String {
 
 fn canonical_headers(headers: &BTreeMap<String, Vec<Vec<u8>>>) -> String {
     let mut canonical = String::new();
-
     for (key, value) in headers.iter() {
-        if skipped_headers(key) {
-            continue;
-        }
         canonical.push_str(format!("{}:{}\n", key, canonical_values(value)).as_ref());
     }
     canonical
