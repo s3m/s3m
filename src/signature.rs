@@ -1,12 +1,16 @@
-use crate::credentials::Credentials;
-use crate::region::Region;
+//!  S3 signature v4
+//! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
+
+use crate::{credentials::Credentials, region::Region};
 use chrono::prelude::Utc;
 use http::Method;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use reqwest::Client;
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    Client,
+};
 use ring::{digest, hmac};
-use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
+use serde_xml_rs;
+use std::collections::{btree_map::Entry, BTreeMap};
 use std::fmt::Write;
 use std::str;
 use url::Url;
@@ -30,7 +34,8 @@ pub struct Signature {
 }
 
 impl Signature {
-    pub fn new(method: &str, region: &Region, path: &str, creds: &Credentials) -> Signature {
+    #[must_use]
+    pub fn new(method: &str, region: &Region, path: &str, creds: &Credentials) -> Self {
         Self {
             method: method.to_string(),
             region: region.clone(),
@@ -91,7 +96,7 @@ impl Signature {
 
         // 3. Calculate the signature for AWS Signature Version 4
         let signing_key = signature_key(
-            &self.creds.aws_secret_access_key(),
+            self.creds.aws_secret_access_key(),
             &current_date.to_string(),
             self.region.name(),
             "s3",
@@ -153,6 +158,7 @@ impl Signature {
 
 // Create a string to sign for Signature Version 4
 // https://docs.aws.amazon.com/general/latest/gr/sigv4-create-string-to-sign.html
+#[must_use]
 pub fn string_to_sign(timestamp: &str, scope: &str, hashed_canonical_request: &str) -> String {
     format!(
         "AWS4-HMAC-SHA256\n{}\n{}\n{}",
@@ -207,7 +213,7 @@ fn hmac(key: &[u8], msg: &[u8]) -> hmac::Tag {
 
 fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &str) -> hmac::Tag {
     let k_date = hmac(
-        &format!("AWS4{}", secret_access_key).as_bytes(),
+        format!("AWS4{}", secret_access_key).as_bytes(),
         date.as_bytes(),
     );
     let k_region = hmac(k_date.as_ref(), region.as_bytes());
