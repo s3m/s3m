@@ -1,5 +1,5 @@
 use clap::{App, Arg};
-use s3m::{credentials, region, signature};
+use s3m::s3::{credentials, region, signature};
 //use serde_yaml;
 use std::fs::metadata;
 use std::process;

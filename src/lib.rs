@@ -1,3 +1,1 @@
-pub mod credentials;
-pub mod region;
-pub mod signature;
+pub mod s3;

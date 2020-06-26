@@ -1,7 +1,7 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
-use crate::{credentials::Credentials, region::Region};
+use crate::s3::{credentials::Credentials, region::Region};
 use chrono::prelude::Utc;
 use http::Method;
 use reqwest::{
