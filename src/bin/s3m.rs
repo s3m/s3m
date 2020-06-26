@@ -1,5 +1,5 @@
 use clap::{App, Arg};
-use s3m::s3::{credentials, region, signature};
+use s3m::{Credentials, Region, Signature, S3};
 //use serde_yaml;
 use std::fs::metadata;
 use std::process;
@@ -25,16 +25,20 @@ async fn main() {
         process::exit(1);
     });
 
-    let credentials = credentials::Credentials::new("", "");
+    let credentials = Credentials::new("", "");
 
     //let region = region::Region::Custom {
     //name: "foo".to_string(),
     // endpoint: "ds11s3.swisscom.com".to_string(),
     //};
-    let region = region::Region::default();
+    let region = Region::default();
     //  let s = signature::Signature::new("GET", &"asdf".parse::<region::Region>().unwrap());
+    //
 
-    let mut s = signature::Signature::new("GET", &region, "/s3mon", &credentials);
+    let s3 = S3::new(&credentials, &region);
+    println!("{:#?}", s3);
+
+    let mut s = Signature::new("GET", &region, "/s3mon", &credentials);
 
     s.sign().await;
 
