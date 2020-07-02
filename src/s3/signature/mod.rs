@@ -1,7 +1,7 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
-use crate::s3::{credentials::Credentials, region::Region};
+use crate::s3::S3;
 use chrono::prelude::Utc;
 use http::Method;
 use reqwest::{
@@ -9,7 +9,6 @@ use reqwest::{
     Client,
 };
 use ring::{digest, hmac};
-use serde_xml_rs;
 use std::collections::{btree_map::Entry, BTreeMap};
 use std::fmt::Write;
 use std::str;
@@ -17,12 +16,10 @@ use url::Url;
 
 #[derive(Debug)]
 pub struct Signature {
+    // S3
+    s3: S3,
     // The HTTPRequestMethod
     pub method: String,
-    // AWS Region
-    pub region: Region,
-    // AWS Credentials
-    pub creds: Credentials,
     // The HTTP request path (/bucket/)
     pub path: String,
     // The HTTP request headers
@@ -35,11 +32,10 @@ pub struct Signature {
 
 impl Signature {
     #[must_use]
-    pub fn new(method: &str, region: &Region, path: &str, creds: &Credentials) -> Self {
+    pub fn new(s3: S3, method: &str, path: &str) -> Self {
         Self {
+            s3: s3,
             method: method.to_string(),
-            region: region.clone(),
-            creds: creds.clone(),
             path: path.to_string(),
             headers: BTreeMap::new(),
             signed_headers: String::new(),
@@ -52,7 +48,7 @@ impl Signature {
         let current_date = now.format("%Y%m%d");
         let current_datetime = now.format("%Y%m%dT%H%M%SZ");
 
-        let host = format!("s3.{}.amazonaws.com", self.region.name());
+        let host = format!("s3.{}.amazonaws.com", self.s3.region.name());
         self.add_header("host", &host);
         self.add_header("x-amz-date", &current_datetime.to_string());
 
@@ -74,9 +70,11 @@ impl Signature {
         //         SignedHeaders + '\n' +
         //         HexEncode(Hash(RequestPayload))
         let canonical_request = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}",
-            &self.method, &self.path, "", canonical_headers, signed_headers, digest
+            "{}\n{}/\n{}\n{}\n{}\n{}",
+            &self.method, &self.path, "list-type=2", canonical_headers, signed_headers, digest
         );
+
+        println!("canonical request: {}", canonical_request);
 
         // 2. Create a string to sign for Signature Version 4
         //
@@ -86,7 +84,11 @@ impl Signature {
         //         CredentialScope + \n +
         //         HashedCanonicalRequest
         //
-        let scope = format!("{}/{}/s3/aws4_request", &current_date, self.region.name());
+        let scope = format!(
+            "{}/{}/s3/aws4_request",
+            &current_date,
+            self.s3.region.name()
+        );
         let canonical_request_hash = sha256_digest(&canonical_request);
         let string_to_sign = string_to_sign(
             &current_datetime.to_string(),
@@ -96,9 +98,9 @@ impl Signature {
 
         // 3. Calculate the signature for AWS Signature Version 4
         let signing_key = signature_key(
-            self.creds.aws_secret_access_key(),
+            self.s3.credentials.aws_secret_access_key(),
             &current_date.to_string(),
-            self.region.name(),
+            self.s3.region.name(),
             "s3",
         );
         let s_key = hmac::Key::new(hmac::HMAC_SHA256, signing_key.as_ref());
@@ -107,14 +109,15 @@ impl Signature {
         // 4. Add the signature to the HTTP request
         let authorization_header = format!(
             "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
-            self.creds.aws_access_key_id(),
+            self.s3.credentials.aws_access_key_id(),
             scope,
             signed_headers,
             write_hex_bytes(signature.as_ref())
         );
 
         let client = Client::new();
-        let url = Url::parse(format!("https://{}/s3mon", host).as_str()).unwrap();
+        let url = Url::parse(format!("https://{}/s3mon/?list-type=2", host).as_str()).unwrap();
+        println!("url: {}", url);
         let mut headers = self
             .headers
             .iter()

@@ -1,5 +1,5 @@
 use clap::{App, Arg};
-use s3m::{Credentials, Region, Signature, S3};
+use s3m::s3::{Credentials, Region, Signature, S3};
 //use serde_yaml;
 use std::fs::metadata;
 use std::process;
@@ -35,12 +35,15 @@ async fn main() {
     //  let s = signature::Signature::new("GET", &"asdf".parse::<region::Region>().unwrap());
     //
 
-    let s3 = S3::new(&credentials, &region);
+    let s3 = S3::new("s3mon", &credentials, &region);
     println!("{:#?}", s3);
 
-    let mut s = Signature::new("GET", &region, "/s3mon", &credentials);
+    let objects = s3.list_objects("/");
+    println!("{:#?}", objects);
 
-    s.sign().await;
+    //    let mut s = Signature::new("GET", &region, "/s3mon", &credentials);
+
+    //   s.sign().await;
 
     /*
     let file = File::open(&config).expect("Unable to open file");
