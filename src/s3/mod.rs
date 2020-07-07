@@ -1,8 +1,8 @@
+pub mod actions;
 pub mod credentials;
 pub mod region;
 pub mod signature;
-
-pub use self::{credentials::Credentials, region::Region, signature::Signature};
+pub use self::{actions::Actions, credentials::Credentials, region::Region, signature::Signature};
 
 #[derive(Debug)]
 pub struct S3 {
@@ -28,8 +28,9 @@ impl S3 {
 
     // ListObjectsV2
     // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
-    pub fn list_objects<P: ToString>(self, path: P) {
-        let path = path.to_string();
-        let signature = Signature::new(self, "GET", &path);
+    pub fn list_objects(self, action: Actions) {
+        let method = action.http_verb();
+        let mut signature = Signature::new(self, method.as_str(), "/", "list-type=2");
+        signature.sign()
     }
 }

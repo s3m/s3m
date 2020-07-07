@@ -2,7 +2,7 @@
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
 use crate::s3::S3;
-use chrono::prelude::Utc;
+use chrono::prelude::{DateTime, Utc};
 use http::Method;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
@@ -22,31 +22,36 @@ pub struct Signature {
     pub method: String,
     // The HTTP request path (/bucket/)
     pub path: String,
+    // CanonicalQueryString
+    pub query_string: String,
     // The HTTP request headers
     pub headers: BTreeMap<String, Vec<Vec<u8>>>,
     // The SignedHeaders
     pub signed_headers: String,
     // The HexEncode(Hash(RequestPayload))
     pub payload: String,
+    // current date & time
+    datetime: DateTime<Utc>,
 }
 
 impl Signature {
     #[must_use]
-    pub fn new(s3: S3, method: &str, path: &str) -> Self {
+    pub fn new(s3: S3, method: &str, path: &str, query_string: &str) -> Self {
         Self {
             s3: s3,
             method: method.to_string(),
             path: path.to_string(),
+            query_string: query_string.to_string(),
+            datetime: Utc::now(),
             headers: BTreeMap::new(),
             signed_headers: String::new(),
             payload: String::new(),
         }
     }
 
-    pub async fn sign(&mut self) {
-        let now = Utc::now();
-        let current_date = now.format("%Y%m%d");
-        let current_datetime = now.format("%Y%m%dT%H%M%SZ");
+    pub fn sign(&mut self) {
+        let current_date = self.datetime.format("%Y%m%d");
+        let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
         let host = format!("s3.{}.amazonaws.com", self.s3.region.name());
         self.add_header("host", &host);
@@ -70,11 +75,11 @@ impl Signature {
         //         SignedHeaders + '\n' +
         //         HexEncode(Hash(RequestPayload))
         let canonical_request = format!(
-            "{}\n{}/\n{}\n{}\n{}\n{}",
-            &self.method, &self.path, "list-type=2", canonical_headers, signed_headers, digest
+            "{}\n{}\n{}\n{}\n{}\n{}",
+            &self.method, &self.path, &self.query_string, canonical_headers, signed_headers, digest
         );
 
-        println!("canonical request: {}", canonical_request);
+        // println!("canonical request: \n---\n{}\n---\n", canonical_request);
 
         // 2. Create a string to sign for Signature Version 4
         //
@@ -115,7 +120,6 @@ impl Signature {
             write_hex_bytes(signature.as_ref())
         );
 
-        let client = Client::new();
         let url = Url::parse(format!("https://{}/s3mon/?list-type=2", host).as_str()).unwrap();
         println!("url: {}", url);
         let mut headers = self
@@ -132,6 +136,7 @@ impl Signature {
 
         headers.insert("Authorization", authorization_header.parse().unwrap());
 
+        let client = Client::new();
         let request = client
             .request(Method::from_bytes(self.method.as_bytes()).unwrap(), url)
             .headers(headers)
@@ -139,8 +144,8 @@ impl Signature {
 
         println!("{:#?}", request);
 
-        let resp = request.send().await.unwrap();
-        println!("---> {:#?}", resp.text().await.unwrap());
+        //let resp = request.send().await.unwrap();
+        // println!("---> {:#?}", resp.text().await.unwrap());
     }
 
     pub fn add_header<K: ToString>(&mut self, key: K, value: &str) {
