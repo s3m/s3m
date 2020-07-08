@@ -1,8 +1,11 @@
 pub mod actions;
 pub mod credentials;
 pub mod region;
+pub mod request;
 pub mod signature;
 pub use self::{actions::Actions, credentials::Credentials, region::Region, signature::Signature};
+
+use std::error;
 
 #[derive(Debug)]
 pub struct S3 {
@@ -12,6 +15,8 @@ pub struct S3 {
     pub credentials: Credentials,
     // AWS Region
     pub region: Region,
+    // Host
+    pub host: String,
 }
 
 // Amazon S3 API Reference
@@ -23,14 +28,18 @@ impl S3 {
             bucket: bucket.to_string(),
             credentials: credentials.clone(),
             region: region.clone(),
+            host: format!("s3.{}.amazonaws.com", region.name()),
         }
     }
 
     // ListObjectsV2
     // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
-    pub fn list_objects(self, action: Actions) {
+    pub async fn list_objects(&self, action: Actions) -> Result<(), Box<dyn error::Error>> {
+        //pub async fn list_objects(&self, action: Actions) {
         let method = action.http_verb();
-        let mut signature = Signature::new(self, method.as_str(), "/", "list-type=2");
-        signature.sign()
+        let url = &format!("https://{}/{}?list-type=2", self.host, self.bucket);
+        let mut signature = Signature::new(&self, method.as_str(), url)?;
+        let headers = signature.sign("")?;
+        Ok(request::request(url, action.http_verb(), headers).await)
     }
 }

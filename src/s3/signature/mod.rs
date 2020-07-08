@@ -3,66 +3,64 @@
 
 use crate::s3::S3;
 use chrono::prelude::{DateTime, Utc};
-use http::Method;
-use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
-    Client,
-};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use ring::{digest, hmac};
-use std::collections::{btree_map::Entry, BTreeMap};
+use std::collections::BTreeMap;
+use std::error;
 use std::fmt::Write;
 use std::str;
 use url::Url;
 
+static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+
 #[derive(Debug)]
-pub struct Signature {
+pub struct Signature<'a> {
     // S3
-    s3: S3,
+    auth: &'a S3,
     // The HTTPRequestMethod
-    pub method: String,
-    // The HTTP request path (/bucket/)
-    pub path: String,
-    // CanonicalQueryString
-    pub query_string: String,
+    pub method: &'a str,
+    // The CanonicalURI
+    pub canonical_uri: String,
+    // The CanonicalQueryString
+    pub canonical_query_string: String,
     // The HTTP request headers
-    pub headers: BTreeMap<String, Vec<Vec<u8>>>,
-    // The SignedHeaders
-    pub signed_headers: String,
-    // The HexEncode(Hash(RequestPayload))
-    pub payload: String,
+    pub headers: BTreeMap<String, String>,
     // current date & time
     datetime: DateTime<Utc>,
 }
 
-impl Signature {
+impl<'a> Signature<'a> {
     #[must_use]
-    pub fn new(s3: S3, method: &str, path: &str, query_string: &str) -> Self {
-        Self {
-            s3: s3,
-            method: method.to_string(),
-            path: path.to_string(),
-            query_string: query_string.to_string(),
+    pub fn new(auth: &'a S3, method: &'a str, url: &'a str) -> Result<Self, Box<dyn error::Error>> {
+        let uri = Url::parse(url)?;
+        Ok(Self {
+            auth: auth,
+            method: method,
+            canonical_uri: canonical_uri(&uri),
+            canonical_query_string: canonical_query_string(&uri),
             datetime: Utc::now(),
             headers: BTreeMap::new(),
-            signed_headers: String::new(),
-            payload: String::new(),
-        }
+        })
     }
 
-    pub fn sign(&mut self) {
+    // The HexEncode(Hash(RequestPayload))
+    pub fn sign(
+        &mut self,
+        payload: &str,
+    ) -> Result<&BTreeMap<String, String>, Box<dyn error::Error>> {
         let current_date = self.datetime.format("%Y%m%d");
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
-        let host = format!("s3.{}.amazonaws.com", self.s3.region.name());
-        self.add_header("host", &host);
-        self.add_header("x-amz-date", &current_datetime.to_string());
+        self.add_header("host", self.auth.host.to_string());
+        self.add_header("x-amz-date", current_datetime.to_string());
+        self.add_header("User-Agent", APP_USER_AGENT.to_string());
 
         // TODO (pass digest after reading file maybe)
-        let digest = sha256_digest(&self.payload);
-        self.add_header("x-amz-content-sha256", &digest);
+        let digest = sha256_digest(payload);
+        self.add_header("x-amz-content-sha256", digest.to_string());
 
+        //        let canonical_headers = canonical_headers(&self.headers);
         let signed_headers = signed_headers(&self.headers);
-        let canonical_headers = canonical_headers(&self.headers);
 
         // https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
         // 1. Create a canonical request for Signature Version 4
@@ -76,10 +74,15 @@ impl Signature {
         //         HexEncode(Hash(RequestPayload))
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            &self.method, &self.path, &self.query_string, canonical_headers, signed_headers, digest
+            &self.method,
+            &self.canonical_uri,
+            &self.canonical_query_string,
+            canonical_headers(&self.headers),
+            signed_headers,
+            digest
         );
 
-        // println!("canonical request: \n---\n{}\n---\n", canonical_request);
+        //println!("canonical request: \n---\n{}\n---\n", canonical_request);
 
         // 2. Create a string to sign for Signature Version 4
         //
@@ -92,7 +95,7 @@ impl Signature {
         let scope = format!(
             "{}/{}/s3/aws4_request",
             &current_date,
-            self.s3.region.name()
+            self.auth.region.name()
         );
         let canonical_request_hash = sha256_digest(&canonical_request);
         let string_to_sign = string_to_sign(
@@ -103,9 +106,9 @@ impl Signature {
 
         // 3. Calculate the signature for AWS Signature Version 4
         let signing_key = signature_key(
-            self.s3.credentials.aws_secret_access_key(),
+            self.auth.credentials.aws_secret_access_key(),
             &current_date.to_string(),
-            self.s3.region.name(),
+            self.auth.region.name(),
             "s3",
         );
         let s_key = hmac::Key::new(hmac::HMAC_SHA256, signing_key.as_ref());
@@ -114,54 +117,97 @@ impl Signature {
         // 4. Add the signature to the HTTP request
         let authorization_header = format!(
             "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
-            self.s3.credentials.aws_access_key_id(),
+            self.auth.credentials.aws_access_key_id(),
             scope,
             signed_headers,
             write_hex_bytes(signature.as_ref())
         );
 
-        let url = Url::parse(format!("https://{}/s3mon/?list-type=2", host).as_str()).unwrap();
-        println!("url: {}", url);
-        let mut headers = self
+        self.add_header("Authorization", authorization_header);
+
+        //let url = Url::parse(format!("https://{}/s3mon/?list-type=2", host).as_str()).unwrap();
+        //println!("url: {}", url);
+        /*
+        let headers = self
             .headers
             .iter()
             .map(|(k, v)| {
                 Ok((
-                    k.parse::<HeaderName>().unwrap(),
-                    canonical_values(v).parse::<HeaderValue>().unwrap(),
+                    k.parse::<HeaderName>()?,
+                    canonical_values(v).parse::<HeaderValue>()?,
                 ))
             })
-            .collect::<Result<HeaderMap, ()>>()
-            .unwrap();
+            .collect::<Result<HeaderMap, Box<dyn error::Error>>>()?;
+        */
+        Ok(&self.headers)
+        //println!("{}", headers);
 
-        headers.insert("Authorization", authorization_header.parse().unwrap());
+        //        let client = Client::new();
+        //       let request = client
+        //         .request(Method::from_bytes(self.method.as_bytes()).unwrap(), url)
+        //        .headers(headers)
+        //       .body("");
 
-        let client = Client::new();
-        let request = client
-            .request(Method::from_bytes(self.method.as_bytes()).unwrap(), url)
-            .headers(headers)
-            .body("");
-
-        println!("{:#?}", request);
+        //      println!("{:#?}", request);
 
         //let resp = request.send().await.unwrap();
         // println!("---> {:#?}", resp.text().await.unwrap());
     }
 
-    pub fn add_header<K: ToString>(&mut self, key: K, value: &str) {
+    pub fn add_header<K: ToString>(&mut self, key: K, value: String) {
         let key = key.to_string().to_ascii_lowercase();
-        let value = value.as_bytes().to_vec();
-        match self.headers.entry(key) {
-            Entry::Vacant(entry) => {
-                let mut values = Vec::new();
-                values.push(value);
-                entry.insert(values);
-            }
-            Entry::Occupied(entry) => {
-                entry.into_mut().push(value);
-            }
-        }
+        self.headers.insert(key, value.trim().to_string());
     }
+}
+
+// CanonicalURI is the URI-encoded version of the absolute path component of the URI—everything
+// starting with the "/" that follows the domain name and up to the end of the string or to the
+// question mark character ('?') if you have query string parameters. The URI in the following
+// example, /examplebucket/myphoto.jpg, is the absolute path and you don't encode the "/" in the
+// absolute path:
+// http://s3.amazonaws.com/examplebucket/myphoto.jpg
+//
+// URI encode every byte except the unreserved characters:
+// 'A'-'Z', 'a'-'z', '0'-'9', '-', '.', '_', and '~'.
+pub fn canonical_uri(uri: &Url) -> String {
+    const FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'/')
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+    utf8_percent_encode(uri.path(), FRAGMENT).to_string()
+}
+
+// CanonicalQueryString specifies the URI-encoded query string parameters. You URI-encode name and
+// values individually. You must also sort the parameters in the canonical query string
+// alphabetically by key name. The sorting occurs after encoding.
+pub fn canonical_query_string(uri: &Url) -> String {
+    const FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+    let mut pairs = uri
+        .query_pairs()
+        .map(|(key, value)| {
+            format!(
+                "{}={}",
+                utf8_percent_encode(&key, FRAGMENT).to_string(),
+                utf8_percent_encode(&value, FRAGMENT).to_string()
+            )
+        })
+        .collect::<Vec<String>>();
+    pairs.sort();
+    pairs.join("&")
+}
+
+fn canonical_headers(headers: &BTreeMap<String, String>) -> String {
+    let mut canonical = String::new();
+    for (key, value) in headers.iter() {
+        canonical.push_str(format!("{}:{}\n", key, value).as_ref());
+    }
+    canonical
 }
 
 // Create a string to sign for Signature Version 4
@@ -174,7 +220,7 @@ pub fn string_to_sign(timestamp: &str, scope: &str, hashed_canonical_request: &s
     )
 }
 
-fn signed_headers(headers: &BTreeMap<String, Vec<Vec<u8>>>) -> String {
+fn signed_headers(headers: &BTreeMap<String, String>) -> String {
     let mut signed = String::new();
     headers.iter().for_each(|(key, _)| {
         if !signed.is_empty() {
@@ -188,30 +234,6 @@ fn signed_headers(headers: &BTreeMap<String, Vec<Vec<u8>>>) -> String {
 // TODO for empty string or full payload
 fn sha256_digest(string: &str) -> String {
     write_hex_bytes(digest::digest(&digest::SHA256, string.as_bytes()).as_ref())
-}
-
-fn canonical_headers(headers: &BTreeMap<String, Vec<Vec<u8>>>) -> String {
-    let mut canonical = String::new();
-    for (key, value) in headers.iter() {
-        canonical.push_str(format!("{}:{}\n", key, canonical_values(value)).as_ref());
-    }
-    canonical
-}
-
-fn canonical_values(values: &[Vec<u8>]) -> String {
-    let mut st = String::new();
-    for v in values {
-        let s = str::from_utf8(v).unwrap();
-        if !st.is_empty() {
-            st.push(',')
-        }
-        if s.starts_with('\"') {
-            st.push_str(s);
-        } else {
-            st.push_str(s.replace("  ", " ").trim());
-        }
-    }
-    st
 }
 
 fn hmac(key: &[u8], msg: &[u8]) -> hmac::Tag {

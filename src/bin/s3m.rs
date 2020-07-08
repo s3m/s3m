@@ -36,7 +36,6 @@ async fn main() {
     //
 
     let s3 = S3::new("s3mon", &credentials, &region);
-    println!("{:#?}", s3);
 
     let action = Actions::ListObjectsV2 {
         continuation_token: None,
@@ -45,7 +44,7 @@ async fn main() {
         start_after: None,
     };
 
-    let objects = s3.list_objects(action);
+    let objects = s3.list_objects(action).await;
     println!("{:#?}", objects);
 
     // let mut s = Signature::new("GET", &region, "/s3mon", &credentials);
