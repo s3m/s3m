@@ -45,7 +45,7 @@ async fn main() {
     };
 
     if let Ok(objects) = s3.list_objects(action).await {
-        println!("{:#?}", objects);
+        println!("objects: {:#?}", objects.text().await.unwrap());
     }
 
     // let mut s = Signature::new("GET", &region, "/s3mon", &credentials);

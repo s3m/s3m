@@ -5,6 +5,7 @@ pub mod request;
 pub mod signature;
 pub use self::{actions::Actions, credentials::Credentials, region::Region, signature::Signature};
 
+use reqwest::Response;
 use std::error;
 
 #[derive(Debug)]
@@ -34,12 +35,12 @@ impl S3 {
 
     // ListObjectsV2
     // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
-    pub async fn list_objects(&self, action: Actions) -> Result<(), Box<dyn error::Error>> {
+    pub async fn list_objects(&self, action: Actions) -> Result<Response, Box<dyn error::Error>> {
         //pub async fn list_objects(&self, action: Actions) {
         let method = action.http_verb();
         let url = format!("https://{}/{}?list-type=2", self.host, self.bucket);
         let mut signature = Signature::new(&self, method.as_str(), &url)?;
         let headers = signature.sign("")?;
-        Ok(request::request(&url, action.http_verb(), headers).await)
+        Ok(request::request(&url, action.http_verb(), headers).await?)
     }
 }
