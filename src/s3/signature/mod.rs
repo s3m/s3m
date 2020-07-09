@@ -18,7 +18,7 @@ pub struct Signature<'a> {
     // S3
     auth: &'a S3,
     // The HTTPRequestMethod
-    pub method: &'a str,
+    pub http_method: &'a str,
     // The CanonicalURI
     pub canonical_uri: String,
     // The CanonicalQueryString
@@ -30,14 +30,14 @@ pub struct Signature<'a> {
 }
 
 impl<'a> Signature<'a> {
-    #[must_use]
-    pub fn new(auth: &'a S3, method: &'a str, url: &'a str) -> Result<Self, Box<dyn error::Error>> {
-        let uri = Url::parse(url)?;
+    // #[must_use]
+    pub fn new(s3: &'a S3, method: &'a str, url: &'a str) -> Result<Self, Box<dyn error::Error>> {
+        let data_url = Url::parse(url)?;
         Ok(Self {
-            auth: auth,
-            method: method,
-            canonical_uri: canonical_uri(&uri),
-            canonical_query_string: canonical_query_string(&uri),
+            auth: s3,
+            http_method: method,
+            canonical_uri: canonical_uri(&data_url),
+            canonical_query_string: canonical_query_string(&data_url),
             datetime: Utc::now(),
             headers: BTreeMap::new(),
         })
@@ -51,13 +51,13 @@ impl<'a> Signature<'a> {
         let current_date = self.datetime.format("%Y%m%d");
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
-        self.add_header("host", self.auth.host.to_string());
-        self.add_header("x-amz-date", current_datetime.to_string());
-        self.add_header("User-Agent", APP_USER_AGENT.to_string());
+        self.add_header("host", &self.auth.host.to_string());
+        self.add_header("x-amz-date", &current_datetime.to_string());
+        self.add_header("User-Agent", &APP_USER_AGENT.to_string());
 
         // TODO (pass digest after reading file maybe)
         let digest = sha256_digest(payload);
-        self.add_header("x-amz-content-sha256", digest.to_string());
+        self.add_header("x-amz-content-sha256", &digest);
 
         //        let canonical_headers = canonical_headers(&self.headers);
         let signed_headers = signed_headers(&self.headers);
@@ -74,7 +74,7 @@ impl<'a> Signature<'a> {
         //         HexEncode(Hash(RequestPayload))
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            &self.method,
+            &self.http_method,
             &self.canonical_uri,
             &self.canonical_query_string,
             canonical_headers(&self.headers),
@@ -122,39 +122,11 @@ impl<'a> Signature<'a> {
             signed_headers,
             write_hex_bytes(signature.as_ref())
         );
-
-        self.add_header("Authorization", authorization_header);
-
-        //let url = Url::parse(format!("https://{}/s3mon/?list-type=2", host).as_str()).unwrap();
-        //println!("url: {}", url);
-        /*
-        let headers = self
-            .headers
-            .iter()
-            .map(|(k, v)| {
-                Ok((
-                    k.parse::<HeaderName>()?,
-                    canonical_values(v).parse::<HeaderValue>()?,
-                ))
-            })
-            .collect::<Result<HeaderMap, Box<dyn error::Error>>>()?;
-        */
+        self.add_header("Authorization", &authorization_header);
         Ok(&self.headers)
-        //println!("{}", headers);
-
-        //        let client = Client::new();
-        //       let request = client
-        //         .request(Method::from_bytes(self.method.as_bytes()).unwrap(), url)
-        //        .headers(headers)
-        //       .body("");
-
-        //      println!("{:#?}", request);
-
-        //let resp = request.send().await.unwrap();
-        // println!("---> {:#?}", resp.text().await.unwrap());
     }
 
-    pub fn add_header<K: ToString>(&mut self, key: K, value: String) {
+    pub fn add_header<K: ToString>(&mut self, key: K, value: &str) {
         let key = key.to_string().to_ascii_lowercase();
         self.headers.insert(key, value.trim().to_string());
     }
@@ -169,6 +141,7 @@ impl<'a> Signature<'a> {
 //
 // URI encode every byte except the unreserved characters:
 // 'A'-'Z', 'a'-'z', '0'-'9', '-', '.', '_', and '~'.
+#[must_use]
 pub fn canonical_uri(uri: &Url) -> String {
     const FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
         .remove(b'/')
@@ -182,6 +155,7 @@ pub fn canonical_uri(uri: &Url) -> String {
 // CanonicalQueryString specifies the URI-encoded query string parameters. You URI-encode name and
 // values individually. You must also sort the parameters in the canonical query string
 // alphabetically by key name. The sorting occurs after encoding.
+#[must_use]
 pub fn canonical_query_string(uri: &Url) -> String {
     const FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
         .remove(b'-')
@@ -237,7 +211,7 @@ fn sha256_digest(string: &str) -> String {
 }
 
 fn hmac(key: &[u8], msg: &[u8]) -> hmac::Tag {
-    let s_key = hmac::Key::new(hmac::HMAC_SHA256, key.as_ref());
+    let s_key = hmac::Key::new(hmac::HMAC_SHA256, key);
     hmac::sign(&s_key, msg)
 }
 
@@ -248,7 +222,7 @@ fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &st
     );
     let k_region = hmac(k_date.as_ref(), region.as_bytes());
     let k_service = hmac(k_region.as_ref(), service.as_bytes());
-    hmac(k_service.as_ref(), "aws4_request".as_bytes())
+    hmac(k_service.as_ref(), b"aws4_request")
 }
 
 fn write_hex_bytes(bytes: &[u8]) -> String {

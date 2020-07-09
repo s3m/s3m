@@ -35,8 +35,9 @@ async fn main() {
     //  let s = signature::Signature::new("GET", &"asdf".parse::<region::Region>().unwrap());
     //
 
-    let s3 = S3::new("s3mon", &credentials, &region);
+    let bucket = String::from("s3mon");
 
+    let s3 = S3::new(&bucket, &credentials, &region);
     let action = Actions::ListObjectsV2 {
         continuation_token: None,
         delimiter: None,

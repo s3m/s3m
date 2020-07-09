@@ -11,6 +11,7 @@ pub enum Actions {
 }
 
 impl Actions {
+    #[must_use]
     pub fn http_verb(&self) -> Method {
         match *self {
             Self::ListObjectsV2 { .. } => Method::GET,

@@ -79,6 +79,7 @@ pub enum Region {
 }
 
 impl Region {
+    #[must_use]
     pub fn name(&self) -> &str {
         match *self {
             Self::AfSouth1 => "af-south-1",
@@ -137,7 +138,7 @@ impl FromStr for Region {
             "us-west-2" => Ok(Self::UsWest2),
             "cn-north-1" => Ok(Self::CnNorth1),
             "cn-northwest-1" => Ok(Self::CnNorthwest1),
-            s => Err(ParseRegionError::new(s)),
+            _ => Err(ParseRegionError::new(s)),
         }
     }
 }
@@ -150,8 +151,9 @@ pub struct ParseRegionError {
 
 impl ParseRegionError {
     /// Parses a region given as a string literal into a type `Region'
+    #[must_use]
     pub fn new(input: &str) -> Self {
-        ParseRegionError {
+        Self {
             message: format!("Not a valid AWS region: {}", input),
         }
     }
@@ -166,7 +168,7 @@ impl Display for ParseRegionError {
 }
 
 impl Default for Region {
-    fn default() -> Region {
+    fn default() -> Self {
         match std::env::var("AWS_DEFAULT_REGION").or_else(|_| std::env::var("AWS_REGION")) {
             Ok(ref v) => Self::from_str(v).unwrap_or(Self::UsEast1),
             Err(_) => Self::UsEast1,

@@ -24,7 +24,7 @@ pub struct S3 {
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations.html>
 impl S3 {
     #[must_use]
-    pub fn new<B: ToString>(bucket: B, credentials: &Credentials, region: &Region) -> Self {
+    pub fn new<B: ToString>(bucket: &B, credentials: &Credentials, region: &Region) -> Self {
         Self {
             bucket: bucket.to_string(),
             credentials: credentials.clone(),
@@ -39,7 +39,7 @@ impl S3 {
         //pub async fn list_objects(&self, action: Actions) {
         let method = action.http_verb();
         let url = format!("https://{}/{}?list-type=2", self.host, self.bucket);
-        let mut signature = Signature::new(&self, method.as_str(), &url)?;
+        let mut signature = Signature::new(self, method.as_str(), &url)?;
         let headers = signature.sign("")?;
         Ok(request::request(&url, action.http_verb(), headers).await?)
     }
