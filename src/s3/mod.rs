@@ -1,11 +1,14 @@
 pub mod actions;
 pub mod credentials;
+pub mod deserializer;
 pub mod region;
 pub mod request;
+pub mod responses;
 pub mod signature;
 pub use self::{actions::Actions, credentials::Credentials, region::Region, signature::Signature};
 
-use reqwest::Response;
+use responses::ListBucketResult;
+use serde_xml_rs::from_str;
 use std::error;
 
 #[derive(Debug)]
@@ -35,12 +38,20 @@ impl S3 {
 
     // ListObjectsV2
     // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
-    pub async fn list_objects(&self, action: Actions) -> Result<Response, Box<dyn error::Error>> {
-        //pub async fn list_objects(&self, action: Actions) {
+    pub async fn list_objects(
+        &self,
+        action: Actions,
+    ) -> Result<ListBucketResult, Box<dyn error::Error>> {
         let method = action.http_verb();
         let url = format!("https://{}/{}?list-type=2", self.host, self.bucket);
         let mut signature = Signature::new(self, method.as_str(), &url)?;
         let headers = signature.sign("")?;
-        Ok(request::request(&url, action.http_verb(), headers).await?)
+        let response = match request::request(&url, action.http_verb(), headers).await {
+            Ok(r) => r,
+            Err(e) => return Err(Box::new(e)),
+        };
+        //        if rs.status() == 200 {
+        let options: ListBucketResult = from_str(&response.text().await?)?;
+        Ok(options)
     }
 }

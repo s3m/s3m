@@ -41,12 +41,13 @@ async fn main() {
     let action = Actions::ListObjectsV2 {
         continuation_token: None,
         delimiter: None,
+        fetch_owner: false,
         prefix: "".to_string(),
         start_after: None,
     };
 
     if let Ok(objects) = s3.list_objects(action).await {
-        println!("objects: {:#?}", objects.text().await.unwrap());
+        println!("objects: {:#?}", objects);
     }
 
     // let mut s = Signature::new("GET", &region, "/s3mon", &credentials);
