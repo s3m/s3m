@@ -45,6 +45,7 @@ impl S3 {
         let mut url = Url::parse(&format!("https://{}/{}", self.host, self.bucket))?;
         url.query_pairs_mut().append_pair("list-type", "2");
 
+        //        #[allow(irrefutable_let_patterns)]
         if let Actions::ListObjectsV2 {
             continuation_token,
             delimiter,
@@ -60,7 +61,7 @@ impl S3 {
             if let Some(delimiter) = delimiter {
                 url.query_pairs_mut().append_pair("delimiter", &delimiter);
             }
-            if let Some(_) = fetch_owner {
+            if fetch_owner.is_some() {
                 url.query_pairs_mut().append_pair("fetch-owner", "true");
             }
             if let Some(prefix) = prefix {

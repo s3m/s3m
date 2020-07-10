@@ -9,13 +9,14 @@ pub enum Actions {
         prefix: Option<String>,
         start_after: Option<String>,
     },
+    Test,
 }
 
 impl Actions {
     #[must_use]
     pub fn http_verb(&self) -> Method {
         match *self {
-            Self::ListObjectsV2 { .. } => Method::GET,
+            Self::ListObjectsV2 { .. } | Self::Test => Method::GET,
         }
     }
 }
