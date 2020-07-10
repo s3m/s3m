@@ -5,7 +5,7 @@ pub enum Actions {
     ListObjectsV2 {
         continuation_token: Option<String>,
         delimiter: Option<String>,
-        fetch_owner: bool,
+        fetch_owner: Option<bool>,
         prefix: Option<String>,
         start_after: Option<String>,
     },

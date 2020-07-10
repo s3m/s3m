@@ -41,7 +41,7 @@ async fn main() {
     let action = Actions::ListObjectsV2 {
         continuation_token: None,
         delimiter: None,
-        fetch_owner: false,
+        fetch_owner: None,
         prefix: Some(String::from("tod")),
         start_after: None,
     };

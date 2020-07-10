@@ -60,7 +60,7 @@ impl S3 {
             if let Some(delimiter) = delimiter {
                 url.query_pairs_mut().append_pair("delimiter", &delimiter);
             }
-            if fetch_owner {
+            if let Some(_) = fetch_owner {
                 url.query_pairs_mut().append_pair("fetch-owner", "true");
             }
             if let Some(prefix) = prefix {
