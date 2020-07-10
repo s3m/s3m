@@ -31,13 +31,12 @@ pub struct Signature<'a> {
 
 impl<'a> Signature<'a> {
     // #[must_use]
-    pub fn new(s3: &'a S3, method: &'a str, url: &'a str) -> Result<Self, Box<dyn error::Error>> {
-        let data_url = Url::parse(url)?;
+    pub fn new(s3: &'a S3, method: &'a str, url: &Url) -> Result<Self, Box<dyn error::Error>> {
         Ok(Self {
             auth: s3,
             http_method: method,
-            canonical_uri: canonical_uri(&data_url),
-            canonical_query_string: canonical_query_string(&data_url),
+            canonical_uri: canonical_uri(url),
+            canonical_query_string: canonical_query_string(url),
             datetime: Utc::now(),
             headers: BTreeMap::new(),
         })
@@ -126,7 +125,7 @@ impl<'a> Signature<'a> {
         Ok(&self.headers)
     }
 
-    pub fn add_header<K: ToString>(&mut self, key: K, value: &str) {
+    pub fn add_header(&mut self, key: &str, value: &str) {
         let key = key.to_string().to_ascii_lowercase();
         self.headers.insert(key, value.trim().to_string());
     }

@@ -1,4 +1,20 @@
+use serde::de::{Deserializer, Error};
 use serde::Deserialize;
+
+pub fn bool_deserializer<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    match &s[..] {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(D::Error::custom(format!(
+            "got {}, but expected `true` or `false`",
+            other
+        ))),
+    }
+}
 
 #[derive(Deserialize, Debug, Clone)]
 /// Owner information for the object
@@ -12,7 +28,7 @@ pub struct Owner {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-/// An individual object in a ListBucketResult
+/// An individual object in a `ListBucketResult`
 pub struct Object {
     #[serde(rename = "LastModified")]
     /// Date and time the object was last modified.
@@ -63,10 +79,7 @@ pub struct ListBucketResult {
     #[serde(rename = "EncodingType")]
     /// Specifies the encoding method to used
     pub encoding_type: Option<String>,
-    #[serde(
-        rename = "IsTruncated",
-        deserialize_with = "super::deserializer::bool_deserializer"
-    )]
+    #[serde(rename = "IsTruncated", deserialize_with = "bool_deserializer")]
     ///  Specifies whether (true) or not (false) all of the results were returned.
     ///  If the number of results exceeds that specified by MaxKeys, all of the results
     ///  might not be returned.
@@ -83,7 +96,7 @@ pub struct ListBucketResult {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-/// CommonPrefix is used to group keys
+/// `CommonPrefix` is used to group keys
 pub struct CommonPrefix {
     #[serde(rename = "Prefix")]
     /// Keys that begin with the indicated prefix.

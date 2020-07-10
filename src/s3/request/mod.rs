@@ -7,15 +7,13 @@ use reqwest::{
 };
 use std::collections::BTreeMap;
 use std::error;
-use std::str;
 use url::Url;
 
 pub async fn request(
-    url: &str,
+    url: Url,
     method: http::method::Method,
     headers: &BTreeMap<String, String>,
 ) -> Result<Response, Error> {
-    let url = Url::parse(url).unwrap();
     let headers = headers
         .iter()
         .map(|(k, v)| {
@@ -26,8 +24,8 @@ pub async fn request(
         })
         .collect::<Result<HeaderMap, Box<dyn error::Error>>>()
         .unwrap();
-
     let client = Client::new();
-    let request = client.request(method, url).headers(headers).body("");
-    Ok(request.send().await?)
+    let request = client.request(method, url).headers(headers);
+    //let request = client.request(method, url).headers(headers).body("");
+    request.send().await
 }

@@ -42,7 +42,7 @@ async fn main() {
         continuation_token: None,
         delimiter: None,
         fetch_owner: false,
-        prefix: "".to_string(),
+        prefix: Some(String::from("tod")),
         start_after: None,
     };
 

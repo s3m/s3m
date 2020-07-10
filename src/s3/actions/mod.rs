@@ -6,7 +6,7 @@ pub enum Actions {
         continuation_token: Option<String>,
         delimiter: Option<String>,
         fetch_owner: bool,
-        prefix: String,
+        prefix: Option<String>,
         start_after: Option<String>,
     },
 }
