@@ -4,7 +4,7 @@ pub mod region;
 pub mod request;
 pub mod responses;
 pub mod signature;
-pub use self::{actions::Actions, credentials::Credentials, region::Region, signature::Signature};
+pub use self::{credentials::Credentials, region::Region, signature::Signature};
 
 use responses::ListBucketResult;
 use serde_xml_rs::from_str;
@@ -36,51 +36,51 @@ impl S3 {
         }
     }
 
-    // ListObjectsV2
-    // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
-    pub async fn list_objects(
-        &self,
-        action: Actions,
-    ) -> Result<ListBucketResult, Box<dyn error::Error>> {
-        let mut url = Url::parse(&format!("https://{}/{}", self.host, self.bucket))?;
-        url.query_pairs_mut().append_pair("list-type", "2");
+    /*
+        pub async fn request(
+            &self,
+            action: Actions,
+        ) -> Result<ListBucketResult, Box<dyn error::Error>> {
+            let mut url = Url::parse(&format!("https://{}/{}", self.host, self.bucket))?;
+            url.query_pairs_mut().append_pair("list-type", "2");
 
-        //        #[allow(irrefutable_let_patterns)]
-        if let Actions::ListObjectsV2 {
-            continuation_token,
-            delimiter,
-            fetch_owner,
-            prefix,
-            start_after,
-        } = action.clone()
-        {
-            if let Some(token) = continuation_token {
-                url.query_pairs_mut()
-                    .append_pair("continuation-token", &token);
+            //        #[allow(irrefutable_let_patterns)]
+            if let Actions::ListObjectsV2 {
+                continuation_token,
+                delimiter,
+                fetch_owner,
+                prefix,
+                start_after,
+            } = action.clone()
+            {
+                if let Some(token) = continuation_token {
+                    url.query_pairs_mut()
+                        .append_pair("continuation-token", &token);
+                }
+                if let Some(delimiter) = delimiter {
+                    url.query_pairs_mut().append_pair("delimiter", &delimiter);
+                }
+                if fetch_owner.is_some() {
+                    url.query_pairs_mut().append_pair("fetch-owner", "true");
+                }
+                if let Some(prefix) = prefix {
+                    url.query_pairs_mut().append_pair("prefix", &prefix);
+                }
+                if let Some(sa) = start_after {
+                    url.query_pairs_mut().append_pair("start-after", &sa);
+                }
             }
-            if let Some(delimiter) = delimiter {
-                url.query_pairs_mut().append_pair("delimiter", &delimiter);
-            }
-            if fetch_owner.is_some() {
-                url.query_pairs_mut().append_pair("fetch-owner", "true");
-            }
-            if let Some(prefix) = prefix {
-                url.query_pairs_mut().append_pair("prefix", &prefix);
-            }
-            if let Some(sa) = start_after {
-                url.query_pairs_mut().append_pair("start-after", &sa);
-            }
+
+            let method = action.http_verb();
+            let mut signature = Signature::new(self, method.as_str(), &url)?;
+            let headers = signature.sign("")?;
+            let response = match request::request(url.clone(), action.http_verb(), headers).await {
+                Ok(r) => r,
+                Err(e) => return Err(Box::new(e)),
+            };
+            //        if rs.status() == 200 {
+            let options: ListBucketResult = from_str(&response.text().await?)?;
+            Ok(options)
         }
-
-        let method = action.http_verb();
-        let mut signature = Signature::new(self, method.as_str(), &url)?;
-        let headers = signature.sign("")?;
-        let response = match request::request(url.clone(), action.http_verb(), headers).await {
-            Ok(r) => r,
-            Err(e) => return Err(Box::new(e)),
-        };
-        //        if rs.status() == 200 {
-        let options: ListBucketResult = from_str(&response.text().await?)?;
-        Ok(options)
-    }
+    */
 }

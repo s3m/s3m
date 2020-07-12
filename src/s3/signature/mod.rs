@@ -14,11 +14,11 @@ use url::Url;
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[derive(Debug)]
-pub struct Signature<'a> {
+pub struct Signature {
     // S3
-    auth: &'a S3,
+    auth: S3,
     // The HTTPRequestMethod
-    pub http_method: &'a str,
+    pub http_method: String,
     // The CanonicalURI
     pub canonical_uri: String,
     // The CanonicalQueryString
@@ -29,9 +29,9 @@ pub struct Signature<'a> {
     datetime: DateTime<Utc>,
 }
 
-impl<'a> Signature<'a> {
+impl Signature {
     // #[must_use]
-    pub fn new(s3: &'a S3, method: &'a str, url: &Url) -> Result<Self, Box<dyn error::Error>> {
+    pub fn new(s3: S3, method: String, url: &Url) -> Result<Self, Box<dyn error::Error>> {
         Ok(Self {
             auth: s3,
             http_method: method,
@@ -46,7 +46,7 @@ impl<'a> Signature<'a> {
     pub fn sign(
         &mut self,
         payload: &str,
-    ) -> Result<&BTreeMap<String, String>, Box<dyn error::Error>> {
+    ) -> Result<BTreeMap<String, String>, Box<dyn error::Error>> {
         let current_date = self.datetime.format("%Y%m%d");
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
@@ -122,7 +122,7 @@ impl<'a> Signature<'a> {
             write_hex_bytes(signature.as_ref())
         );
         self.add_header("Authorization", &authorization_header);
-        Ok(&self.headers)
+        Ok(self.headers.clone())
     }
 
     pub fn add_header(&mut self, key: &str, value: &str) {

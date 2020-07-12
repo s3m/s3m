@@ -3,7 +3,7 @@
 
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
-    Client, Error, Response,
+    Client, Error, Method, Response,
 };
 use std::collections::BTreeMap;
 use std::error;
@@ -11,9 +11,10 @@ use url::Url;
 
 pub async fn request(
     url: Url,
-    method: http::method::Method,
+    method: String,
     headers: &BTreeMap<String, String>,
 ) -> Result<Response, Error> {
+    let method = Method::from_bytes(method.as_bytes()).unwrap();
     let headers = headers
         .iter()
         .map(|(k, v)| {

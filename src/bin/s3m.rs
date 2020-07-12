@@ -1,6 +1,6 @@
 use clap::{App, Arg};
-use s3m::s3::{Actions, Credentials, Region, S3};
-//use serde_yaml;
+use s3m::s3::actions::Action;
+use s3m::s3::*;
 use std::fs::metadata;
 use std::process;
 
@@ -38,17 +38,20 @@ async fn main() {
     let bucket = String::from("s3mon");
 
     let s3 = S3::new(&bucket, &credentials, &region);
-    let action = Actions::ListObjectsV2 {
-        continuation_token: None,
-        delimiter: None,
-        fetch_owner: None,
-        prefix: Some(String::from("tod")),
-        start_after: None,
-    };
+    let mut action = actions::ListObjectsV2::new();
+    println!("{:#?}", action);
+    action.prefix = Some(String::from("today"));
+    println!("{:#?}", action);
 
+    if let Ok(objects) = action.request(s3).await {
+        println!("objects: {:#?}", objects);
+    }
+
+    /*
     if let Ok(objects) = s3.list_objects(action).await {
         println!("objects: {:#?}", objects);
     }
+    */
 
     // let mut s = Signature::new("GET", &region, "/s3mon", &credentials);
 
