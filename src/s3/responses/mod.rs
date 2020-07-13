@@ -1,6 +1,9 @@
 use serde::de::{Deserializer, Error};
 use serde::Deserialize;
 
+/// # Errors
+///
+/// Will return `Err` if can't deserialize
 pub fn bool_deserializer<'de, D>(d: D) -> Result<bool, D::Error>
 where
     D: Deserializer<'de>,

@@ -9,9 +9,12 @@ use std::collections::BTreeMap;
 use std::error;
 use url::Url;
 
+/// # Errors
+///
+/// Will return `Err` if can not make the request
 pub async fn request(
     url: Url,
-    method: String,
+    method: &'static str,
     headers: &BTreeMap<String, String>,
 ) -> Result<Response, Error> {
     let method = Method::from_bytes(method.as_bytes()).unwrap();

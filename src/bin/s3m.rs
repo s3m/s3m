@@ -1,6 +1,5 @@
 use clap::{App, Arg};
-use s3m::s3::actions::Action;
-use s3m::s3::*;
+use s3m::s3::{actions, Credentials, Region, S3};
 use std::fs::metadata;
 use std::process;
 
@@ -32,30 +31,14 @@ async fn main() {
     // endpoint: "ds11s3.swisscom.com".to_string(),
     //};
     let region = Region::default();
-    //  let s = signature::Signature::new("GET", &"asdf".parse::<region::Region>().unwrap());
-    //
-
     let bucket = String::from("s3mon");
-
     let s3 = S3::new(&bucket, &credentials, &region);
     let mut action = actions::ListObjectsV2::new();
-    println!("{:#?}", action);
-    action.prefix = Some(String::from("today"));
-    println!("{:#?}", action);
+    action.prefix = Some(String::from(""));
 
     if let Ok(objects) = action.request(s3).await {
         println!("objects: {:#?}", objects);
     }
-
-    /*
-    if let Ok(objects) = s3.list_objects(action).await {
-        println!("objects: {:#?}", objects);
-    }
-    */
-
-    // let mut s = Signature::new("GET", &region, "/s3mon", &credentials);
-
-    // s.sign().await;
 
     /*
     let file = File::open(&config).expect("Unable to open file");

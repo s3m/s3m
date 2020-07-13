@@ -18,7 +18,7 @@ pub struct Signature {
     // S3
     auth: S3,
     // The HTTPRequestMethod
-    pub http_method: String,
+    pub http_method: &'static str,
     // The CanonicalURI
     pub canonical_uri: String,
     // The CanonicalQueryString
@@ -30,8 +30,10 @@ pub struct Signature {
 }
 
 impl Signature {
-    // #[must_use]
-    pub fn new(s3: S3, method: String, url: &Url) -> Result<Self, Box<dyn error::Error>> {
+    /// # Errors
+    ///
+    /// Will return `Err` if can't parse the url
+    pub fn new(s3: S3, method: &'static str, url: &Url) -> Result<Self, Box<dyn error::Error>> {
         Ok(Self {
             auth: s3,
             http_method: method,
@@ -42,11 +44,13 @@ impl Signature {
         })
     }
 
-    // The HexEncode(Hash(RequestPayload))
-    pub fn sign(
-        &mut self,
-        payload: &str,
-    ) -> Result<BTreeMap<String, String>, Box<dyn error::Error>> {
+    /// Need the the HexEncode(Hash(RequestPayload))
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not make the request
+    pub fn sign(&mut self, payload: &str) -> BTreeMap<String, String> {
+        //) -> Result<BTreeMap<String, String>, Box<dyn error::Error>> {
         let current_date = self.datetime.format("%Y%m%d");
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
@@ -122,7 +126,7 @@ impl Signature {
             write_hex_bytes(signature.as_ref())
         );
         self.add_header("Authorization", &authorization_header);
-        Ok(self.headers.clone())
+        self.headers.clone()
     }
 
     pub fn add_header(&mut self, key: &str, value: &str) {
