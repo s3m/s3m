@@ -16,7 +16,7 @@ pub async fn request(
     url: Url,
     method: &'static str,
     headers: &BTreeMap<String, String>,
-    body: Option<String>,
+    body: Option<Vec<u8>>,
 ) -> Result<Response, Error> {
     let method = Method::from_bytes(method.as_bytes()).unwrap();
     let headers = headers

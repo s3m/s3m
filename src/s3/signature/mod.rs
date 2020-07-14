@@ -1,13 +1,13 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
+use crate::s3::tools::{sha256_digest_string, sha256_hmac, write_hex_bytes};
 use crate::s3::S3;
 use chrono::prelude::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
-use ring::{digest, hmac};
+use ring::hmac;
 use std::collections::BTreeMap;
 use std::error;
-use std::fmt::Write;
 use std::str;
 use url::Url;
 
@@ -96,7 +96,7 @@ impl Signature {
             &current_date,
             self.auth.region.name()
         );
-        let canonical_request_hash = sha256_digest(&canonical_request);
+        let canonical_request_hash = sha256_digest_string(&canonical_request);
         let string_to_sign = string_to_sign(
             &current_datetime.to_string(),
             &scope,
@@ -110,8 +110,7 @@ impl Signature {
             self.auth.region.name(),
             "s3",
         );
-        let s_key = hmac::Key::new(hmac::HMAC_SHA256, signing_key.as_ref());
-        let signature = hmac::sign(&s_key, string_to_sign.as_bytes());
+        let signature = sha256_hmac(signing_key.as_ref(), string_to_sign.as_bytes());
 
         // 4. Add the signature to the HTTP request
         let authorization_header = format!(
@@ -204,30 +203,12 @@ fn signed_headers(headers: &BTreeMap<String, String>) -> String {
     signed
 }
 
-// TODO for empty string or full payload
-fn sha256_digest(string: &str) -> String {
-    write_hex_bytes(digest::digest(&digest::SHA256, string.as_bytes()).as_ref())
-}
-
-fn hmac(key: &[u8], msg: &[u8]) -> hmac::Tag {
-    let s_key = hmac::Key::new(hmac::HMAC_SHA256, key);
-    hmac::sign(&s_key, msg)
-}
-
 fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &str) -> hmac::Tag {
-    let k_date = hmac(
+    let k_date = sha256_hmac(
         format!("AWS4{}", secret_access_key).as_bytes(),
         date.as_bytes(),
     );
-    let k_region = hmac(k_date.as_ref(), region.as_bytes());
-    let k_service = hmac(k_region.as_ref(), service.as_bytes());
-    hmac(k_service.as_ref(), b"aws4_request")
-}
-
-fn write_hex_bytes(bytes: &[u8]) -> String {
-    let mut s = String::new();
-    for byte in bytes {
-        write!(&mut s, "{:02x}", byte).expect("Unable to write");
-    }
-    s
+    let k_region = sha256_hmac(k_date.as_ref(), region.as_bytes());
+    let k_service = sha256_hmac(k_region.as_ref(), service.as_bytes());
+    sha256_hmac(k_service.as_ref(), b"aws4_request")
 }

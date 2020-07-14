@@ -42,9 +42,10 @@ async fn main() {
     }
 
     // Test Put
-    let action = actions::PutObject::new("a.txt".to_string(), "/tmp/a.txt".to_string());
-    if let Ok(objects) = action.request(s3.clone()).await {
-        println!("objects: {:#?}", objects);
+    let action = actions::PutObject::new("p.jpg".to_string(), "/tmp/x.pdf".to_string());
+    match action.request(s3.clone()).await {
+        Ok(o) => println!("objects: {:#?}", o),
+        Err(e) => eprintln!("Err: {}", e),
     }
 
     /*

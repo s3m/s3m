@@ -55,6 +55,7 @@ impl PutObject {
     pub async fn request(&self, s3: S3) -> Result<(), Box<dyn error::Error>> {
         let (hash, body) = tools::sha256_digest(&self.file)?;
         let (url, headers) = &self.sign(s3, &hash)?;
+        println!("url: {}", url);
         let response =
             match request::request(url.clone(), self.http_verb(), headers, Some(body)).await {
                 Ok(r) => r,

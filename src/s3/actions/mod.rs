@@ -38,7 +38,7 @@ pub trait Action {
         if self.http_verb() != "GET" {
             url.path_segments_mut()
                 .map_err(|_| "cannot be base")?
-                .push("a.txt");
+                .push("fix-this.pdf");
         }
 
         // GET - query pairs
