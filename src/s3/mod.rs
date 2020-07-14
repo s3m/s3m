@@ -4,9 +4,10 @@ pub mod region;
 pub mod request;
 pub mod responses;
 pub mod signature;
+pub mod tools;
 pub use self::{credentials::Credentials, region::Region, signature::Signature};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct S3 {
     // bucket name
     bucket: String,

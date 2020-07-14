@@ -49,18 +49,14 @@ impl Signature {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub fn sign(&mut self, payload: &str) -> BTreeMap<String, String> {
-        //) -> Result<BTreeMap<String, String>, Box<dyn error::Error>> {
+    pub fn sign(&mut self, digest: &str) -> BTreeMap<String, String> {
         let current_date = self.datetime.format("%Y%m%d");
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
         self.add_header("host", &self.auth.host.to_string());
         self.add_header("x-amz-date", &current_datetime.to_string());
         self.add_header("User-Agent", &APP_USER_AGENT.to_string());
-
-        // TODO (pass digest after reading file maybe)
-        let digest = sha256_digest(payload);
-        self.add_header("x-amz-content-sha256", &digest);
+        self.add_header("x-amz-content-sha256", digest);
 
         //        let canonical_headers = canonical_headers(&self.headers);
         let signed_headers = signed_headers(&self.headers);
@@ -85,7 +81,7 @@ impl Signature {
             digest
         );
 
-        //println!("canonical request: \n---\n{}\n---\n", canonical_request);
+        println!("canonical request: \n---\n{}\n---\n", canonical_request);
 
         // 2. Create a string to sign for Signature Version 4
         //

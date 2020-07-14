@@ -33,10 +33,17 @@ async fn main() {
     let region = Region::default();
     let bucket = String::from("s3mon");
     let s3 = S3::new(&bucket, &credentials, &region);
+
+    // Test List bucket
     let mut action = actions::ListObjectsV2::new();
     action.prefix = Some(String::from(""));
+    if let Ok(objects) = action.request(s3.clone()).await {
+        println!("objects: {:#?}", objects);
+    }
 
-    if let Ok(objects) = action.request(s3).await {
+    // Test Put
+    let action = actions::PutObject::new("a.txt".to_string(), "/tmp/a.txt".to_string());
+    if let Ok(objects) = action.request(s3.clone()).await {
         println!("objects: {:#?}", objects);
     }
 

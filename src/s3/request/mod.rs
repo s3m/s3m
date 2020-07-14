@@ -16,6 +16,7 @@ pub async fn request(
     url: Url,
     method: &'static str,
     headers: &BTreeMap<String, String>,
+    body: Option<String>,
 ) -> Result<Response, Error> {
     let method = Method::from_bytes(method.as_bytes()).unwrap();
     let headers = headers
@@ -29,7 +30,11 @@ pub async fn request(
         .collect::<Result<HeaderMap, Box<dyn error::Error>>>()
         .unwrap();
     let client = Client::new();
-    let request = client.request(method, url).headers(headers);
-    //let request = client.request(method, url).headers(headers).body("");
+    let request = if let Some(content) = body {
+        client.request(method, url).headers(headers).body(content)
+    } else {
+        client.request(method, url).headers(headers)
+    };
+    println!("request: {:#?}", request);
     request.send().await
 }
