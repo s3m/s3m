@@ -2,7 +2,7 @@ use crate::s3::actions::Action;
 use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
-use serde_xml_rs::from_str;
+// use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 use std::error;
 

@@ -1,29 +1,11 @@
-use clap::{App, Arg};
-use s3m::s3::{actions, Credentials, Region, S3};
-use std::fs::metadata;
-use std::process;
+use s3m::{
+    options,
+    s3::{actions, Credentials, Region, S3},
+};
 
 #[tokio::main]
 async fn main() {
-    let matches = App::new("s3m")
-        .version(env!("CARGO_PKG_VERSION"))
-        .arg(
-            Arg::with_name("config")
-                .help("s3m.yml")
-                .long("config")
-                .default_value("s3m.yml")
-                .short("c")
-                .required(true)
-                .value_name("FILE")
-                .validator(is_file),
-        )
-        .get_matches();
-
-    let _config = matches.value_of("config").unwrap_or_else(|| {
-        eprintln!("Unable to open configuration file, use (\"-h for help\")");
-        process::exit(1);
-    });
-
+    let _ = options::new();
     let credentials = Credentials::new("", "");
 
     //let region = region::Region::Custom {
@@ -59,12 +41,4 @@ async fn main() {
     };
     println!("{:#?}", yml);
     */
-}
-
-fn is_file(s: String) -> Result<(), String> {
-    if metadata(&s).map_err(|e| e.to_string())?.is_file() {
-        Ok(())
-    } else {
-        Err(format!("cannot read file: {}", s))
-    }
 }
