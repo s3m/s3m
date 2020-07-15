@@ -19,12 +19,13 @@ travis-ci = { repository = "s3m/s3m", branch = "master" }
 chrono = "0.4"
 clap = "2.33"
 http = "0.2"
-reqwest = "0.10.6"
+percent-encoding = "2.1"
+reqwest = { version = "0.10.6", features = ["stream"] }
 ring = "0.16.15"
 serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.8.13"
 serde-xml-rs = "0.4.0"
+serde_yaml = "0.8.13"
 tempfile = "3"
 tokio = { version = "0.2", features = ["full"] }
+tokio-util = "0.3.1"
 url = "2.1"
-percent-encoding = "2.1"

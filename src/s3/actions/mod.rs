@@ -19,11 +19,17 @@ mod putobject;
 pub use self::putobject::PutObject;
 
 pub trait Action {
+    // headers to send in the request
+    fn headers(&self) -> Option<BTreeMap<&str, &str>>;
+
+    // method to use GET/PUT...
     fn http_verb(&self) -> &'static str;
 
+    // URL query pairs
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>>;
 
-    fn headers(&self) -> Option<BTreeMap<&str, &str>>;
+    // URL path
+    fn path(&self) -> Option<Vec<&str>>;
 
     /// # Errors
     ///
@@ -32,13 +38,17 @@ pub trait Action {
         &self,
         s3: S3,
         hash_payload: &str,
+        content_length: Option<usize>,
     ) -> Result<(Url, BTreeMap<String, String>), Box<dyn error::Error>> {
         let mut url = Url::parse(&format!("https://{}/{}", s3.host, s3.bucket))?;
 
-        if self.http_verb() != "GET" {
-            url.path_segments_mut()
-                .map_err(|_| "cannot be base")?
-                .push("fix-this.pdf");
+        // mainly for PUT when uploading an object
+        if let Some(path) = self.path() {
+            for p in path {
+                url.path_segments_mut()
+                    .map_err(|_| "cannot be base")?
+                    .push(&p);
+            }
         }
 
         // GET - query pairs
@@ -47,14 +57,16 @@ pub trait Action {
                 url.query_pairs_mut().append_pair(k, v);
             }
         }
-        // PUT/POST
+
+        // headers to be sent
         let _headers: BTreeMap<&str, &str> = if let Some(headers) = self.headers() {
             headers
         } else {
             BTreeMap::new()
         };
+
         let mut signature = Signature::new(s3, self.http_verb(), &url)?;
-        let headers = signature.sign(hash_payload);
+        let headers = signature.sign(hash_payload, content_length);
         Ok((url, headers))
     }
 }

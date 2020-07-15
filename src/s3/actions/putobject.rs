@@ -1,6 +1,5 @@
 use crate::s3::actions::Action;
 use crate::s3::request;
-use crate::s3::responses::ListBucketResult;
 use crate::s3::tools;
 use crate::s3::S3;
 use serde_xml_rs::from_str;
@@ -43,8 +42,8 @@ impl PutObject {
     #[must_use]
     pub fn new(key: String, file: String) -> Self {
         Self {
-            key: key,
-            file: file,
+            key,
+            file,
             ..Default::default()
         }
     }
@@ -53,14 +52,21 @@ impl PutObject {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: S3) -> Result<(), Box<dyn error::Error>> {
-        let (hash, body) = tools::sha256_digest(&self.file)?;
-        let (url, headers) = &self.sign(s3, &hash)?;
-        println!("url: {}", url);
-        let response =
-            match request::request(url.clone(), self.http_verb(), headers, Some(body)).await {
-                Ok(r) => r,
-                Err(e) => return Err(Box::new(e)),
-            };
+        let (digest, length) = tools::sha256_digest(&self.file)?;
+        let (url, headers) = &self.sign(s3, &digest, Some(length))?;
+        let response = match request::request(
+            url.clone(),
+            self.http_verb(),
+            headers,
+            Some(self.file.to_string()),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => return Err(e),
+        };
+
+        println!("rs status: {}", response.status());
         //       if response.status() == 200 {
         //      println!("status: {}", response.status());
         let rs = response.text().await?;
@@ -75,11 +81,21 @@ impl Action for PutObject {
         "PUT"
     }
 
+    fn headers(&self) -> Option<BTreeMap<&str, &str>> {
+        None
+    }
+
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
         None
     }
 
-    fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        None
+    fn path(&self) -> Option<Vec<&str>> {
+        // remove leading / or //
+        let clean_path = self
+            .key
+            .split("/")
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<&str>>();
+        Some(clean_path)
     }
 }

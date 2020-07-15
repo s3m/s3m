@@ -26,12 +26,12 @@ impl ListObjectsV2 {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: S3) -> Result<ListBucketResult, Box<dyn error::Error>> {
-        let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256)?;
+        let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None)?;
         let response = match request::request(url.clone(), self.http_verb(), headers, None).await {
             Ok(r) => r,
-            Err(e) => return Err(Box::new(e)),
+            Err(e) => return Err(e),
         };
-        //        if rs.status() == 200 {
+        // TODO handle error if rs.status() == 200
         let options: ListBucketResult = from_str(&response.text().await?)?;
         Ok(options)
     }
@@ -41,6 +41,14 @@ impl ListObjectsV2 {
 impl Action for ListObjectsV2 {
     fn http_verb(&self) -> &'static str {
         "GET"
+    }
+
+    fn headers(&self) -> Option<BTreeMap<&str, &str>> {
+        None
+    }
+
+    fn path(&self) -> Option<Vec<&str>> {
+        None
     }
 
     // URL query pairs
@@ -72,9 +80,5 @@ impl Action for ListObjectsV2 {
         }
 
         Some(map)
-    }
-
-    fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        None
     }
 }

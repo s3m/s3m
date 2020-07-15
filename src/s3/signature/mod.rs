@@ -49,7 +49,7 @@ impl Signature {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub fn sign(&mut self, digest: &str) -> BTreeMap<String, String> {
+    pub fn sign(&mut self, digest: &str, length: Option<usize>) -> BTreeMap<String, String> {
         let current_date = self.datetime.format("%Y%m%d");
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
@@ -57,6 +57,9 @@ impl Signature {
         self.add_header("x-amz-date", &current_datetime.to_string());
         self.add_header("User-Agent", &APP_USER_AGENT.to_string());
         self.add_header("x-amz-content-sha256", digest);
+        if let Some(length) = length {
+            self.add_header("content-length", format!("{}", length).as_ref());
+        }
 
         //        let canonical_headers = canonical_headers(&self.headers);
         let signed_headers = signed_headers(&self.headers);
