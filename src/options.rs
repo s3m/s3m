@@ -1,5 +1,4 @@
 use clap::{App, Arg, SubCommand};
-use dirs;
 use std::fs::metadata;
 use std::process;
 

@@ -5,7 +5,7 @@ use s3m::{
 
 #[tokio::main]
 async fn main() {
-    let _ = options::new();
+    options::new();
     let credentials = Credentials::new("", "");
 
     //let region = region::Region::Custom {
