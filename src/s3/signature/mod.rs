@@ -84,7 +84,7 @@ impl Signature {
             digest
         );
 
-        println!("canonical request: \n---\n{}\n---\n", canonical_request);
+        // println!("canonical request: \n---\n{}\n---\n", canonical_request);
 
         // 2. Create a string to sign for Signature Version 4
         //

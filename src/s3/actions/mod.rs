@@ -47,7 +47,7 @@ pub trait Action {
             for p in path {
                 url.path_segments_mut()
                     .map_err(|_| "cannot be base")?
-                    .push(&p);
+                    .push(p);
             }
         }
 

@@ -8,7 +8,7 @@ use reqwest::{
 use std::collections::BTreeMap;
 use std::error;
 use tokio::fs::File;
-use tokio_util::codec;
+use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 
 /// # Errors
@@ -29,15 +29,15 @@ pub async fn request(
     let client = Client::new();
 
     let request = if let Some(file) = body {
-        let tokio_file = File::open(file).await?;
-        let byte_stream = codec::FramedRead::new(tokio_file, codec::BytesCodec::new());
-        let body = Body::wrap_stream(byte_stream);
+        let async_read = File::open(file).await?;
+        let stream = FramedRead::new(async_read, BytesCodec::new());
+        let body = Body::wrap_stream(stream);
         client.request(method, url).headers(headers).body(body)
     } else {
         client.request(method, url).headers(headers)
     };
 
-    println!("request: {:#?}", request);
+    //  println!("request: {:#?}", request);
 
     match request.send().await {
         Ok(r) => Ok(r),

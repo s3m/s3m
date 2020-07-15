@@ -54,17 +54,13 @@ impl PutObject {
     pub async fn request(&self, s3: S3) -> Result<(), Box<dyn error::Error>> {
         let (digest, length) = tools::sha256_digest(&self.file)?;
         let (url, headers) = &self.sign(s3, &digest, Some(length))?;
-        let response = match request::request(
+        let response = request::request(
             url.clone(),
             self.http_verb(),
             headers,
             Some(self.file.to_string()),
         )
-        .await
-        {
-            Ok(r) => r,
-            Err(e) => return Err(e),
-        };
+        .await?;
 
         println!("rs status: {}", response.status());
         //       if response.status() == 200 {
@@ -93,7 +89,7 @@ impl Action for PutObject {
         // remove leading / or //
         let clean_path = self
             .key
-            .split("/")
+            .split('/')
             .filter(|p| !p.is_empty())
             .collect::<Vec<&str>>();
         Some(clean_path)

@@ -8,6 +8,9 @@ use std::fmt::Write;
 use std::fs;
 use std::io::{BufRead, BufReader};
 
+/// # Errors
+///
+/// Will return `Err` if can not open the file
 pub fn sha256_digest(file_path: &str) -> Result<(String, usize), Box<dyn Error>> {
     let file = fs::File::open(file_path)?;
     let mut reader = BufReader::new(file);
@@ -23,7 +26,7 @@ pub fn sha256_digest(file_path: &str) -> Result<(String, usize), Box<dyn Error>>
             context.update(buffer);
             buffer.len()
         };
-        length = length + consummed;
+        length += consummed;
         reader.consume(consummed);
     }
 
