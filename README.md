@@ -2,7 +2,11 @@
 
 **s3m** a "fault-tolerant" command-line tool for storing streams of data in s3 buckets.
 
-Problem trying to solve
+[![crates.io](https://img.shields.io/crates/v/s3m.svg)](https://crates.io/crates/s3m)
+[![Build Status](https://travis-ci.org/s3m/s3m.svg?branch=master)](https://travis-ci.org/s3m/s3m)
+
+
+## Problem trying to solve
 
 There are streams of data that can not be lost besides that when created,
 they degrade the performance of running systems, for example, if the stream
@@ -18,10 +22,10 @@ the database is or to a remote mount endpoint, is not possible due to size
 constraints and the compressed backup should be streamed to am s3 bucket (X
 provider), therefore if for some reason the connection gets lost while streaming
 almost before finishing, the whole backup procedure could be corrupted and in
-the worst scenario everything should start all over again.
+worst scenario everything should start all over again.
 
 The aim of **s3m** is to make as much as possible "fault-tolerant" the storage
 the procedure of the data stream to so that even if the server lost network
 connectivity, the stream could still be received and queued so that when the
-network re-establishes it can continue in where it was left and resume the
+network re-establishes it can continue where it was left and resume the
 upload without the need to start all over again.
