@@ -1,0 +1,13 @@
+language: rust
+rust:
+  - stable
+
+os:
+  - linux
+  - osx
+
+before_script:
+  - rustup component add clippy
+script:
+  - cargo clippy -- -D warnings
+  - cargo build
