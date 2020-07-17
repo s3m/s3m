@@ -8,11 +8,12 @@ async fn main() {
     options::new();
     let credentials = Credentials::new("", "");
 
-    //let region = region::Region::Custom {
-    //name: "foo".to_string(),
-    // endpoint: "ds11s3.swisscom.com".to_string(),
+    //let region = Region::Custom {
+    //name: "".to_string(),
+    //endpoint: "s11s3.swisscom.com".to_string(),
     //};
     let region = Region::default();
+    println!("region: {}", region.endpoint());
     let bucket = String::from("s3mon");
     let s3 = S3::new(&bucket, &credentials, &region);
 

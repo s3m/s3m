@@ -108,6 +108,35 @@ impl Region {
             Self::Custom { ref name, .. } => name,
         }
     }
+
+    pub fn endpoint(&self) -> &str {
+        match *self {
+            Self::AfSouth1 => "s3.af-south-1.amazonaws.com",
+            Self::ApEast1 => "s3.ap-east-1.amazonaws.com",
+            Self::ApNortheast1 => "s3.ap-northeast-1.amazonaws.com",
+            Self::ApNortheast2 => "s3.ap-northeast-2.amazonaws.com",
+            Self::ApNortheast3 => "s3.ap-northeast-3.amazonaws.com",
+            Self::ApSouth1 => "s3.ap-south-1.amazonaws.com",
+            Self::ApSoutheast1 => "s3.ap-southeast-1.amazonaws.com",
+            Self::ApSoutheast2 => "s3.ap-southeast-2.amazonaws.com",
+            Self::CaCentral1 => "s3.ca-central-1.amazonaws.com",
+            Self::EuCentral1 => "s3.eu-central-1.amazonaws.com",
+            Self::EuSouth1 => "s3.eu-south-1.amazonaws.com",
+            Self::EuWest1 => "s3.eu-west-1.amazonaws.com",
+            Self::EuWest2 => "s3.eu-west-2.amazonaws.com",
+            Self::EuWest3 => "s3.eu-west-3.amazonaws.com",
+            Self::EuNorth1 => "s3.eu-north-1.amazonaws.com",
+            Self::MeSouth1 => "s3.me-south-1.amazonaws.com",
+            Self::SaEast1 => "s3.sa-east-1.amazonaws.com",
+            Self::UsEast1 => "s3.us-east-1.amazonaws.com",
+            Self::UsEast2 => "s3.us-east-2.amazonaws.com",
+            Self::UsWest1 => "s3.us-west-1.amazonaws.com",
+            Self::UsWest2 => "s3.us-west-2.amazonaws.com",
+            Self::CnNorth1 => "s3.cn-north-1.amazonaws.com.cn",
+            Self::CnNorthwest1 => "s3.cn-northwest-1.amazonaws.com.cn",
+            Self::Custom { ref endpoint, .. } => endpoint,
+        }
+    }
 }
 
 impl FromStr for Region {

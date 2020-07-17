@@ -53,7 +53,7 @@ impl Signature {
         let current_date = self.datetime.format("%Y%m%d");
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
-        self.add_header("host", &self.auth.host.to_string());
+        self.add_header("host", &self.auth.region.endpoint().to_string());
         self.add_header("x-amz-date", &current_datetime.to_string());
         self.add_header("User-Agent", &APP_USER_AGENT.to_string());
         self.add_header("x-amz-content-sha256", digest);

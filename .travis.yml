@@ -1,4 +1,5 @@
 language: rust
+
 rust:
   - stable
 
@@ -8,6 +9,11 @@ os:
 
 before_script:
   - rustup component add clippy
+
 script:
   - cargo clippy -- -D warnings
   - cargo build
+
+notifications:
+  email:
+    on_success: never

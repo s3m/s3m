@@ -15,8 +15,6 @@ pub struct S3 {
     credentials: Credentials,
     // AWS Region
     region: Region,
-    // Host
-    host: String,
 }
 
 // Amazon S3 API Reference
@@ -28,7 +26,6 @@ impl S3 {
             bucket: bucket.to_string(),
             credentials: credentials.clone(),
             region: region.clone(),
-            host: format!("s3.{}.amazonaws.com", region.name()),
         }
     }
 }
