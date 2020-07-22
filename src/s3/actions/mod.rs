@@ -40,7 +40,10 @@ pub trait Action {
         hash_payload: &str,
         content_length: Option<usize>,
     ) -> Result<(Url, BTreeMap<String, String>), Box<dyn error::Error>> {
-        let mut url = Url::parse(&format!("https://{}/{}", s3.region.endpoint(), s3.bucket))?;
+        let mut url = match &s3.bucket {
+            Some(bucket) => Url::parse(&format!("https://{}/{}", s3.region.endpoint(), bucket))?,
+            None => Url::parse(&format!("https://{}", s3.region.endpoint()))?,
+        };
 
         // mainly for PUT when uploading an object
         if let Some(path) = self.path() {

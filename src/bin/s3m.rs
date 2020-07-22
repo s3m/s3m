@@ -1,6 +1,6 @@
-use clap::{App, Arg, SubCommand};
+use clap::{App, AppSettings, Arg, SubCommand};
 use s3m::s3::{actions, Credentials, Region, S3};
-use s3m::s3m::{Config, Host};
+use s3m::s3m::Config;
 
 use std::fs::{create_dir_all, metadata, File};
 use std::process;
@@ -36,6 +36,7 @@ async fn main() {
 
     let matches = App::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
+        .setting(AppSettings::SubcommandsNegateReqs)
         .arg(
             Arg::with_name("config")
                 .help("config.yml")
@@ -55,8 +56,16 @@ async fn main() {
                 .required(true)
                 .validator(is_num),
         )
-        .arg(Arg::with_name("arguments").required(true).min_values(1))
-        .subcommand(SubCommand::with_name("ls").about("list objects"))
+        .arg(
+            Arg::with_name("arguments")
+                .required_unless("ls")
+                .min_values(1),
+        )
+        .subcommand(
+            SubCommand::with_name("ls")
+                .about("list objects")
+                .arg(Arg::with_name("arguments").required(true).min_values(1)),
+        )
         .get_matches();
 
     let config = matches.value_of("config").unwrap_or_else(|| {
@@ -64,8 +73,14 @@ async fn main() {
         process::exit(1);
     });
 
+    // TODO clean up this
     // unwrap because field "arguments" is required (should never fail)
-    let args: Vec<_> = matches.values_of("arguments").unwrap().collect();
+    let args: Vec<_> = if let Some(m) = matches.subcommand_matches("ls") {
+        println!("->>>>>>{:#?}", m);
+        m.values_of("arguments").unwrap().collect()
+    } else {
+        matches.values_of("arguments").unwrap().collect()
+    };
 
     // parse config file
     let file = File::open(config).expect("Unable to open file");
@@ -84,34 +99,44 @@ async fn main() {
         .collect::<Vec<&str>>();
 
     let host = if config.hosts.contains_key(hbp[0]) {
-        let key = hbp[0];
-        hbp.remove(0);
+        let key = hbp.remove(0);
         &config.hosts[key]
     } else {
-        &config.hosts["default"]
+        eprintln!("No \"host\" found, check ~/.s3m/config.yml");
+        process::exit(1);
     };
 
-    let region = match get_host(&host) {
-        Ok(h) => h,
-        Err(_) => {
-            eprintln!("Error parsing host need an endpoint or region");
-            process::exit(1);
-        }
+    let bucket = if hbp.len() > 0 {
+        hbp.remove(0)
+    } else {
+        eprintln!("No \"bucket\" found, try /{}/<bucket name>", args[0]);
+        process::exit(1);
     };
-    println!("hbp: {:#?}", hbp.len());
-    println!("region: {}", region);
-    todo!();
+
+    // find region
+    let region = match &host.region {
+        Some(h) => match h.parse::<Region>() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{}", e);
+                process::exit(1);
+            }
+        },
+        None => match &host.endpoint {
+            Some(r) => Region::Custom {
+                name: "".to_string(),
+                endpoint: r.to_string(),
+            },
+            None => {
+                eprintln!("Error parsing host need an endpoint or region");
+                process::exit(1);
+            }
+        },
+    };
 
     let credentials = Credentials::new(&host.access_key, &host.secret_key);
 
-    //let region = Region::Custom {
-    //name: "".to_string(),
-    //endpoint: "s11s3.swisscom.com".to_string(),
-    //};
-    let region = Region::default();
-    println!("region: {}", region.endpoint());
-    let bucket = String::from("s3mon");
-    let s3 = S3::new(&bucket, &credentials, &region);
+    let s3 = S3::new(&credentials, &region, Some(bucket.to_string()));
 
     // Test List bucket
     let mut action = actions::ListObjectsV2::new();
@@ -125,15 +150,5 @@ async fn main() {
     match action.request(s3.clone()).await {
         Ok(o) => println!("objects: {:#?}", o),
         Err(e) => eprintln!("Err: {}", e),
-    }
-}
-
-fn get_host(host: &Host) -> Result<String, ()> {
-    match &host.region {
-        Some(r) => Ok(r.to_string()),
-        None => match &host.endpoint {
-            Some(r) => Ok(r.to_string()),
-            None => Err(()),
-        },
     }
 }

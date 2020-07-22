@@ -9,6 +9,8 @@ pub struct Credentials {
 }
 
 impl Credentials {
+    // TODO
+    // give priority to passed keys and then env
     #[must_use]
     pub fn new(access: &str, secret: &str) -> Self {
         let access_key = env::var("AWS_ACCESS_KEY_ID").unwrap_or_else(|_| access.to_string());
