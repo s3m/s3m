@@ -29,7 +29,8 @@ impl ListObjectsV2 {
         let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None)?;
         let response = request::request(url.clone(), self.http_verb(), headers, None).await?;
         // TODO handle error if rs.status() == 200
-        let options: ListBucketResult = from_str(&response.text().await?)?;
+        let rs = &response.text().await?;
+        let options: ListBucketResult = from_str(rs)?;
         Ok(options)
     }
 }

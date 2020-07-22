@@ -19,8 +19,8 @@ where
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
 /// Owner information for the object
+#[derive(Deserialize, Debug, Clone)]
 pub struct Owner {
     #[serde(rename = "DisplayName")]
     /// Object owner's name.
@@ -30,8 +30,8 @@ pub struct Owner {
     pub id: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
 /// An individual object in a `ListBucketResult`
+#[derive(Deserialize, Debug, Clone)]
 pub struct Object {
     #[serde(rename = "LastModified")]
     /// Date and time the object was last modified.
@@ -51,11 +51,11 @@ pub struct Object {
     pub owner: Option<Owner>,
     #[serde(rename = "Size")]
     /// Size in bytes of the object.
-    pub size: i32,
+    pub size: u64,
 }
 
-#[derive(Deserialize, Debug, Clone)]
 /// The parsed result of a s3 bucket listing
+#[derive(Deserialize, Debug, Clone)]
 pub struct ListBucketResult {
     #[serde(rename = "Name")]
     /// Name of the bucket.
@@ -98,22 +98,23 @@ pub struct ListBucketResult {
     pub common_prefixes: Option<Vec<CommonPrefix>>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
 /// `CommonPrefix` is used to group keys
+#[derive(Deserialize, Debug, Clone)]
 pub struct CommonPrefix {
     #[serde(rename = "Prefix")]
     /// Keys that begin with the indicated prefix.
     pub prefix: String,
 }
 
+/// List of Buckets
 #[derive(Deserialize, Debug, Clone)]
 pub struct Buckets {
     #[serde(rename = "Bucket")]
     pub bucket: Vec<Bucket>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
 /// An individual Bucket
+#[derive(Deserialize, Debug, Clone)]
 pub struct Bucket {
     /// Bucket Name
     #[serde(rename = "Name")]
@@ -125,8 +126,8 @@ pub struct Bucket {
     pub server_side_encryption_enabled: Option<bool>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
 /// The parsed result of `ListBuckets`
+#[derive(Deserialize, Debug, Clone)]
 pub struct ListAllMyBucketsResult {
     /// Bucket owner
     #[serde(rename = "Owner")]

@@ -140,8 +140,9 @@ async fn main() {
         if bucket.is_some() {
             let mut action = actions::ListObjectsV2::new();
             action.prefix = Some(String::from(""));
-            if let Ok(objects) = action.request(s3).await {
-                println!("objects: {:#?}", objects);
+            match action.request(s3).await {
+                Ok(o) => println!("objects: {:#?}", o),
+                Err(e) => eprintln!("Error parsing output: {}", e),
             }
         } else {
             // list buckets
