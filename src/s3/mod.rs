@@ -25,7 +25,7 @@ impl S3 {
         Self {
             credentials: credentials.clone(),
             region: region.clone(),
-            bucket: bucket,
+            bucket,
         }
     }
 }

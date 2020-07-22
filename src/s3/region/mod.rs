@@ -109,6 +109,7 @@ impl Region {
         }
     }
 
+    #[must_use]
     pub fn endpoint(&self) -> &str {
         match *self {
             Self::AfSouth1 => "s3.af-south-1.amazonaws.com",

@@ -76,7 +76,6 @@ async fn main() {
     // TODO clean up this
     // unwrap because field "arguments" is required (should never fail)
     let args: Vec<_> = if let Some(m) = matches.subcommand_matches("ls") {
-        println!("->>>>>>{:#?}", m);
         m.values_of("arguments").unwrap().collect()
     } else {
         matches.values_of("arguments").unwrap().collect()
@@ -93,23 +92,13 @@ async fn main() {
     };
 
     // find host, bucket and path
-    let mut hbp = args[0]
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<&str>>();
+    let mut hbp: Vec<_> = args[0].split('/').filter(|s| !s.is_empty()).collect();
 
     let host = if config.hosts.contains_key(hbp[0]) {
         let key = hbp.remove(0);
         &config.hosts[key]
     } else {
         eprintln!("No \"host\" found, check ~/.s3m/config.yml");
-        process::exit(1);
-    };
-
-    let bucket = if hbp.len() > 0 {
-        hbp.remove(0)
-    } else {
-        eprintln!("No \"bucket\" found, try /{}/<bucket name>", args[0]);
         process::exit(1);
     };
 
@@ -136,19 +125,38 @@ async fn main() {
 
     let credentials = Credentials::new(&host.access_key, &host.secret_key);
 
-    let s3 = S3::new(&credentials, &region, Some(bucket.to_string()));
+    let bucket = if !hbp.is_empty() {
+        Some(hbp.remove(0).to_string())
+    } else if matches.subcommand_matches("ls").is_some() {
+        None
+    } else {
+        eprintln!("No \"bucket\" found, try /{}/<bucket name>", args[0]);
+        process::exit(1);
+    };
 
-    // Test List bucket
-    let mut action = actions::ListObjectsV2::new();
-    action.prefix = Some(String::from(""));
-    if let Ok(objects) = action.request(s3.clone()).await {
-        println!("objects: {:#?}", objects);
-    }
+    let s3 = S3::new(&credentials, &region, bucket.clone());
 
-    // Test Put
-    let action = actions::PutObject::new("x.pdf".to_string(), "/tmp/x.pdf".to_string());
-    match action.request(s3.clone()).await {
-        Ok(o) => println!("objects: {:#?}", o),
-        Err(e) => eprintln!("Err: {}", e),
+    if matches.subcommand_matches("ls").is_some() {
+        if bucket.is_some() {
+            let mut action = actions::ListObjectsV2::new();
+            action.prefix = Some(String::from(""));
+            if let Ok(objects) = action.request(s3).await {
+                println!("objects: {:#?}", objects);
+            }
+        } else {
+            // list buckets
+            let action = actions::ListBuckets::new();
+            match action.request(s3).await {
+                Ok(o) => println!("objects: {:#?}", o),
+                Err(e) => eprintln!("Error parsing output: {}", e),
+            }
+        }
+    } else {
+        // Test Put
+        let action = actions::PutObject::new("x.pdf".to_string(), "/tmp/x.pdf".to_string());
+        match action.request(s3).await {
+            Ok(o) => println!("objects: {:#?}", o),
+            Err(e) => eprintln!("Err: {}", e),
+        }
     }
 }

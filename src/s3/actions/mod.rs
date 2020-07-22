@@ -10,6 +10,10 @@ use url::Url;
 const EMPTY_PAYLOAD_SHA256: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html>
+mod listbuckets;
+pub use self::listbuckets::ListBuckets;
+
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
 mod listobjectsv2;
 pub use self::listobjectsv2::ListObjectsV2;

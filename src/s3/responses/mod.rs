@@ -105,3 +105,35 @@ pub struct CommonPrefix {
     /// Keys that begin with the indicated prefix.
     pub prefix: String,
 }
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Buckets {
+    #[serde(rename = "Bucket")]
+    pub bucket: Vec<Bucket>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+/// An individual Bucket
+pub struct Bucket {
+    /// Bucket Name
+    #[serde(rename = "Name")]
+    pub name: String,
+    /// Bucket creation date (timestamp)
+    #[serde(rename = "CreationDate")]
+    pub creation_date: String,
+    #[serde(rename = "ServerSideEncryptionEnabled")]
+    pub server_side_encryption_enabled: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+/// The parsed result of `ListBuckets`
+pub struct ListAllMyBucketsResult {
+    /// Bucket owner
+    #[serde(rename = "Owner")]
+    pub owner: Option<Owner>,
+    /// list of Buckets
+    #[serde(rename = "Buckets")]
+    pub buckets: Buckets,
+    #[serde(rename = "IsTruncated", deserialize_with = "bool_deserializer")]
+    pub is_truncated: bool,
+}
