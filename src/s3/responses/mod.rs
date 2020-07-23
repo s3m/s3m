@@ -138,3 +138,15 @@ pub struct ListAllMyBucketsResult {
     #[serde(rename = "IsTruncated", deserialize_with = "bool_deserializer")]
     pub is_truncated: bool,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct ErrorResponse {
+    #[serde(rename = "Code")]
+    pub code: String,
+    #[serde(rename = "Message")]
+    pub message: String,
+    #[serde(rename = "Resource")]
+    pub resource: Option<String>,
+    #[serde(rename = "RequestId")]
+    pub request_id: String,
+}
