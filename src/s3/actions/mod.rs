@@ -1,8 +1,11 @@
 //! Actions
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations.html>
 
+use crate::s3::responses::ErrorResponse;
 use crate::s3::signature::Signature;
 use crate::s3::S3;
+use reqwest::Response;
+use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 use std::error;
 use url::Url;
@@ -76,4 +79,29 @@ pub trait Action {
         let headers = signature.sign(hash_payload, content_length);
         Ok((url, headers))
     }
+}
+
+pub async fn response_error(response: Response) -> Result<String, Box<dyn error::Error>> {
+    let mut error: BTreeMap<&str, String> = BTreeMap::new();
+    error.insert("HTTP Status Code", response.status().to_string());
+    if let Some(x_amz_id_2) = response.headers().get("x-amz-id-2") {
+        error.insert("x-amz-id-2", x_amz_id_2.to_str()?.to_string());
+    }
+
+    if let Some(rid) = response.headers().get("x-amz-request-id") {
+        error.insert("Request ID", rid.to_str()?.to_string());
+    }
+
+    let body = response.text().await?;
+
+    if let Ok(e) = from_str::<ErrorResponse>(&body) {
+        error.insert("Code", e.code);
+        error.insert("Message", e.message);
+    } else {
+        error.insert("Response", body);
+    }
+    Ok(error
+        .iter()
+        .map(|(k, v)| format!("{}: {}\n", k, v))
+        .collect::<String>())
 }

@@ -142,22 +142,22 @@ async fn main() {
             action.prefix = Some(String::from(""));
             match action.request(s3).await {
                 Ok(o) => println!("objects: {:#?}", o),
-                Err(e) => eprintln!("Error parsing output: {}", e),
+                Err(e) => eprintln!("{}", e),
             }
         } else {
             // list buckets
             let action = actions::ListBuckets::new();
             match action.request(s3).await {
                 Ok(o) => println!("objects: {:#?}", o),
-                Err(e) => eprintln!("Error parsing output: {}", e),
+                Err(e) => eprintln!("{}", e),
             }
         }
     } else {
         // Test Put
         let action = actions::PutObject::new("x.pdf".to_string(), "/tmp/x.pdf".to_string());
         match action.request(s3).await {
-            Ok(o) => println!("objects: {:#?}", o),
-            Err(e) => eprintln!("Err: {}", e),
+            Ok(o) => println!("{}", o),
+            Err(e) => eprintln!("{}", e),
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::s3::actions::Action;
+use crate::s3::actions::{response_error, Action};
 use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
@@ -51,7 +51,7 @@ impl PutObject {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(&self, s3: S3) -> Result<(), Box<dyn error::Error>> {
+    pub async fn request(&self, s3: S3) -> Result<String, Box<dyn error::Error>> {
         let (digest, length) = tools::sha256_digest(&self.file)?;
         let (url, headers) = &self.sign(s3, &digest, Some(length))?;
         let response = request::request(
@@ -61,13 +61,29 @@ impl PutObject {
             Some(self.file.to_string()),
         )
         .await?;
-
-        println!("rs status: {}", response.status());
-        //       if response.status() == 200 {
-        //      println!("status: {}", response.status());
-        let rs = response.text().await?;
-        println!("rs: {}", rs);
-        Ok(())
+        if response.status().is_success() {
+            let mut h: BTreeMap<&str, String> = BTreeMap::new();
+            if let Some(etag) = response.headers().get("ETag") {
+                h.insert("ETag", etag.to_str()?.to_string());
+            }
+            if let Some(vid) = response.headers().get("x-amz-version-id") {
+                h.insert("Version ID", vid.to_str()?.to_string());
+            }
+            if let Some(sse) = response.headers().get("x-amz-server-side-encryption") {
+                h.insert("Server-side encryption", sse.to_str()?.to_string());
+            }
+            if let Some(exp) = response.headers().get("x-amz-expiration") {
+                h.insert("Expiration", exp.to_str()?.to_string());
+            }
+            if let Some(pos) = response.headers().get("x-emc-previous-object-size") {
+                h.insert("Previous object size", pos.to_str()?.to_string());
+            }
+            Ok(h.iter()
+                .map(|(k, v)| format!("{}: {}\n", k, v))
+                .collect::<String>())
+        } else {
+            Err(response_error(response).await?.into())
+        }
     }
 }
 

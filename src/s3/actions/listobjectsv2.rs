@@ -1,5 +1,4 @@
-use crate::s3::actions::Action;
-use crate::s3::actions::EMPTY_PAYLOAD_SHA256;
+use crate::s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256};
 use crate::s3::request;
 use crate::s3::responses::ListBucketResult;
 use crate::s3::S3;
@@ -28,10 +27,12 @@ impl ListObjectsV2 {
     pub async fn request(&self, s3: S3) -> Result<ListBucketResult, Box<dyn error::Error>> {
         let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None)?;
         let response = request::request(url.clone(), self.http_verb(), headers, None).await?;
-        // TODO handle error if rs.status() == 200
-        let rs = &response.text().await?;
-        let options: ListBucketResult = from_str(rs)?;
-        Ok(options)
+        if response.status().is_success() {
+            let objects: ListBucketResult = from_str(&response.text().await?)?;
+            Ok(objects)
+        } else {
+            Err(response_error(response).await?.into())
+        }
     }
 }
 
