@@ -16,7 +16,10 @@ fn is_file(s: String) -> Result<(), String> {
     if metadata(&s).map_err(|e| e.to_string())?.is_file() {
         Ok(())
     } else {
-        Err(format!("cannot read file: {}", s))
+        Err(format!(
+            "cannot read the file: {} , verify file exist and is not a directory.",
+            s
+        ))
     }
 }
 
@@ -38,16 +41,6 @@ async fn main() {
         .version(env!("CARGO_PKG_VERSION"))
         .setting(AppSettings::SubcommandsNegateReqs)
         .arg(
-            Arg::with_name("config")
-                .help("config.yml")
-                .long("config")
-                .default_value(&default_config)
-                .short("c")
-                .required(true)
-                .value_name("FILE")
-                .validator(is_file),
-        )
-        .arg(
             Arg::with_name("buffer")
                 .help("part size in bytes")
                 .long("buffer")
@@ -57,14 +50,28 @@ async fn main() {
                 .validator(is_num),
         )
         .arg(
+            Arg::with_name("config")
+                .help("config.yml")
+                .long("config")
+                .default_value(&default_config)
+                .short("c")
+                .required(true)
+                .value_name("config.yml")
+                .validator(is_file),
+        )
+        .arg(
             Arg::with_name("arguments")
+                .help("host/bucket/<file> /path/to/file")
                 .required_unless("ls")
-                .min_values(1),
+                .min_values(2),
         )
         .subcommand(
-            SubCommand::with_name("ls")
-                .about("list objects")
-                .arg(Arg::with_name("arguments").required(true).min_values(1)),
+            SubCommand::with_name("ls").about("list objects").arg(
+                Arg::with_name("arguments")
+                    .help("\"host\" to list buckets or \"host/bucket\" to list bucket contents")
+                    .required(true)
+                    .min_values(1),
+            ),
         )
         .get_matches();
 
@@ -73,10 +80,11 @@ async fn main() {
         process::exit(1);
     });
 
-    // TODO clean up this
+    let buffer = matches.value_of("buffer").unwrap();
+
     // unwrap because field "arguments" is required (should never fail)
-    let args: Vec<_> = if let Some(m) = matches.subcommand_matches("ls") {
-        m.values_of("arguments").unwrap().collect()
+    let args: Vec<_> = if let Some(matches) = matches.subcommand_matches("ls") {
+        matches.values_of("arguments").unwrap().collect()
     } else {
         matches.values_of("arguments").unwrap().collect()
     };
@@ -153,11 +161,42 @@ async fn main() {
             }
         }
     } else {
-        // Test Put
-        let action = actions::PutObject::new("x.pdf".to_string(), "/tmp/x.pdf".to_string());
+        // Upload a file if > buffer size try multipart
+        if hbp.is_empty() {
+            eprintln!("Missing the name/path try: /{}/<name> /path/file", hbp[0]);
+            process::exit(1);
+        }
+
+        let file_size = match file_size(args[1]) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{}", e);
+                process::exit(1);
+            }
+        };
+
+        println!("meta: {}, buffer: {}", file_size, buffer);
+
+        let action = actions::CreateMultipartUpload::new(hbp[0].into());
+        //let action = actions::PutObject::new(hbp[0].into(), args[1].into());
         match action.request(s3).await {
-            Ok(o) => println!("{}", o),
+            Ok(o) => println!("{:#?}", o),
             Err(e) => eprintln!("{}", e),
         }
     }
+}
+
+fn file_size(path: &str) -> Result<u64, String> {
+    metadata(path)
+        .map(|m| {
+            if m.is_file() {
+                Ok(m.len())
+            } else {
+                Err(format!(
+                    "cannot read the file: {} , verify file exist and is not a directory.",
+                    path
+                ))
+            }
+        })
+        .map_err(|e| e.to_string())?
 }

@@ -25,6 +25,10 @@ pub use self::listobjectsv2::ListObjectsV2;
 mod putobject;
 pub use self::putobject::PutObject;
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
+mod createmultipartupload;
+pub use self::createmultipartupload::CreateMultipartUpload;
+
 pub trait Action {
     // headers to send in the request
     fn headers(&self) -> Option<BTreeMap<&str, &str>>;

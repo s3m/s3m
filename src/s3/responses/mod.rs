@@ -150,3 +150,13 @@ pub struct ErrorResponse {
     #[serde(rename = "RequestId")]
     pub request_id: String,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct InitiateMultipartUploadResult {
+    #[serde(rename = "Bucket")]
+    pub bucket: String,
+    #[serde(rename = "Key")]
+    pub key: String,
+    #[serde(rename = "UploadId")]
+    pub upload_id: String,
+}
