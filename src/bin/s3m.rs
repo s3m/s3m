@@ -1,12 +1,12 @@
 use clap::{App, AppSettings, Arg, SubCommand};
 use s3m::s3::{actions, Credentials, Region, S3};
-use s3m::s3m::Config;
+use s3m::s3m::{multipart_upload, upload, Config};
 
 use std::fs::{create_dir_all, metadata, File};
 use std::process;
 
 fn is_num(s: String) -> Result<(), String> {
-    if let Err(..) = s.parse::<usize>() {
+    if let Err(..) = s.parse::<u64>() {
         return Err(String::from("Not a valid number!"));
     }
     Ok(())
@@ -21,6 +21,21 @@ fn is_file(s: String) -> Result<(), String> {
             s
         ))
     }
+}
+
+fn file_size(path: &str) -> Result<u64, String> {
+    metadata(path)
+        .map(|m| {
+            if m.is_file() {
+                Ok(m.len())
+            } else {
+                Err(format!(
+                    "cannot read the file: {} , verify file exist and is not a directory.",
+                    path
+                ))
+            }
+        })
+        .map_err(|e| e.to_string())?
 }
 
 #[tokio::main]
@@ -175,28 +190,17 @@ async fn main() {
             }
         };
 
-        println!("meta: {}, buffer: {}", file_size, buffer);
-
-        let action = actions::CreateMultipartUpload::new(hbp[0].into());
-        //let action = actions::PutObject::new(hbp[0].into(), args[1].into());
-        match action.request(s3).await {
-            Ok(o) => println!("{:#?}", o),
-            Err(e) => eprintln!("{}", e),
+        // unwrap because of previous is_num validator
+        if file_size > buffer.parse::<u64>().unwrap() {
+            match multipart_upload(s3, hbp[0].into(), args[1].into()).await {
+                Ok(o) => println!("{:#?}", o),
+                Err(e) => eprintln!("{}", e),
+            }
+        } else {
+            match upload(s3, hbp[0].into(), args[1].into()).await {
+                Ok(o) => println!("{}", o),
+                Err(e) => eprintln!("{}", e),
+            }
         }
     }
-}
-
-fn file_size(path: &str) -> Result<u64, String> {
-    metadata(path)
-        .map(|m| {
-            if m.is_file() {
-                Ok(m.len())
-            } else {
-                Err(format!(
-                    "cannot read the file: {} , verify file exist and is not a directory.",
-                    path
-                ))
-            }
-        })
-        .map_err(|e| e.to_string())?
 }
