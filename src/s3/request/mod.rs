@@ -39,8 +39,5 @@ pub async fn request(
 
     //  println!("request: {:#?}", request);
 
-    match request.send().await {
-        Ok(r) => Ok(r),
-        Err(e) => Err(Box::new(e)),
-    }
+    Ok(request.send().await?)
 }
