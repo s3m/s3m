@@ -28,9 +28,10 @@ pub async fn request(
 
     let client = Client::new();
 
-    let request = if let Some(file) = body {
-        let async_read = File::open(file).await?;
-        let stream = FramedRead::new(async_read, BytesCodec::new());
+    let request = if let Some(file_path) = body {
+        // async read
+        let file = File::open(file_path).await?;
+        let stream = FramedRead::new(file, BytesCodec::new());
         let body = Body::wrap_stream(stream);
         client.request(method, url).headers(headers).body(body)
     } else {
