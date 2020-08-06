@@ -57,10 +57,19 @@ async fn main() {
         .setting(AppSettings::SubcommandsNegateReqs)
         .arg(
             Arg::with_name("buffer")
-                .help("part size in bytes")
+                .help("part size in bytes, max value: 5 GB (5,368,709,120 bytes)")
                 .long("buffer")
-                .default_value("5242880")
+                .default_value("10485760")
                 .short("b")
+                .required(true)
+                .validator(is_num),
+        )
+        .arg(
+            Arg::with_name("parts")
+                .help("number of parts per upload, max value: 10,000")
+                .long("parts")
+                .default_value("1000")
+                .short("p")
                 .required(true)
                 .validator(is_num),
         )

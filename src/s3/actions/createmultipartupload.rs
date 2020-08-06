@@ -1,3 +1,8 @@
+//! Amazon S3 multipart upload limits
+//! Maximum object size 5 TB
+//! Maximum number of parts per upload  10,000
+//! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>
+
 use crate::s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256};
 use crate::s3::request;
 use crate::s3::responses::InitiateMultipartUploadResult;
