@@ -30,3 +30,4 @@ tokio = { version = "0.2", features = ["full"] }
 tokio-util = "0.3"
 url = "2.1"
 dirs = "3.0.1"
+num_cpus = "1.13.0"

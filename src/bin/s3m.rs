@@ -2,6 +2,7 @@ use clap::{App, AppSettings, Arg, SubCommand};
 use s3m::s3::{actions, Credentials, Region, S3};
 use s3m::s3m::{multipart_upload, upload, Config};
 
+use num_cpus;
 use std::fs::{create_dir_all, metadata, File};
 use std::process;
 
@@ -51,27 +52,50 @@ async fn main() {
     });
 
     let default_config = format!("{}/.s3m/config.yml", home_dir);
+    let default_workers = if num_cpus::get() * 2 >= 4 {
+        String::from("3")
+    } else {
+        format!("{}", num_cpus::get())
+    };
 
     let matches = App::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
         .setting(AppSettings::SubcommandsNegateReqs)
         .arg(
             Arg::with_name("buffer")
-                .help("part size in bytes, max value: 5 GB (5,368,709,120 bytes)")
+                .help("Part size in bytes, max value: 5 GB (5,368,709,120 bytes)")
                 .long("buffer")
                 .default_value("10485760")
                 .short("b")
                 .required(true)
+                .requires("multipart")
                 .validator(is_num),
         )
         .arg(
             Arg::with_name("parts")
-                .help("number of parts per upload, max value: 10,000")
+                .help("Number of parts per upload, max value: 10,000")
                 .long("parts")
                 .default_value("1000")
                 .short("p")
                 .required(true)
+                .requires("multipart")
                 .validator(is_num),
+        )
+        .arg(
+            Arg::with_name("threads")
+                .help("Number of threads to use")
+                .long("threads")
+                .default_value(&default_workers)
+                .short("t")
+                .required(true)
+                .requires("multipart")
+                .validator(is_num),
+        )
+        .arg(
+            Arg::with_name("multipart")
+                .short("m")
+                .long("multipart")
+                .help("Multipart upload, used when reading from stdin (the file must be > 10MB)"),
         )
         .arg(
             Arg::with_name("config")
