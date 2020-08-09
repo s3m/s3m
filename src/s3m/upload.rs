@@ -2,11 +2,16 @@ use crate::s3::actions;
 use crate::s3::S3;
 use futures::stream::FuturesUnordered;
 use std::error;
-//use tokio::fs::File;
-//use tokio::prelude::*;
 use tokio::stream::StreamExt;
 use tokio::task;
-//use tokio_util::codec::{BytesCodec, FramedRead};
+
+#[derive(Debug, Default, Clone)]
+struct UploadPart {
+    number: u16,
+    seek: u64,
+    chunk: u64,
+    etag: String,
+}
 
 pub async fn upload(s3: S3, key: String, file: String) -> Result<String, Box<dyn error::Error>> {
     let action = actions::PutObject::new(key, file);
@@ -34,37 +39,35 @@ pub async fn multipart_upload(
     let mut seek: u64 = 0;
     let mut chunk = chunk_size;
     // [[seek,chunk]..]
-    let mut parts: Vec<Vec<u64>> = Vec::new();
+    let mut parts: Vec<UploadPart> = Vec::new();
+    let mut number: u16 = 1;
     while seek < file_size {
         if (file_size - seek) <= chunk {
             chunk = file_size % chunk;
         }
-        parts.push(vec![seek, chunk]);
+        parts.push(UploadPart {
+            number,
+            seek,
+            chunk,
+            ..Default::default()
+        });
         seek += chunk;
+        number += 1;
     }
 
     let mut tasks = FuturesUnordered::new();
-    for part in 0..parts.len() {
-        let p = parts.clone();
+    for p in parts {
         let k = key.clone();
         let f = file.clone();
         let uid = upload_id.clone();
         let s3 = s3.clone();
         tasks.push(task::spawn(async move {
-            println!(
-                "part: {}, seek: {}, chunk: {}",
-                part, p[part][0], p[part][1]
-            );
-            let action = actions::UploadPart::new(
-                k,
-                f,
-                format!("{}", part),
-                uid,
-                p[part][0] + 1,
-                p[part][1],
-            );
+            println!("part: {}, seek: {}, chunk: {}", p.number, p.seek, p.chunk);
+            let action =
+                actions::UploadPart::new(k, f, format!("{}", p.number), uid, p.seek, p.chunk);
+            // TODO save the Etags + part number
             match action.request(s3).await {
-                Ok(rs) => println!("---\n{:#?}\n---", rs),
+                Ok(rs) => println!("{}", rs),
                 Err(e) => eprintln!("{}", e),
             };
         }));
@@ -79,7 +82,7 @@ pub async fn multipart_upload(
 
     // finish multipart
     let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id);
-    let response = action.request(s3).await?;
+    let _response = action.request(s3).await?;
 
     Ok(())
 }
