@@ -29,6 +29,14 @@ pub use self::putobject::PutObject;
 mod createmultipartupload;
 pub use self::createmultipartupload::CreateMultipartUpload;
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html>
+mod uploadpart;
+pub use self::uploadpart::UploadPart;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html>
+mod completemultipartupload;
+pub use self::completemultipartupload::CompleteMultipartUpload;
+
 pub trait Action {
     // headers to send in the request
     fn headers(&self) -> Option<BTreeMap<&str, &str>>;

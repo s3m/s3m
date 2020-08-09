@@ -68,7 +68,6 @@ async fn main() {
                 .default_value("10485760")
                 .short("b")
                 .required(true)
-                .requires("multipart")
                 .validator(is_num),
         )
         .arg(
@@ -78,7 +77,6 @@ async fn main() {
                 .default_value("1000")
                 .short("p")
                 .required(true)
-                .requires("multipart")
                 .validator(is_num),
         )
         .arg(
@@ -88,14 +86,15 @@ async fn main() {
                 .default_value(&default_workers)
                 .short("t")
                 .required(true)
-                .requires("multipart")
                 .validator(is_num),
         )
         .arg(
             Arg::with_name("multipart")
                 .short("m")
                 .long("multipart")
-                .help("Multipart upload, used when reading from stdin (the file must be > 10MB)"),
+                .help(
+                    "Multipart upload, used when reading from stdin or file > part size (--buffer)",
+                ),
         )
         .arg(
             Arg::with_name("config")
@@ -129,6 +128,11 @@ async fn main() {
     });
 
     let buffer = matches.value_of("buffer").unwrap();
+    let threads = matches
+        .value_of("threads")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
 
     // unwrap because field "arguments" is required (should never fail)
     let args: Vec<_> = if let Some(matches) = matches.subcommand_matches("ls") {
@@ -224,8 +228,19 @@ async fn main() {
         };
 
         // unwrap because of previous is_num validator
-        if file_size > buffer.parse::<u64>().unwrap() {
-            match multipart_upload(s3, hbp[0].into(), args[1].into()).await {
+        // TODO calculate chunksize and adjust the number of parts
+        let chunk_size = buffer.parse::<u64>().unwrap();
+        if file_size > chunk_size {
+            match multipart_upload(
+                s3,
+                hbp[0].into(),
+                args[1].into(),
+                file_size,
+                chunk_size,
+                threads,
+            )
+            .await
+            {
                 Ok(o) => println!("{:#?}", o),
                 Err(e) => eprintln!("{}", e),
             }

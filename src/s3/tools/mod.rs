@@ -6,6 +6,8 @@ use ring::{
 use std::error::Error;
 use std::fmt::Write;
 use std::fs;
+use std::io::prelude::*;
+use std::io::SeekFrom;
 use std::io::{BufRead, BufReader};
 
 /// # Errors
@@ -13,6 +15,39 @@ use std::io::{BufRead, BufReader};
 /// Will return `Err` if can not open the file
 pub fn sha256_digest(file_path: &str) -> Result<(String, usize), Box<dyn Error>> {
     let file = fs::File::open(file_path)?;
+    let mut reader = BufReader::new(file);
+    let mut context = Context::new(&SHA256);
+    let mut length: usize = 0;
+
+    loop {
+        let consummed = {
+            let buffer = reader.fill_buf()?;
+            if buffer.is_empty() {
+                break;
+            }
+            context.update(buffer);
+            buffer.len()
+        };
+        length += consummed;
+        reader.consume(consummed);
+    }
+
+    let digest = context.finish();
+
+    Ok((write_hex_bytes(digest.as_ref()), length))
+}
+
+/// # Errors
+///
+/// Will return `Err` if can not open the file
+pub fn sha256_digest_multipart(
+    file_path: &str,
+    seek: u64,
+    chunk: u64,
+) -> Result<(String, usize), Box<dyn Error>> {
+    let mut file = fs::File::open(file_path)?;
+    file.seek(SeekFrom::Start(seek))?;
+    let file = file.take(chunk);
     let mut reader = BufReader::new(file);
     let mut context = Context::new(&SHA256);
     let mut length: usize = 0;
