@@ -63,14 +63,20 @@ pub async fn multipart_upload(
         tasks.push(task::spawn(async move {
             println!(
                 "part: {}, seek: {}, chunk: {}",
-                number, part.seek, part.chunk
+                part.number, part.seek, part.chunk
             );
-            let action =
-                actions::UploadPart::new(k, f, format!("{}", number), uid, part.seek, part.chunk);
+            let action = actions::UploadPart::new(
+                k,
+                f,
+                format!("{}", part.number),
+                uid,
+                part.seek,
+                part.chunk,
+            );
             if let Ok(etag) = action.request(s3).await {
                 let mut v = clone.lock().unwrap();
                 v.push(actions::Part {
-                    number,
+                    number: part.number,
                     etag: etag,
                     ..Default::default()
                 });

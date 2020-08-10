@@ -12,7 +12,7 @@ use serde_xml_rs::to_string;
 use std::collections::BTreeMap;
 use std::error;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CompleteMultipartUpload {
     key: String,
     upload_id: String,
@@ -69,7 +69,11 @@ impl CompleteMultipartUpload {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: S3) -> Result<String, Box<dyn error::Error>> {
-        let body = to_string(&self.parts)?;
+        let parts = CompleteMultipartUpload {
+            parts: self.parts.clone(),
+            ..Default::default()
+        };
+        let body = to_string(&parts).unwrap();
         let digest = tools::sha256_digest_string(&body);
         let (url, headers) = &self.sign(s3, &digest, Some(body.len()))?;
         let response = request::request_body(url.clone(), self.http_verb(), headers, body).await?;
