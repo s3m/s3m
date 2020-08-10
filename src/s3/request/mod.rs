@@ -20,7 +20,7 @@ pub async fn request(
     url: Url,
     method: &'static str,
     headers: &BTreeMap<String, String>,
-    body: Option<String>,
+    file: Option<String>,
 ) -> Result<Response, Box<dyn error::Error>> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
@@ -30,8 +30,7 @@ pub async fn request(
 
     let client = Client::new();
 
-    let request = if let Some(file_path) = body {
-        // async read
+    let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
         let stream = FramedRead::new(file, BytesCodec::new());
         let body = Body::wrap_stream(stream);
@@ -70,6 +69,26 @@ pub async fn request_multipart(
     let file = file.take(chunk);
     let stream = FramedRead::new(file, BytesCodec::new());
     let body = Body::wrap_stream(stream);
+    let request = client.request(method, url).headers(headers).body(body);
+    Ok(request.send().await?)
+}
+
+/// # Errors
+///
+/// Will return `Err` if can not make the request
+pub async fn request_body(
+    url: Url,
+    method: &'static str,
+    headers: &BTreeMap<String, String>,
+    body: String,
+) -> Result<Response, Box<dyn error::Error>> {
+    let method = Method::from_bytes(method.as_bytes())?;
+    let headers = headers
+        .iter()
+        .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
+        .collect::<Result<HeaderMap, Box<dyn error::Error>>>()?;
+
+    let client = Client::new();
     let request = client.request(method, url).headers(headers).body(body);
     Ok(request.send().await?)
 }

@@ -3,11 +3,12 @@
 //! Maximum number of parts per upload  10,000
 //! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>
 
-use crate::s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256};
+use crate::s3::actions::{response_error, Action};
 use crate::s3::request;
-use crate::s3::responses::CompleteMultipartUploadResult;
+use crate::s3::tools;
 use crate::s3::S3;
-use serde_xml_rs::from_str;
+use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
+use serde_xml_rs::to_string;
 use std::collections::BTreeMap;
 use std::error;
 
@@ -16,14 +17,50 @@ pub struct CompleteMultipartUpload {
     key: String,
     upload_id: String,
     pub x_amz_request_payer: Option<String>,
+    parts: Vec<Part>,
+}
+
+impl Serialize for CompleteMultipartUpload {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let len = 1 + self.parts.len();
+        let mut map = serializer.serialize_struct("CompleteMultipartUpload", len)?;
+        for part in &self.parts {
+            map.serialize_field("Part", part)?;
+        }
+        map.end()
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Part {
+    pub etag: String,
+    pub number: u16,
+    pub seek: u64,
+    pub chunk: u64,
+}
+
+impl Serialize for Part {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("ETag", &self.etag)?;
+        map.serialize_entry("PartNumber", &self.number)?;
+        map.end()
+    }
 }
 
 impl CompleteMultipartUpload {
     #[must_use]
-    pub fn new(key: String, upload_id: String) -> Self {
+    pub fn new(key: String, upload_id: String, parts: Vec<Part>) -> Self {
         Self {
             key,
             upload_id,
+            parts,
             ..Default::default()
         }
     }
@@ -31,16 +68,14 @@ impl CompleteMultipartUpload {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(
-        &self,
-        s3: S3,
-    ) -> Result<CompleteMultipartUploadResult, Box<dyn error::Error>> {
-        let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None)?;
-        let response = request::request(url.clone(), self.http_verb(), headers, None).await?;
+    pub async fn request(&self, s3: S3) -> Result<String, Box<dyn error::Error>> {
+        let body = to_string(&self.parts)?;
+        let digest = tools::sha256_digest_string(&body);
+        let (url, headers) = &self.sign(s3, &digest, Some(body.len()))?;
+        let response = request::request_body(url.clone(), self.http_verb(), headers, body).await?;
 
         if response.status().is_success() {
-            let upload_req: CompleteMultipartUploadResult = from_str(&response.text().await?)?;
-            Ok(upload_req)
+            Ok(response.text().await?)
         } else {
             Err(response_error(response).await?.into())
         }

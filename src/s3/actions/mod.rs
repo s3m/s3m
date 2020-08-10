@@ -35,7 +35,7 @@ pub use self::uploadpart::UploadPart;
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html>
 mod completemultipartupload;
-pub use self::completemultipartupload::CompleteMultipartUpload;
+pub use self::completemultipartupload::{CompleteMultipartUpload, Part};
 
 pub trait Action {
     // headers to send in the request

@@ -2,16 +2,9 @@ use crate::s3::actions;
 use crate::s3::S3;
 use futures::stream::FuturesUnordered;
 use std::error;
+use std::sync::{Arc, Mutex};
 use tokio::stream::StreamExt;
 use tokio::task;
-
-#[derive(Debug, Default, Clone)]
-struct UploadPart {
-    number: u16,
-    seek: u64,
-    chunk: u64,
-    etag: String,
-}
 
 pub async fn upload(s3: S3, key: String, file: String) -> Result<String, Box<dyn error::Error>> {
     let action = actions::PutObject::new(key, file);
@@ -39,13 +32,13 @@ pub async fn multipart_upload(
     let mut seek: u64 = 0;
     let mut chunk = chunk_size;
     // [[seek,chunk]..]
-    let mut parts: Vec<UploadPart> = Vec::new();
+    let mut parts: Vec<actions::Part> = Vec::new();
     let mut number: u16 = 1;
     while seek < file_size {
         if (file_size - seek) <= chunk {
             chunk = file_size % chunk;
         }
-        parts.push(UploadPart {
+        parts.push(actions::Part {
             number,
             seek,
             chunk,
@@ -56,19 +49,34 @@ pub async fn multipart_upload(
     }
 
     let mut tasks = FuturesUnordered::new();
-    for p in parts {
+    // TODO
+    //  https://doc.rust-lang.org/std/sync/mpsc/
+    // https://doc.rust-lang.org/stable/book/second-edition/ch16-02-message-passing.html
+    let total_parts = parts.len();
+    let uploaded = Arc::new(Mutex::new(Vec::new()));
+    for part in parts {
         let k = key.clone();
         let f = file.clone();
         let uid = upload_id.clone();
         let s3 = s3.clone();
+        let clone = Arc::clone(&uploaded);
         tasks.push(task::spawn(async move {
-            println!("part: {}, seek: {}, chunk: {}", p.number, p.seek, p.chunk);
+            println!(
+                "part: {}, seek: {}, chunk: {}",
+                number, part.seek, part.chunk
+            );
             let action =
-                actions::UploadPart::new(k, f, format!("{}", p.number), uid, p.seek, p.chunk);
-            // TODO save the Etags + part number
-            match action.request(s3).await {
-                Ok(rs) => println!("{}", rs),
-                Err(e) => eprintln!("{}", e),
+                actions::UploadPart::new(k, f, format!("{}", number), uid, part.seek, part.chunk);
+            if let Ok(etag) = action.request(s3).await {
+                let mut v = clone.lock().unwrap();
+                v.push(actions::Part {
+                    number,
+                    etag: etag,
+                    ..Default::default()
+                });
+            } else {
+                println!("failed part: {:#?}", part);
+                todo!();
             };
         }));
         if tasks.len() == threads {
@@ -81,8 +89,11 @@ pub async fn multipart_upload(
     while let Some(_item) = tasks.next().await {}
 
     // finish multipart
-    let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id);
-    let _response = action.request(s3).await?;
 
+    let v = uploaded.lock().unwrap();
+    if total_parts == v.len() {
+        let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, v.clone());
+        let _response = action.request(s3).await?;
+    }
     Ok(())
 }
