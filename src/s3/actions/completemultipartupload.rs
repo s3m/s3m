@@ -5,10 +5,11 @@
 
 use crate::s3::actions::{response_error, Action};
 use crate::s3::request;
+use crate::s3::responses::CompleteMultipartUploadResult;
 use crate::s3::tools;
 use crate::s3::S3;
 use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
-use serde_xml_rs::to_string;
+use serde_xml_rs::{from_str, to_string};
 use std::collections::BTreeMap;
 use std::error;
 
@@ -17,7 +18,7 @@ pub struct CompleteMultipartUpload {
     key: String,
     upload_id: String,
     pub x_amz_request_payer: Option<String>,
-    parts: Vec<Part>,
+    parts: BTreeMap<u16, Part>,
 }
 
 impl Serialize for CompleteMultipartUpload {
@@ -27,7 +28,7 @@ impl Serialize for CompleteMultipartUpload {
     {
         let len = 1 + self.parts.len();
         let mut map = serializer.serialize_struct("CompleteMultipartUpload", len)?;
-        for part in &self.parts {
+        for (_, part) in &self.parts {
             map.serialize_field("Part", part)?;
         }
         map.end()
@@ -56,7 +57,7 @@ impl Serialize for Part {
 
 impl CompleteMultipartUpload {
     #[must_use]
-    pub fn new(key: String, upload_id: String, parts: Vec<Part>) -> Self {
+    pub fn new(key: String, upload_id: String, parts: BTreeMap<u16, Part>) -> Self {
         Self {
             key,
             upload_id,
@@ -68,7 +69,10 @@ impl CompleteMultipartUpload {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(&self, s3: S3) -> Result<String, Box<dyn error::Error>> {
+    pub async fn request(
+        &self,
+        s3: S3,
+    ) -> Result<CompleteMultipartUploadResult, Box<dyn error::Error>> {
         let parts = CompleteMultipartUpload {
             parts: self.parts.clone(),
             ..Default::default()
@@ -79,7 +83,8 @@ impl CompleteMultipartUpload {
         let response = request::request_body(url.clone(), self.http_verb(), headers, body).await?;
 
         if response.status().is_success() {
-            Ok(response.text().await?)
+            let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;
+            Ok(rs)
         } else {
             Err(response_error(response).await?.into())
         }

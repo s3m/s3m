@@ -241,7 +241,7 @@ async fn main() {
             )
             .await
             {
-                Ok(o) => println!("{:#?}", o),
+                Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }
         } else {

@@ -160,3 +160,15 @@ pub struct InitiateMultipartUploadResult {
     #[serde(rename = "UploadId")]
     pub upload_id: String,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct CompleteMultipartUploadResult {
+    #[serde(rename = "Location")]
+    pub location: String,
+    #[serde(rename = "Bucket")]
+    pub bucket: String,
+    #[serde(rename = "Key")]
+    pub key: String,
+    #[serde(rename = "ETag")]
+    pub e_tag: String,
+}

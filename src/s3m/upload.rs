@@ -1,8 +1,8 @@
 use crate::s3::actions;
 use crate::s3::S3;
 use futures::stream::FuturesUnordered;
+use std::collections::BTreeMap;
 use std::error;
-use std::sync::{Arc, Mutex};
 use tokio::stream::StreamExt;
 use tokio::task;
 
@@ -22,7 +22,7 @@ pub async fn multipart_upload(
     file_size: u64,
     chunk_size: u64,
     threads: usize,
-) -> Result<(), Box<dyn error::Error>> {
+) -> Result<String, Box<dyn error::Error>> {
     let action = actions::CreateMultipartUpload::new(key.clone());
     // do request and try to get upload_id
     let response = action.request(s3.clone()).await?;
@@ -49,17 +49,12 @@ pub async fn multipart_upload(
     }
 
     let mut tasks = FuturesUnordered::new();
-    // TODO
-    //  https://doc.rust-lang.org/std/sync/mpsc/
-    // https://doc.rust-lang.org/stable/book/second-edition/ch16-02-message-passing.html
-    let total_parts = parts.len();
-    let uploaded = Arc::new(Mutex::new(Vec::new()));
+    let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
     for part in parts {
         let k = key.clone();
         let f = file.clone();
         let uid = upload_id.clone();
         let s3 = s3.clone();
-        let clone = Arc::clone(&uploaded);
         tasks.push(task::spawn(async move {
             println!(
                 "part: {}, seek: {}, chunk: {}",
@@ -74,32 +69,38 @@ pub async fn multipart_upload(
                 part.chunk,
             );
             if let Ok(etag) = action.request(s3).await {
-                let mut v = clone.lock().unwrap();
-                v.push(actions::Part {
-                    number: part.number,
-                    etag: etag,
-                    ..Default::default()
-                });
+                return (
+                    part.number,
+                    actions::Part {
+                        number: part.number,
+                        etag: etag,
+                        ..Default::default()
+                    },
+                );
             } else {
                 println!("failed part: {:#?}", part);
                 todo!();
             };
         }));
         if tasks.len() == threads {
-            tasks.next().await;
+            while let Some(part) = tasks.next().await {
+                if let Ok(p) = part {
+                    uploaded.insert(p.0, p.1);
+                }
+            }
         }
     }
     // This loop is how to wait for all the elements in a `FuturesUnordered<T>`
     // to complete. `_item` is just the unit tuple, `()`, because we did not
     // return anything
-    while let Some(_item) = tasks.next().await {}
+    while let Some(part) = tasks.next().await {
+        if let Ok(p) = part {
+            uploaded.insert(p.0, p.1);
+        }
+    }
 
     // finish multipart
-
-    let v = uploaded.lock().unwrap();
-    if total_parts == v.len() {
-        let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, v.clone());
-        let _response = action.request(s3).await?;
-    }
-    Ok(())
+    let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, uploaded);
+    let rs = action.request(s3).await?;
+    Ok(format!("ETag: {}", rs.e_tag))
 }
