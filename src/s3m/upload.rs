@@ -1,6 +1,7 @@
 use crate::s3::actions;
 use crate::s3::S3;
 use futures::stream::FuturesUnordered;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::BTreeMap;
 use std::error;
 use tokio::stream::StreamExt;
@@ -50,16 +51,19 @@ pub async fn multipart_upload(
 
     let mut tasks = FuturesUnordered::new();
     let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
+    let total_parts = parts.len();
+    let pb = ProgressBar::new(total_parts as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:50.green/blue} {pos}/{len} ({eta})")
+            .progress_chars("█▉▊▋▌▍▎▏  ·"),
+    );
     for part in parts {
         let k = key.clone();
         let f = file.clone();
         let uid = upload_id.clone();
         let s3 = s3.clone();
         tasks.push(task::spawn(async move {
-            println!(
-                "part: {}, seek: {}, chunk: {}",
-                part.number, part.seek, part.chunk
-            );
             let action = actions::UploadPart::new(
                 k,
                 f,
@@ -87,6 +91,7 @@ pub async fn multipart_upload(
                 if let Ok(p) = part {
                     uploaded.insert(p.0, p.1);
                 }
+                pb.inc(1);
             }
         }
     }
@@ -97,10 +102,17 @@ pub async fn multipart_upload(
         if let Ok(p) = part {
             uploaded.insert(p.0, p.1);
         }
+        pb.inc(1);
     }
 
-    // finish multipart
-    let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, uploaded);
-    let rs = action.request(s3).await?;
-    Ok(format!("ETag: {}", rs.e_tag))
+    if total_parts == uploaded.len() {
+        pb.finish();
+
+        // finish multipart
+        let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, uploaded);
+        let rs = action.request(s3).await?;
+        Ok(format!("ETag: {}", rs.e_tag))
+    } else {
+        todo!();
+    }
 }

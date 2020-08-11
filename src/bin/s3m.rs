@@ -2,7 +2,6 @@ use clap::{App, AppSettings, Arg, SubCommand};
 use s3m::s3::{actions, Credentials, Region, S3};
 use s3m::s3m::{multipart_upload, upload, Config};
 
-use num_cpus;
 use std::fs::{create_dir_all, metadata, File};
 use std::process;
 
@@ -52,7 +51,7 @@ async fn main() {
     });
 
     let default_config = format!("{}/.s3m/config.yml", home_dir);
-    let default_workers = if num_cpus::get() * 2 >= 4 {
+    let default_threads = if num_cpus::get() * 2 >= 4 {
         String::from("3")
     } else {
         format!("{}", num_cpus::get())
@@ -83,7 +82,7 @@ async fn main() {
             Arg::with_name("threads")
                 .help("Number of threads to use")
                 .long("threads")
-                .default_value(&default_workers)
+                .default_value(&default_threads)
                 .short("t")
                 .required(true)
                 .validator(is_num),
