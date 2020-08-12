@@ -5,13 +5,13 @@ use crate::s3::S3;
 // use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 use std::error;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Default)]
 pub struct PutObject {
     key: String,
     file: String,
-    tx: Option<mpsc::Sender<usize>>,
+    sender: Option<UnboundedSender<usize>>,
     pub x_amz_acl: Option<String>,
     pub cache_control: Option<String>,
     pub content_disposition: Option<String>,
@@ -42,11 +42,11 @@ pub struct PutObject {
 
 impl PutObject {
     #[must_use]
-    pub fn new(key: String, file: String, tx: Option<mpsc::Sender<usize>>) -> Self {
+    pub fn new(key: String, file: String, sender: Option<UnboundedSender<usize>>) -> Self {
         Self {
             key,
             file,
-            tx,
+            sender,
             ..Default::default()
         }
     }
@@ -62,7 +62,7 @@ impl PutObject {
             self.http_verb(),
             headers,
             Some(self.file.to_string()),
-            self.tx,
+            self.sender,
         )
         .await?;
 

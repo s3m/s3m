@@ -14,7 +14,7 @@ use std::io::SeekFrom;
 use tokio::fs::File;
 use tokio::prelude::*;
 use tokio::stream::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 
@@ -26,7 +26,7 @@ pub async fn request(
     method: &'static str,
     headers: &BTreeMap<String, String>,
     file: Option<String>,
-    sender: Option<mpsc::Sender<usize>>,
+    sender: Option<UnboundedSender<usize>>,
 ) -> Result<Response, Box<dyn error::Error>> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
@@ -40,12 +40,11 @@ pub async fn request(
         let file = File::open(file_path).await?;
         let mut stream = FramedRead::new(file, BytesCodec::new());
         let stream = async_stream::stream! {
-            if let Some(mut tx) = sender {
+            if let Some(tx) = sender {
                 while let Some(bytes) = stream.next().await {
                     if let Ok(bytes) = &bytes {
-                        if let Err(e) = tx.send(bytes.len()).await {
-                            eprintln!("{}", e);
-                        };
+                        // TODO
+                        tx.send(bytes.len()).unwrap();
                     }
                     yield bytes;
                 }
