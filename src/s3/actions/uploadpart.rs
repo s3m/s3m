@@ -62,7 +62,7 @@ impl UploadPart {
         if response.status().is_success() {
             match response.headers().get("ETag") {
                 Some(etag) => Ok(etag.to_str()?.to_string()),
-                _ => Err("missing ETag")?,
+                _ => Err("missing ETag".into()),
             }
         } else {
             Err(response_error(response).await?.into())

@@ -35,7 +35,7 @@ pub async fn upload(
             Ok(s) => s,
             Err(e) => e.to_string(),
         };
-        if let Err(_) = tx.send(rs).await {
+        if tx.send(rs).await.is_err() {
             eprintln!("response could not be sent over the tx channel");
             return;
         }

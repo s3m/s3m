@@ -28,7 +28,7 @@ impl Serialize for CompleteMultipartUpload {
     {
         let len = 1 + self.parts.len();
         let mut map = serializer.serialize_struct("CompleteMultipartUpload", len)?;
-        for (_, part) in &self.parts {
+        for part in self.parts.values() {
             map.serialize_field("Part", part)?;
         }
         map.end()
