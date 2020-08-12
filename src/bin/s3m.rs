@@ -51,11 +51,7 @@ async fn main() {
     });
 
     let default_config = format!("{}/.s3m/config.yml", home_dir);
-    let default_threads = if num_cpus::get() * 2 >= 4 {
-        String::from("3")
-    } else {
-        format!("{}", num_cpus::get())
-    };
+    let default_threads = format!("{}", num_cpus::get());
 
     let matches = App::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))

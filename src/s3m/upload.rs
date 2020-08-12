@@ -86,7 +86,7 @@ pub async fn multipart_upload(
     let mut tasks = FuturesUnordered::new();
     let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
     let total_parts = parts.len();
-    for part in parts {
+    for part in &parts {
         let k = key.clone();
         let f = file.clone();
         let uid = upload_id.clone();
@@ -100,24 +100,29 @@ pub async fn multipart_upload(
                 part.seek,
                 part.chunk,
             );
-            if let Ok(etag) = action.request(s3).await {
-                return (
+            match action.request(s3).await {
+                Ok(etag) => (
                     part.number,
                     actions::Part {
                         number: part.number,
                         etag,
                         ..Default::default()
                     },
-                );
-            } else {
-                println!("failed part: {:#?}", part);
-                todo!();
-            };
+                ),
+                Err(e) => {
+                    println!("failed part: {:#?}, err: {}", part, e);
+                    todo!();
+                }
+            }
         });
+
         // limit to N threads
-        //if tasks.len() == threads {
-        //while let Some(part) = tasks.next().await {}
-        //}
+        if tasks.len() == threads {
+            while let Some(result) = tasks.next().await {
+                uploaded.insert(result.0, result.1);
+                pb.inc(1)
+            }
+        }
     }
 
     loop {
