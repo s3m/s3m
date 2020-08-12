@@ -16,6 +16,7 @@ edition = "2018"
 travis-ci = { repository = "s3m/s3m", branch = "master" }
 
 [dependencies]
+async-stream = "0.3.0"
 chrono = "0.4"
 clap = "2.33"
 dirs = "3.0.1"

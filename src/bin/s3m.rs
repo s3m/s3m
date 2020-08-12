@@ -244,7 +244,7 @@ async fn main() {
                 Err(e) => eprintln!("{}", e),
             }
         } else {
-            match upload(s3, hbp[0].into(), args[1].into()).await {
+            match upload(s3, hbp[0].into(), args[1].into(), file_size).await {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }

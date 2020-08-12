@@ -5,11 +5,13 @@ use crate::s3::S3;
 // use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 use std::error;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Default)]
 pub struct PutObject {
     key: String,
     file: String,
+    tx: Option<mpsc::Sender<usize>>,
     pub x_amz_acl: Option<String>,
     pub cache_control: Option<String>,
     pub content_disposition: Option<String>,
@@ -40,10 +42,11 @@ pub struct PutObject {
 
 impl PutObject {
     #[must_use]
-    pub fn new(key: String, file: String) -> Self {
+    pub fn new(key: String, file: String, tx: Option<mpsc::Sender<usize>>) -> Self {
         Self {
             key,
             file,
+            tx,
             ..Default::default()
         }
     }
@@ -51,7 +54,7 @@ impl PutObject {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(&self, s3: S3) -> Result<String, Box<dyn error::Error>> {
+    pub async fn request(self, s3: S3) -> Result<String, Box<dyn error::Error>> {
         let (digest, length) = tools::sha256_digest(&self.file)?;
         let (url, headers) = &self.sign(s3, &digest, Some(length))?;
         let response = request::request(
@@ -59,8 +62,10 @@ impl PutObject {
             self.http_verb(),
             headers,
             Some(self.file.to_string()),
+            self.tx,
         )
         .await?;
+
         if response.status().is_success() {
             let mut h: BTreeMap<&str, String> = BTreeMap::new();
             if let Some(etag) = response.headers().get("ETag") {

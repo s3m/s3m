@@ -1,6 +1,9 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
+// https://stackoverflow.com/a/63374116/1135424
+// use futures::future::Either;
+// use futures::stream::TryStreamExt;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Method, Response,
@@ -10,6 +13,8 @@ use std::error;
 use std::io::SeekFrom;
 use tokio::fs::File;
 use tokio::prelude::*;
+use tokio::stream::StreamExt;
+use tokio::sync::mpsc;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 
@@ -21,6 +26,7 @@ pub async fn request(
     method: &'static str,
     headers: &BTreeMap<String, String>,
     file: Option<String>,
+    sender: Option<mpsc::Sender<usize>>,
 ) -> Result<Response, Box<dyn error::Error>> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
@@ -32,7 +38,23 @@ pub async fn request(
 
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
-        let stream = FramedRead::new(file, BytesCodec::new());
+        let mut stream = FramedRead::new(file, BytesCodec::new());
+        let stream = async_stream::stream! {
+            if let Some(mut tx) = sender {
+                while let Some(bytes) = stream.next().await {
+                    if let Ok(bytes) = &bytes {
+                        if let Err(e) = tx.send(bytes.len()).await {
+                            eprintln!("{}", e);
+                        };
+                    }
+                    yield bytes;
+                }
+            } else {
+                while let Some(bytes) = stream.next().await {
+                    yield bytes;
+                }
+            }
+        };
         let body = Body::wrap_stream(stream);
         client.request(method, url).headers(headers).body(body)
     } else {

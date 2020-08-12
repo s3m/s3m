@@ -58,7 +58,7 @@ impl CreateMultipartUpload {
         s3: S3,
     ) -> Result<InitiateMultipartUploadResult, Box<dyn error::Error>> {
         let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None)?;
-        let response = request::request(url.clone(), self.http_verb(), headers, None).await?;
+        let response = request::request(url.clone(), self.http_verb(), headers, None, None).await?;
 
         if response.status().is_success() {
             let upload_req: InitiateMultipartUploadResult = from_str(&response.text().await?)?;
