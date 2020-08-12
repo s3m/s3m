@@ -1,15 +1,13 @@
 use crate::s3::actions;
 use crate::s3::S3;
-use futures::stream::FuturesUnordered;
+use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::error;
-use tokio::stream::StreamExt;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
-use tokio::task;
 
-async fn progress_bar(
+async fn progress_bar_bytes(
     file_size: u64,
     mut receiver: UnboundedReceiver<usize>,
 ) -> Result<(), Box<dyn error::Error>> {
@@ -38,7 +36,7 @@ pub async fn upload(
 ) -> Result<String, Box<dyn error::Error>> {
     let (sender, receiver) = unbounded_channel();
     let action = actions::PutObject::new(key, file, Some(sender));
-    let response = tokio::try_join!(progress_bar(file_size, receiver), action.request(s3))?.1;
+    let response = tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(s3))?.1;
     Ok(response)
 }
 
@@ -79,21 +77,21 @@ pub async fn multipart_upload(
         number += 1;
     }
 
-    let mut tasks = FuturesUnordered::new();
-    let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
-    let total_parts = parts.len();
-    let pb = ProgressBar::new(total_parts as u64);
+    let pb = ProgressBar::new(parts.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
             .template("[{elapsed_precise}] {bar:50.green/blue} {pos}/{len} ({eta})")
             .progress_chars("█▉▊▋▌▍▎▏  ·"),
     );
+    let mut tasks = FuturesUnordered::new();
+    let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
+    let total_parts = parts.len();
     for part in parts {
         let k = key.clone();
         let f = file.clone();
         let uid = upload_id.clone();
         let s3 = s3.clone();
-        tasks.push(task::spawn(async move {
+        tasks.push(async move {
             let action = actions::UploadPart::new(
                 k,
                 f,
@@ -115,26 +113,26 @@ pub async fn multipart_upload(
                 println!("failed part: {:#?}", part);
                 todo!();
             };
-        }));
-        if tasks.len() == threads {
-            while let Some(part) = tasks.next().await {
-                if let Ok(p) = part {
-                    uploaded.insert(p.0, p.1);
-                }
-                pb.inc(1);
+        });
+        // limit to N threads
+        //if tasks.len() == threads {
+        //while let Some(part) = tasks.next().await {}
+        //}
+    }
+
+    loop {
+        match tasks.next().await {
+            Some(result) => {
+                // part number and Part
+                uploaded.insert(result.0, result.1);
+                pb.inc(1)
+            }
+            None => {
+                pb.finish();
+                break;
             }
         }
     }
-    // This loop is how to wait for all the elements in a `FuturesUnordered<T>`
-    // to complete. `_item` is just the unit tuple, `()`, because we did not
-    // return anything
-    while let Some(part) = tasks.next().await {
-        if let Ok(p) = part {
-            uploaded.insert(p.0, p.1);
-        }
-        pb.inc(1);
-    }
-    pb.finish();
 
     if uploaded.len() < total_parts {
         todo!();
