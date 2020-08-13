@@ -1,8 +1,18 @@
 use clap::{App, AppSettings, Arg, SubCommand};
 use s3m::s3::{actions, Credentials, Region, S3};
 use s3m::s3m::{multipart_upload, upload, Config};
+use std::env;
 use std::fs::{create_dir_all, metadata, File};
 use std::process;
+
+fn me() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .file_name()?
+        .to_str()?
+        .to_owned()
+        .into()
+}
 
 fn is_num(s: String) -> Result<(), String> {
     if let Err(..) = s.parse::<u64>() {
@@ -16,7 +26,7 @@ fn is_file(s: String) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "cannot read the file: {} , verify file exist and is not a directory.",
+            "cannot read the file: {}, verify file exist and is not a directory.",
             s
         ))
     }
@@ -29,7 +39,7 @@ fn file_size(path: &str) -> Result<u64, String> {
                 Ok(m.len())
             } else {
                 Err(format!(
-                    "cannot read the file: {} , verify file exist and is not a directory.",
+                    "cannot read the file: {}, verify file exist and is not a directory.",
                     path
                 ))
             }
@@ -120,27 +130,8 @@ async fn main() {
         )
         .get_matches();
 
-    let config = matches.value_of("config").unwrap_or_else(|| {
-        eprintln!("Unable to open configuration file, use (\"-h for help\")");
-        process::exit(1);
-    });
-
-    let buffer = matches.value_of("buffer").unwrap();
-    let threads = matches
-        .value_of("threads")
-        .unwrap()
-        .parse::<usize>()
-        .unwrap();
-
-    // unwrap because field "arguments" is required (should never fail)
-    let args: Vec<_> = if let Some(matches) = matches.subcommand_matches("ls") {
-        matches.values_of("arguments").unwrap().collect()
-    } else {
-        let args: Vec<&str> = matches.values_of("arguments").unwrap().collect();
-        args.swap(0, 1)
-    };
-
     // parse config file
+    let config = matches.value_of("config").unwrap();
     let file = File::open(config).expect("Unable to open file");
     let config: Config = match serde_yaml::from_reader(file) {
         Err(e) => {
@@ -150,9 +141,28 @@ async fn main() {
         Ok(yml) => yml,
     };
 
-    // find host, bucket and path
-    let mut hbp: Vec<_> = args[0].split('/').filter(|s| !s.is_empty()).collect();
+    let buffer = matches.value_of("buffer").unwrap();
+    let threads = matches
+        .value_of("threads")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
 
+    // unwrap because field "arguments" is required (should never fail)
+    let args: Vec<_> = if let Some(ls) = matches.subcommand_matches("ls") {
+        ls.values_of("arguments").unwrap().collect()
+    } else {
+        matches.values_of("arguments").unwrap().collect()
+    };
+
+    // find host, bucket and path
+    let mut hbp: Vec<_> = if matches.subcommand_matches("ls").is_some() {
+        args[0].split('/').filter(|s| !s.is_empty()).collect()
+    } else {
+        args[1].split('/').filter(|s| !s.is_empty()).collect()
+    };
+
+    // HOST
     let host = if config.hosts.contains_key(hbp[0]) {
         let key = hbp.remove(0);
         &config.hosts[key]
@@ -161,7 +171,7 @@ async fn main() {
         process::exit(1);
     };
 
-    // find region
+    // REGION
     let region = match &host.region {
         Some(h) => match h.parse::<Region>() {
             Ok(r) => r,
@@ -189,7 +199,11 @@ async fn main() {
     } else if matches.subcommand_matches("ls").is_some() {
         None
     } else {
-        eprintln!("No \"bucket\" found, try /{}/<bucket name>", args[0]);
+        eprintln!(
+            "No \"bucket\" found, try: {} /path/to/file {}/<bucket name>/file",
+            me().unwrap_or("s3m".to_string()),
+            args[1]
+        );
         process::exit(1);
     };
 
@@ -214,11 +228,16 @@ async fn main() {
     } else {
         // Upload a file if > buffer size try multipart
         if hbp.is_empty() {
-            eprintln!("Missing the name/path try: /{}/<name> /path/file", hbp[0]);
+            eprintln!(
+                "File name missing, try: {} {} <provider>/<bucket>/{}",
+                me().unwrap_or("s3m".to_string()),
+                args[0],
+                args[0].split('/').next_back().unwrap_or("")
+            );
             process::exit(1);
         }
 
-        let file_size = match file_size(args[1]) {
+        let file_size = match file_size(args[0]) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("{}", e);
@@ -233,7 +252,7 @@ async fn main() {
             match multipart_upload(
                 s3,
                 hbp[0].into(),
-                args[1].into(),
+                args[0].into(),
                 file_size,
                 chunk_size,
                 threads,
@@ -244,7 +263,7 @@ async fn main() {
                 Err(e) => eprintln!("{}", e),
             }
         } else {
-            match upload(s3, hbp[0].into(), args[1].into(), file_size).await {
+            match upload(s3, hbp[0].into(), args[0].into(), file_size).await {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }
