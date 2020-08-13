@@ -1,7 +1,6 @@
 use clap::{App, AppSettings, Arg, SubCommand};
 use s3m::s3::{actions, Credentials, Region, S3};
 use s3m::s3m::{multipart_upload, upload, Config};
-
 use std::fs::{create_dir_all, metadata, File};
 use std::process;
 
@@ -107,7 +106,7 @@ async fn main() {
         )
         .arg(
             Arg::with_name("arguments")
-                .help("host/bucket/<file> /path/to/file")
+                .help("/path/to/file <host>/bucket/<file>")
                 .required_unless("ls")
                 .min_values(2),
         )
@@ -137,7 +136,8 @@ async fn main() {
     let args: Vec<_> = if let Some(matches) = matches.subcommand_matches("ls") {
         matches.values_of("arguments").unwrap().collect()
     } else {
-        matches.values_of("arguments").unwrap().collect()
+        let args: Vec<&str> = matches.values_of("arguments").unwrap().collect();
+        args.swap(0, 1)
     };
 
     // parse config file
