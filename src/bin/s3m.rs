@@ -192,7 +192,7 @@ async fn main() {
     } else {
         eprintln!(
             "No \"bucket\" found, try: {} /path/to/file {}/<bucket name>/file",
-            me().unwrap_or("s3m".to_string()),
+            me().unwrap_or_else(|| "s3m".to_string()),
             args[1]
         );
         process::exit(1);
@@ -221,7 +221,7 @@ async fn main() {
         if hbp.is_empty() {
             eprintln!(
                 "File name missing, try: {} {} <provider>/<bucket>/{}",
-                me().unwrap_or("s3m".to_string()),
+                me().unwrap_or_else(|| "s3m".to_string()),
                 args[0],
                 args[0].split('/').next_back().unwrap_or("")
             );

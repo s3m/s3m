@@ -103,36 +103,19 @@ pub async fn multipart_upload(
     let total_parts = parts.len();
     let mut retry_parts: Vec<actions::Part> = Vec::new();
     for part in &mut parts {
-        let k = key.clone();
-        let f = file.clone();
+        let key = key.clone();
+        let file = file.clone();
         let uid = upload_id.clone();
         let s3 = s3.clone();
-        tasks.push(async move {
-            let action = actions::UploadPart::new(
-                k,
-                f,
-                format!("{}", part.number),
-                uid,
-                part.seek,
-                part.chunk,
-            );
-            // return tupple with etag and part
-            if let Ok(etag) = action.request(s3).await {
-                part.etag = etag;
-                (part.number, part.clone())
-            } else {
-                // if no response return and empty etag
-                (0, part.clone())
-            }
-        });
+        tasks.push(async move { upload_part(s3, key, file, uid, part.clone()).await });
 
         // limit to N threads
         if tasks.len() == threads {
             while let Some(p) = tasks.next().await {
-                if p.0 == 0 {
-                    retry_parts.push(p.1);
+                if p.etag.is_empty() {
+                    retry_parts.push(p);
                 } else {
-                    uploaded.insert(p.0, p.1);
+                    uploaded.insert(p.number, p);
                     pb.inc(1)
                 }
             }
@@ -142,12 +125,11 @@ pub async fn multipart_upload(
     loop {
         match tasks.next().await {
             Some(p) => {
-                if p.0 == 0 {
-                    retry_parts.push(p.1);
+                if p.etag.is_empty() {
+                    retry_parts.push(p);
                 } else {
-                    // part number and Part
-                    uploaded.insert(p.0, p.1);
-                    pb.inc(1);
+                    uploaded.insert(p.number, p);
+                    pb.inc(1)
                 }
             }
             None => {
@@ -158,6 +140,9 @@ pub async fn multipart_upload(
     }
 
     println!("retry: {:#?}", retry_parts);
+    while !retry_parts.is_empty() {
+        todo!();
+    }
 
     if uploaded.len() < total_parts {
         eprintln!(
@@ -172,4 +157,27 @@ pub async fn multipart_upload(
     let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, uploaded);
     let rs = action.request(s3).await?;
     Ok(format!("ETag: {}", rs.e_tag))
+}
+
+async fn upload_part(
+    s3: S3,
+    key: String,
+    file: String,
+    uid: String,
+    mut part: actions::Part,
+) -> actions::Part {
+    let action = actions::UploadPart::new(
+        key,
+        file,
+        format!("{}", part.number),
+        uid,
+        part.seek,
+        part.chunk,
+    );
+    if let Ok(etag) = action.request(s3).await {
+        part.etag = etag;
+        part
+    } else {
+        part
+    }
 }
