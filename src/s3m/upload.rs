@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 use std::error;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
+const MAX_PARTS_PER_UPLOAD: u64 = 10_000;
+const MAX_PART_SIZE: u64 = 5_368_709_120;
+
 async fn progress_bar_bytes(
     file_size: u64,
     mut receiver: UnboundedReceiver<usize>,
@@ -52,15 +55,26 @@ pub async fn multipart_upload(
     chunk_size: u64,
     threads: usize,
 ) -> Result<String, Box<dyn error::Error>> {
+    // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key.clone());
-    // do request and try to get upload_id
     let response = action.request(s3.clone()).await?;
     let upload_id = response.upload_id;
-    // TODO
-    // calculate parts,chunk
-    let mut seek: u64 = 0;
+
+    // calculate the chunk size
+    let mut parts = file_size / chunk_size;
     let mut chunk = chunk_size;
-    // [[seek,chunk]..]
+
+    while parts > MAX_PARTS_PER_UPLOAD {
+        chunk = chunk * 2;
+        parts = file_size / chunk;
+    }
+
+    if chunk > MAX_PART_SIZE {
+        return Err("Max part size 5 GB".into());
+    }
+
+    let mut seek: u64 = 0;
+    // Part: [chunk, etag, part_number, seek]
     let mut parts: Vec<actions::Part> = Vec::new();
     let mut number: u16 = 1;
     while seek < file_size {
@@ -77,6 +91,7 @@ pub async fn multipart_upload(
         number += 1;
     }
 
+    // Upload parts
     let pb = ProgressBar::new(parts.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -86,7 +101,8 @@ pub async fn multipart_upload(
     let mut tasks = FuturesUnordered::new();
     let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
     let total_parts = parts.len();
-    for part in &parts {
+    let mut retry_parts: Vec<actions::Part> = Vec::new();
+    for part in &mut parts {
         let k = key.clone();
         let f = file.clone();
         let uid = upload_id.clone();
@@ -100,37 +116,39 @@ pub async fn multipart_upload(
                 part.seek,
                 part.chunk,
             );
-            match action.request(s3).await {
-                Ok(etag) => (
-                    part.number,
-                    actions::Part {
-                        number: part.number,
-                        etag,
-                        ..Default::default()
-                    },
-                ),
-                Err(e) => {
-                    println!("failed part: {:#?}, err: {}", part, e);
-                    todo!();
-                }
+            // return tupple with etag and part
+            if let Ok(etag) = action.request(s3).await {
+                part.etag = etag;
+                (part.number, part.clone())
+            } else {
+                // if no response return and empty etag
+                (0, part.clone())
             }
         });
 
         // limit to N threads
         if tasks.len() == threads {
-            while let Some(result) = tasks.next().await {
-                uploaded.insert(result.0, result.1);
-                pb.inc(1)
+            while let Some(p) = tasks.next().await {
+                if p.0 == 0 {
+                    retry_parts.push(p.1);
+                } else {
+                    uploaded.insert(p.0, p.1);
+                    pb.inc(1)
+                }
             }
         }
     }
 
     loop {
         match tasks.next().await {
-            Some(result) => {
-                // part number and Part
-                uploaded.insert(result.0, result.1);
-                pb.inc(1)
+            Some(p) => {
+                if p.0 == 0 {
+                    retry_parts.push(p.1);
+                } else {
+                    // part number and Part
+                    uploaded.insert(p.0, p.1);
+                    pb.inc(1);
+                }
             }
             None => {
                 pb.finish();
@@ -139,11 +157,18 @@ pub async fn multipart_upload(
         }
     }
 
+    println!("retry: {:#?}", retry_parts);
+
     if uploaded.len() < total_parts {
+        eprintln!(
+            "probably missing parts {} < {}",
+            uploaded.len(),
+            total_parts
+        );
         todo!();
     }
 
-    // finish multipart
+    // Complete Multipart Upload
     let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, uploaded);
     let rs = action.request(s3).await?;
     Ok(format!("ETag: {}", rs.e_tag))

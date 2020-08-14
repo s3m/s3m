@@ -79,15 +79,6 @@ async fn main() {
                 .validator(is_num),
         )
         .arg(
-            Arg::with_name("parts")
-                .help("Number of parts per upload, max value: 10,000")
-                .long("parts")
-                .default_value("1000")
-                .short("p")
-                .required(true)
-                .validator(is_num),
-        )
-        .arg(
             Arg::with_name("threads")
                 .help("Number of threads to use")
                 .long("threads")
@@ -245,8 +236,13 @@ async fn main() {
             }
         };
 
+        // <https://aws.amazon.com/blogs/aws/amazon-s3-object-size-limit/>
+        if file_size > 5_497_558_138_880 {
+            eprintln!("object size limit 5 TB");
+            process::exit(1);
+        }
+
         // unwrap because of previous is_num validator
-        // TODO calculate chunksize and adjust the number of parts
         let chunk_size = buffer.parse::<u64>().unwrap();
         if file_size > chunk_size {
             match multipart_upload(
