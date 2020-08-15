@@ -8,9 +8,9 @@ use std::error;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Default)]
-pub struct PutObject {
-    key: String,
-    file: String,
+pub struct PutObject<'a> {
+    key: &'a str,
+    file: &'a str,
     sender: Option<UnboundedSender<usize>>,
     pub x_amz_acl: Option<String>,
     pub cache_control: Option<String>,
@@ -40,9 +40,9 @@ pub struct PutObject {
     pub x_amz_object_lock_legal_hold: Option<String>,
 }
 
-impl PutObject {
+impl<'a> PutObject<'a> {
     #[must_use]
-    pub fn new(key: String, file: String, sender: Option<UnboundedSender<usize>>) -> Self {
+    pub fn new(key: &'a str, file: &'a str, sender: Option<UnboundedSender<usize>>) -> Self {
         Self {
             key,
             file,
@@ -93,7 +93,7 @@ impl PutObject {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
-impl Action for PutObject {
+impl<'a> Action for PutObject<'a> {
     fn http_verb(&self) -> &'static str {
         "PUT"
     }

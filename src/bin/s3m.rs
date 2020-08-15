@@ -261,21 +261,12 @@ async fn main() {
         }
 
         if file_size > chunk_size {
-            match multipart_upload(
-                s3,
-                hbp[0].into(),
-                args[0].into(),
-                file_size,
-                chunk_size,
-                threads,
-            )
-            .await
-            {
+            match multipart_upload(&s3, &hbp[0], &args[0], file_size, chunk_size, threads).await {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }
         } else {
-            match upload(s3, hbp[0].into(), args[0].into(), file_size).await {
+            match upload(&s3, &hbp[0], &args[0], file_size).await {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }

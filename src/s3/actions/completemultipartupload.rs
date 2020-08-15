@@ -14,14 +14,14 @@ use std::collections::BTreeMap;
 use std::error;
 
 #[derive(Debug, Default, Clone)]
-pub struct CompleteMultipartUpload {
-    key: String,
-    upload_id: String,
+pub struct CompleteMultipartUpload<'a> {
+    key: &'a str,
+    upload_id: &'a str,
     pub x_amz_request_payer: Option<String>,
     parts: BTreeMap<u16, Part>,
 }
 
-impl Serialize for CompleteMultipartUpload {
+impl<'a> Serialize for CompleteMultipartUpload<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -55,9 +55,9 @@ impl Serialize for Part {
     }
 }
 
-impl CompleteMultipartUpload {
+impl<'a> CompleteMultipartUpload<'a> {
     #[must_use]
-    pub fn new(key: String, upload_id: String, parts: BTreeMap<u16, Part>) -> Self {
+    pub fn new(key: &'a str, upload_id: &'a str, parts: BTreeMap<u16, Part>) -> Self {
         Self {
             key,
             upload_id,
@@ -92,7 +92,7 @@ impl CompleteMultipartUpload {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
-impl Action for CompleteMultipartUpload {
+impl<'a> Action for CompleteMultipartUpload<'a> {
     fn http_verb(&self) -> &'static str {
         "POST"
     }

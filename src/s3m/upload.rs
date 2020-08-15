@@ -29,13 +29,13 @@ async fn progress_bar_bytes(
 }
 
 pub async fn upload(
-    s3: S3,
-    key: String,
-    file: String,
+    s3: &S3,
+    key: &str,
+    file: &str,
     file_size: u64,
 ) -> Result<String, Box<dyn error::Error>> {
     let (sender, receiver) = unbounded_channel();
-    let action = actions::PutObject::new(key, file, Some(sender));
+    let action = actions::PutObject::new(&key, &file, Some(sender));
     let response =
         tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(&s3))?.1;
     Ok(response)
@@ -46,16 +46,16 @@ pub async fn upload(
 // * Upload Part
 // * Complete Multipart Upload
 pub async fn multipart_upload(
-    s3: S3,
-    key: String,
-    file: String,
+    s3: &S3,
+    key: &str,
+    file: &str,
     file_size: u64,
     chunk_size: u64,
     threads: usize,
 ) -> Result<String, Box<dyn error::Error>> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(&key);
-    let response = action.request(&s3).await?;
+    let response = action.request(s3).await?;
     let upload_id = response.upload_id;
 
     let mut chunk = chunk_size;
@@ -89,11 +89,8 @@ pub async fn multipart_upload(
     let total_parts = parts.len();
     let mut retry_parts: Vec<actions::Part> = Vec::new();
     for part in &mut parts {
-        let key = key.clone();
-        let file = file.clone();
-        let uid = upload_id.clone();
-        let s3 = s3.clone();
-        tasks.push(async move { upload_part(s3, key, file, uid, part.clone()).await });
+        let part = part.clone();
+        tasks.push(async { upload_part(&s3, &key, &file, &upload_id, part).await });
 
         // limit to N threads
         if tasks.len() == threads {
@@ -140,26 +137,20 @@ pub async fn multipart_upload(
     }
 
     // Complete Multipart Upload
-    let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, uploaded);
+    let action = actions::CompleteMultipartUpload::new(&key, &upload_id, uploaded);
     let rs = action.request(&s3).await?;
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
 async fn upload_part(
-    s3: S3,
-    key: String,
-    file: String,
-    uid: String,
+    s3: &S3,
+    key: &str,
+    file: &str,
+    uid: &str,
     mut part: actions::Part,
 ) -> actions::Part {
-    let action = actions::UploadPart::new(
-        key,
-        file,
-        format!("{}", part.number),
-        uid,
-        part.seek,
-        part.chunk,
-    );
+    let pn = format!("{}", part.number);
+    let action = actions::UploadPart::new(&key, &file, &pn, &uid, part.seek, part.chunk);
     if let Ok(etag) = action.request(&s3).await {
         part.etag = etag;
         part

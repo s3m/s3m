@@ -7,11 +7,11 @@ use std::collections::BTreeMap;
 use std::error;
 
 #[derive(Debug, Default, Clone)]
-pub struct UploadPart {
-    key: String,
-    file: String,
-    part_number: String,
-    upload_id: String,
+pub struct UploadPart<'a> {
+    key: &'a str,
+    file: &'a str,
+    part_number: &'a str,
+    upload_id: &'a str,
     seek: u64,
     chunk: u64,
     pub content_length: Option<String>,
@@ -23,13 +23,13 @@ pub struct UploadPart {
     pub x_amz_request_payer: Option<String>,
 }
 
-impl UploadPart {
+impl<'a> UploadPart<'a> {
     #[must_use]
     pub fn new(
-        key: String,
-        file: String,
-        part_number: String,
-        upload_id: String,
+        key: &'a str,
+        file: &'a str,
+        part_number: &'a str,
+        upload_id: &'a str,
         seek: u64,
         chunk: u64,
     ) -> Self {
@@ -71,7 +71,7 @@ impl UploadPart {
 }
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-impl Action for UploadPart {
+impl<'a> Action for UploadPart<'a> {
     fn http_verb(&self) -> &'static str {
         "PUT"
     }
