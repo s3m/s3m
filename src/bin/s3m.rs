@@ -251,7 +251,7 @@ async fn main() {
         // calculate the chunk size
         let mut parts = file_size / chunk_size;
         while parts > MAX_PARTS_PER_UPLOAD {
-            chunk_size = chunk_size * 2;
+            chunk_size *= 2;
             parts = file_size / chunk_size;
         }
 
