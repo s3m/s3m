@@ -7,9 +7,6 @@ use std::collections::BTreeMap;
 use std::error;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
-const MAX_PARTS_PER_UPLOAD: u64 = 10_000;
-const MAX_PART_SIZE: u64 = 5_368_709_120;
-
 async fn progress_bar_bytes(
     file_size: u64,
     mut receiver: UnboundedReceiver<usize>,
@@ -60,19 +57,7 @@ pub async fn multipart_upload(
     let response = action.request(s3.clone()).await?;
     let upload_id = response.upload_id;
 
-    // calculate the chunk size
-    let mut parts = file_size / chunk_size;
     let mut chunk = chunk_size;
-
-    while parts > MAX_PARTS_PER_UPLOAD {
-        chunk = chunk * 2;
-        parts = file_size / chunk;
-    }
-
-    if chunk > MAX_PART_SIZE {
-        return Err("Max part size 5 GB".into());
-    }
-
     let mut seek: u64 = 0;
     // Part: [chunk, etag, part_number, seek]
     let mut parts: Vec<actions::Part> = Vec::new();

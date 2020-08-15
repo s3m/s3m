@@ -5,6 +5,9 @@ use std::env;
 use std::fs::{create_dir_all, metadata, File};
 use std::process;
 
+const MAX_PARTS_PER_UPLOAD: u64 = 10_000;
+const MAX_PART_SIZE: u64 = 5_368_709_120;
+
 fn me() -> Option<String> {
     std::env::current_exe()
         .ok()?
@@ -243,7 +246,20 @@ async fn main() {
         }
 
         // unwrap because of previous is_num validator
-        let chunk_size = buffer.parse::<u64>().unwrap();
+        let mut chunk_size = buffer.parse::<u64>().unwrap();
+
+        // calculate the chunk size
+        let mut parts = file_size / chunk_size;
+        while parts > MAX_PARTS_PER_UPLOAD {
+            chunk_size = chunk_size * 2;
+            parts = file_size / chunk_size;
+        }
+
+        if chunk_size > MAX_PART_SIZE {
+            eprintln!("max part size 5 GB");
+            process::exit(1);
+        }
+
         if file_size > chunk_size {
             match multipart_upload(
                 s3,
