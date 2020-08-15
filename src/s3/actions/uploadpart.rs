@@ -2,7 +2,6 @@ use crate::s3::actions::{response_error, Action};
 use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
-// use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 use std::error;
 
@@ -48,8 +47,9 @@ impl<'a> UploadPart<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: &S3) -> Result<String, Box<dyn error::Error>> {
-        let (digest, length) = tools::sha256_digest_multipart(&self.file, self.seek, self.chunk)?;
-        let (url, headers) = &self.sign(s3, &digest, Some(length))?;
+        let (sha256, md5, length) =
+            tools::sha256_digest_multipart(&self.file, self.seek, self.chunk)?;
+        let (url, headers) = &self.sign(s3, &sha256, Some(&md5), Some(length))?;
         let response = request::request_multipart(
             url.clone(),
             self.http_verb(),
@@ -59,6 +59,7 @@ impl<'a> UploadPart<'a> {
             self.chunk,
         )
         .await?;
+        // probaby to much paranid
         if response.status().is_success() {
             match response.headers().get("ETag") {
                 Some(etag) => Ok(etag.to_str()?.to_string()),

@@ -49,7 +49,12 @@ impl<'a> Signature<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub fn sign(&mut self, digest: &str, length: Option<usize>) -> BTreeMap<String, String> {
+    pub fn sign(
+        &mut self,
+        digest: &str,
+        md5: Option<&str>,
+        length: Option<usize>,
+    ) -> BTreeMap<String, String> {
         let current_date = self.datetime.format("%Y%m%d");
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
 
@@ -60,8 +65,11 @@ impl<'a> Signature<'a> {
         if let Some(length) = length {
             self.add_header("content-length", format!("{}", length).as_ref());
         }
+        if let Some(md5) = md5 {
+            self.add_header("Content-MD5", md5);
+        }
 
-        //        let canonical_headers = canonical_headers(&self.headers);
+        // let canonical_headers = canonical_headers(&self.headers);
         let signed_headers = signed_headers(&self.headers);
 
         // https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html

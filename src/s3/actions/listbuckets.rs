@@ -19,7 +19,7 @@ impl ListBuckets {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: &S3) -> Result<ListAllMyBucketsResult, Box<dyn error::Error>> {
-        let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None)?;
+        let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None, None)?;
         let response = request::request(url.clone(), self.http_verb(), headers, None, None).await?;
         if response.status().is_success() {
             let buckets: ListAllMyBucketsResult = from_str(&response.text().await?)?;

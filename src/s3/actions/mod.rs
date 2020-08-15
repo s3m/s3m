@@ -57,6 +57,7 @@ pub trait Action {
         &self,
         s3: &S3,
         hash_payload: &str,
+        md5: Option<&str>,
         content_length: Option<usize>,
     ) -> Result<(Url, BTreeMap<String, String>), Box<dyn error::Error>> {
         let mut url = match &s3.bucket {
@@ -88,7 +89,7 @@ pub trait Action {
         };
 
         let mut signature = Signature::new(s3, self.http_verb(), &url)?;
-        let headers = signature.sign(hash_payload, content_length);
+        let headers = signature.sign(hash_payload, md5, content_length);
         Ok((url, headers))
     }
 }

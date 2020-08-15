@@ -17,12 +17,14 @@ travis-ci = { repository = "s3m/s3m", branch = "master" }
 
 [dependencies]
 async-stream = "0.3.0"
+base64 = "0.12.3"
 chrono = "0.4"
 clap = "2.33"
 dirs = "3.0.1"
 futures = "0.3.5"
 http = "0.2"
 indicatif = "0.11"
+md5 = "0.7.0"
 num_cpus = "1.13"
 percent-encoding = "2.1"
 reqwest = { version = "0.10.7", features = ["stream"] }

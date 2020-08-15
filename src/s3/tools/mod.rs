@@ -1,3 +1,5 @@
+use base64;
+use md5;
 use ring::{
     digest,
     digest::{Context, SHA256},
@@ -44,12 +46,13 @@ pub fn sha256_digest_multipart(
     file_path: &str,
     seek: u64,
     chunk: u64,
-) -> Result<(String, usize), Box<dyn Error>> {
+) -> Result<(String, String, usize), Box<dyn Error>> {
     let mut file = fs::File::open(file_path)?;
     file.seek(SeekFrom::Start(seek))?;
     let file = file.take(chunk);
     let mut reader = BufReader::new(file);
     let mut context = Context::new(&SHA256);
+    let mut context_md5 = md5::Context::new();
     let mut length: usize = 0;
 
     loop {
@@ -59,6 +62,7 @@ pub fn sha256_digest_multipart(
                 break;
             }
             context.update(buffer);
+            context_md5.consume(buffer);
             buffer.len()
         };
         length += consummed;
@@ -66,8 +70,13 @@ pub fn sha256_digest_multipart(
     }
 
     let digest = context.finish();
+    let digest_md5 = context_md5.compute();
 
-    Ok((write_hex_bytes(digest.as_ref()), length))
+    Ok((
+        write_hex_bytes(digest.as_ref()),
+        base64::encode(digest_md5.as_ref()),
+        length,
+    ))
 }
 
 #[must_use]
