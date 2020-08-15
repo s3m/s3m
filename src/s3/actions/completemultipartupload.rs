@@ -71,7 +71,7 @@ impl CompleteMultipartUpload {
     /// Will return `Err` if can not make the request
     pub async fn request(
         &self,
-        s3: S3,
+        s3: &S3,
     ) -> Result<CompleteMultipartUploadResult, Box<dyn error::Error>> {
         let parts = CompleteMultipartUpload {
             parts: self.parts.clone(),

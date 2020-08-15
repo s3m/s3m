@@ -55,7 +55,7 @@ pub trait Action {
     /// Will return `Err` if the signature can not be created
     fn sign(
         &self,
-        s3: S3,
+        s3: &S3,
         hash_payload: &str,
         content_length: Option<usize>,
     ) -> Result<(Url, BTreeMap<String, String>), Box<dyn error::Error>> {

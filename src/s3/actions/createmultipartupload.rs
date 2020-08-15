@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use std::error;
 
 #[derive(Debug, Default)]
-pub struct CreateMultipartUpload {
-    key: String,
+pub struct CreateMultipartUpload<'a> {
+    key: &'a str,
     pub x_amz_acl: Option<String>,
     pub cache_control: Option<String>,
     pub content_disposition: Option<String>,
@@ -41,9 +41,9 @@ pub struct CreateMultipartUpload {
     pub x_amz_object_lock_legal_hold: Option<String>,
 }
 
-impl CreateMultipartUpload {
+impl<'a> CreateMultipartUpload<'a> {
     #[must_use]
-    pub fn new(key: String) -> Self {
+    pub fn new(key: &'a str) -> Self {
         Self {
             key,
             ..Default::default()
@@ -55,7 +55,7 @@ impl CreateMultipartUpload {
     /// Will return `Err` if can not make the request
     pub async fn request(
         &self,
-        s3: S3,
+        s3: &S3,
     ) -> Result<InitiateMultipartUploadResult, Box<dyn error::Error>> {
         let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None)?;
         let response = request::request(url.clone(), self.http_verb(), headers, None, None).await?;
@@ -70,7 +70,7 @@ impl CreateMultipartUpload {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
-impl Action for CreateMultipartUpload {
+impl<'a> Action for CreateMultipartUpload<'a> {
     fn http_verb(&self) -> &'static str {
         "POST"
     }

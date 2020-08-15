@@ -14,9 +14,9 @@ use url::Url;
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[derive(Debug)]
-pub struct Signature {
+pub struct Signature<'a> {
     // S3
-    auth: S3,
+    auth: &'a S3,
     // The HTTPRequestMethod
     pub http_method: &'static str,
     // The CanonicalURI
@@ -29,11 +29,11 @@ pub struct Signature {
     datetime: DateTime<Utc>,
 }
 
-impl Signature {
+impl<'a> Signature<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can't parse the url
-    pub fn new(s3: S3, method: &'static str, url: &Url) -> Result<Self, Box<dyn error::Error>> {
+    pub fn new(s3: &'a S3, method: &'static str, url: &Url) -> Result<Self, Box<dyn error::Error>> {
         Ok(Self {
             auth: s3,
             http_method: method,

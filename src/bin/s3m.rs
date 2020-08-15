@@ -207,14 +207,14 @@ async fn main() {
         if bucket.is_some() {
             let mut action = actions::ListObjectsV2::new();
             action.prefix = Some(String::from(""));
-            match action.request(s3).await {
+            match action.request(&s3).await {
                 Ok(o) => println!("objects: {:#?}", o),
                 Err(e) => eprintln!("{}", e),
             }
         } else {
             // list buckets
             let action = actions::ListBuckets::new();
-            match action.request(s3).await {
+            match action.request(&s3).await {
                 Ok(o) => println!("objects: {:#?}", o),
                 Err(e) => eprintln!("{}", e),
             }

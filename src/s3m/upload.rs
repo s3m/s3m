@@ -36,7 +36,8 @@ pub async fn upload(
 ) -> Result<String, Box<dyn error::Error>> {
     let (sender, receiver) = unbounded_channel();
     let action = actions::PutObject::new(key, file, Some(sender));
-    let response = tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(s3))?.1;
+    let response =
+        tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(&s3))?.1;
     Ok(response)
 }
 
@@ -53,8 +54,8 @@ pub async fn multipart_upload(
     threads: usize,
 ) -> Result<String, Box<dyn error::Error>> {
     // Initiate Multipart Upload - request an Upload ID
-    let action = actions::CreateMultipartUpload::new(key.clone());
-    let response = action.request(s3.clone()).await?;
+    let action = actions::CreateMultipartUpload::new(&key);
+    let response = action.request(&s3).await?;
     let upload_id = response.upload_id;
 
     let mut chunk = chunk_size;
@@ -140,7 +141,7 @@ pub async fn multipart_upload(
 
     // Complete Multipart Upload
     let action = actions::CompleteMultipartUpload::new(key.clone(), upload_id, uploaded);
-    let rs = action.request(s3).await?;
+    let rs = action.request(&s3).await?;
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
@@ -159,7 +160,7 @@ async fn upload_part(
         part.seek,
         part.chunk,
     );
-    if let Ok(etag) = action.request(s3).await {
+    if let Ok(etag) = action.request(&s3).await {
         part.etag = etag;
         part
     } else {

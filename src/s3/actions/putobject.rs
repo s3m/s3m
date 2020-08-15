@@ -54,7 +54,7 @@ impl PutObject {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(self, s3: S3) -> Result<String, Box<dyn error::Error>> {
+    pub async fn request(self, s3: &S3) -> Result<String, Box<dyn error::Error>> {
         let (digest, length) = tools::sha256_digest(&self.file)?;
         let (url, headers) = &self.sign(s3, &digest, Some(length))?;
         let response = request::request(
