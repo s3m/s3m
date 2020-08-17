@@ -1,4 +1,5 @@
 use clap::{App, AppSettings, Arg, SubCommand};
+use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools, Credentials, Region, S3};
 use s3m::s3m::{multipart_upload, upload, Config};
 use std::env;
@@ -261,8 +262,16 @@ async fn main() {
         }
 
         if file_size > chunk_size {
+            let pb = ProgressBar::new_spinner();
+            pb.enable_steady_tick(200);
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .tick_chars("/|\\- ")
+                    .template("{spinner:.yellow.bold} Calculating checksum"),
+            );
             match tools::blake2(args[0]) {
                 Ok(checksum) => {
+                    pb.finish_and_clear();
                     // &hbp[0] is the name of the file
                     // &args[0] is the file_path
                     match multipart_upload(
@@ -275,6 +284,7 @@ async fn main() {
                     }
                 }
                 Err(e) => {
+                    pb.finish_and_clear();
                     eprintln!(
                         "could not calculate the checksum for file: {}, {}",
                         &args[0], e
