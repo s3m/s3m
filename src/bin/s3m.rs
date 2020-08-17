@@ -267,9 +267,9 @@ async fn main() {
             pb.set_style(
                 ProgressStyle::default_spinner()
                     .tick_chars("/|\\- ")
-                    .template("{spinner:.yellow.bold} Calculating checksum"),
+                    .template("{spinner:.dim.bold} Calculating checksum"),
             );
-            match tools::blake2(args[0]) {
+            match tools::blake3(args[0]) {
                 Ok(checksum) => {
                     pb.finish_and_clear();
                     // &hbp[0] is the name of the file

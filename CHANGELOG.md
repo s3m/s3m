@@ -1,3 +1,6 @@
+## 0.3.0
+* Using [blake3](https://crates.io/crates/blake3), thanks @oconnor663
+
 ## 0.2.0
 * Implemented lifetimes  🌱
 * `sha256` and `md5` returning digest in the same loop using `async` so that we could use `Content-MD5` to better check integrity of an object.

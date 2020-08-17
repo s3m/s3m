@@ -6,8 +6,9 @@ use ring::{
 };
 use std::error::Error;
 use std::fmt::Write;
+use std::io::prelude::*;
+use std::io::BufReader;
 use std::io::SeekFrom;
-use std::io::{BufRead, BufReader};
 use tokio::fs::File;
 use tokio::prelude::*;
 use tokio_util::codec::{BytesCodec, FramedRead};
@@ -84,20 +85,16 @@ pub fn write_hex_bytes(bytes: &[u8]) -> String {
     s
 }
 
-pub fn blake2(file_path: &str) -> Result<String, Box<dyn Error>> {
+pub fn blake3(file_path: &str) -> Result<String, Box<dyn Error>> {
     let file = std::fs::File::open(file_path)?;
     let mut reader = BufReader::new(file);
-    let mut hasher = blake2s_simd::State::new();
-    loop {
-        let consumed = {
-            let buffer = reader.fill_buf()?;
-            if buffer.is_empty() {
-                break;
-            }
-            hasher.update(buffer);
-            buffer.len()
-        };
-        reader.consume(consumed);
+    let mut hasher = blake3::Hasher::new();
+    let mut buf: [u8; 65536] = [0; 65536];
+    while let Ok(size) = reader.read(&mut buf[..]) {
+        if size == 0 {
+            break;
+        }
+        hasher.update(&buf[0..size]);
     }
     Ok(hasher.finalize().to_hex().to_string())
 }
