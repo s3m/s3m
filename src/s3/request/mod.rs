@@ -60,8 +60,6 @@ pub async fn request(
         client.request(method, url).headers(headers)
     };
 
-    //  println!("request: {:#?}", request);
-
     Ok(request.send().await?)
 }
 

@@ -52,11 +52,14 @@ pub async fn multipart_upload(
     file_size: u64,
     chunk_size: u64,
     threads: usize,
+    checksum: &str,
 ) -> Result<String, Box<dyn error::Error>> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(&key);
     let response = action.request(s3).await?;
     let upload_id = response.upload_id;
+
+    println!("uid: {}, checksum: {}", upload_id, checksum);
 
     let mut chunk = chunk_size;
     let mut seek: u64 = 0;
@@ -122,7 +125,6 @@ pub async fn multipart_upload(
         }
     }
 
-    println!("retry: {:#?}", retry_parts);
     while !retry_parts.is_empty() {
         todo!();
     }
@@ -151,10 +153,9 @@ async fn upload_part(
 ) -> actions::Part {
     let pn = format!("{}", part.number);
     let action = actions::UploadPart::new(&key, &file, &pn, &uid, part.seek, part.chunk);
-    if let Ok(etag) = action.request(&s3).await {
-        part.etag = etag;
-        part
-    } else {
-        part
+    match action.request(&s3).await {
+        Ok(etag) => part.etag = etag,
+        Err(e) => eprintln!("Could not upload part #{}, error: {}", part.number, e),
     }
+    part
 }

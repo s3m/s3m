@@ -1,5 +1,5 @@
 use clap::{App, AppSettings, Arg, SubCommand};
-use s3m::s3::{actions, Credentials, Region, S3};
+use s3m::s3::{actions, tools, Credentials, Region, S3};
 use s3m::s3m::{multipart_upload, upload, Config};
 use std::env;
 use std::fs::{create_dir_all, metadata, File};
@@ -261,12 +261,28 @@ async fn main() {
         }
 
         if file_size > chunk_size {
-            match multipart_upload(&s3, &hbp[0], &args[0], file_size, chunk_size, threads).await {
-                Ok(o) => println!("{}", o),
-                Err(e) => eprintln!("{}", e),
+            match tools::blake2(args[0]) {
+                Ok(checksum) => {
+                    // &hbp[0] is the name of the file
+                    // &args[0] is the file_path
+                    match multipart_upload(
+                        &s3, hbp[0], args[0], file_size, chunk_size, threads, &checksum,
+                    )
+                    .await
+                    {
+                        Ok(o) => println!("{}", o),
+                        Err(e) => eprintln!("{}", e),
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "could not calculate the checksum for file: {}, {}",
+                        &args[0], e
+                    );
+                }
             }
         } else {
-            match upload(&s3, &hbp[0], &args[0], file_size).await {
+            match upload(&s3, hbp[0], args[0], file_size).await {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }

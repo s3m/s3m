@@ -52,7 +52,7 @@ impl<'a> Signature<'a> {
     pub fn sign(
         &mut self,
         digest: &str,
-        md5: Option<&str>,
+        digest_b64_md5: Option<&str>,
         length: Option<usize>,
     ) -> BTreeMap<String, String> {
         let current_date = self.datetime.format("%Y%m%d");
@@ -65,7 +65,7 @@ impl<'a> Signature<'a> {
         if let Some(length) = length {
             self.add_header("content-length", format!("{}", length).as_ref());
         }
-        if let Some(md5) = md5 {
+        if let Some(md5) = digest_b64_md5 {
             self.add_header("Content-MD5", md5);
         }
 
