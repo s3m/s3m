@@ -2,6 +2,7 @@ use crate::s3::actions;
 use crate::s3::S3;
 use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
+use serde_cbor::{de::from_mut_slice, to_vec};
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::error;
@@ -53,13 +54,31 @@ pub async fn multipart_upload(
     chunk_size: u64,
     threads: usize,
     checksum: &str,
+    home_dir: &str,
 ) -> Result<String, Box<dyn error::Error>> {
-    // Initiate Multipart Upload - request an Upload ID
-    let action = actions::CreateMultipartUpload::new(&key);
-    let response = action.request(s3).await?;
-    let upload_id = response.upload_id;
+    // try to upload/retry broken uploads besides keeping track of uploaded files (prevent
+    // uploading again)
+    let db = sled::Config::new()
+        .path(format!("{}/.s3m/streams/{}", home_dir, checksum))
+        .open()?;
 
-    println!("uid: {}, checksum: {}", upload_id, checksum);
+    let mut upload_id = String::new();
+    if let Ok(u) = db.get("uid") {
+        if let Some(u) = u {
+            if let Ok(u) = String::from_utf8(u.to_vec()) {
+                println!("uid found...");
+                upload_id = u;
+            }
+        }
+    };
+
+    if upload_id.is_empty() {
+        // Initiate Multipart Upload - request an Upload ID
+        let action = actions::CreateMultipartUpload::new(&key);
+        let response = action.request(s3).await?;
+        upload_id = response.upload_id;
+    }
+    db.insert("uid", upload_id.as_bytes())?;
 
     let mut chunk = chunk_size;
     let mut seek: u64 = 0;
@@ -70,12 +89,16 @@ pub async fn multipart_upload(
         if (file_size - seek) <= chunk {
             chunk = file_size % chunk;
         }
-        parts.push(actions::Part {
+        let part = actions::Part {
             number,
             seek,
             chunk,
             ..Default::default()
-        });
+        };
+        let cbor_part = to_vec(&part)?;
+        db.insert(format!("{}", number), cbor_part)?;
+        db.flush()?;
+        parts.push(part);
         seek += chunk;
         number += 1;
     }

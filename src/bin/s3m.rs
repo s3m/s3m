@@ -275,7 +275,7 @@ async fn main() {
                     // &hbp[0] is the name of the file
                     // &args[0] is the file_path
                     match multipart_upload(
-                        &s3, hbp[0], args[0], file_size, chunk_size, threads, &checksum,
+                        &s3, hbp[0], args[0], file_size, chunk_size, threads, &checksum, &home_dir,
                     )
                     .await
                     {
