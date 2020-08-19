@@ -4,7 +4,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use serde_cbor::{de::from_reader, to_vec};
-use sled::transaction::{TransactionError, Transactional};
+use sled::transaction::Transactional;
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::error;
@@ -72,24 +72,11 @@ pub async fn multipart_upload(
         .path(format!("{}/.s3m/streams/{}", home_dir, checksum))
         .open()?;
 
-    // check if the file has been uploaded
-    // TODO - key could be the same for different providers, maybe hashing the s3 credentials and
-    // use it as a key could be safe to prevent not uploading when file may not exist in the remote
-    // location
-    if let Ok(u) = db.get(format!("etag: {}", key).as_bytes()) {
-        if let Some(u) = u {
-            if let Ok(etag) = String::from_utf8(u.to_vec()) {
-                return Ok(etag.to_string());
-            }
-        }
-    };
-
-    // If uid found try to resume the upload
-    // TODO - check if still valid and if not refresh it
     let mut upload_id = String::new();
-    if let Ok(u) = db.get(key) {
+    if let Ok(u) = db.get("uid") {
         if let Some(u) = u {
             if let Ok(u) = String::from_utf8(u.to_vec()) {
+                println!("uid found...");
                 upload_id = u;
             }
         }
@@ -101,11 +88,11 @@ pub async fn multipart_upload(
         let response = action.request(s3).await?;
         upload_id = response.upload_id;
     }
-    db.insert(key, upload_id.as_bytes())?;
+    db.insert("uid", upload_id.as_bytes())?;
+    // keep track of uploads
+    db.open_tree(b"uploaded")?;
 
-    // trees for keeping track of parts to upload
     let db_parts = db.open_tree("parts")?;
-    let db_uploaded = db.open_tree(b"uploaded parts")?;
 
     let mut chunk = chunk_size;
     let mut seek: u64 = 0;
@@ -168,66 +155,35 @@ pub async fn multipart_upload(
         }
     }
 
-    if db_parts.len() != 0 {
-        todo!();
-    }
+    println!("parts: {}", db_parts.len());
 
-    let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
-    let mut uploads = db_uploaded.into_iter().values();
-    while let Some(part) = uploads.next() {
-        if let Ok(part) = part {
-            let p: Part = from_reader(&part[..])?;
-            uploaded.insert(
-                p.number,
-                actions::Part {
-                    etag: p.etag,
-                    number: p.number,
-                },
-            );
-        }
-    }
-
+    /*
     // Complete Multipart Upload
     let action = actions::CompleteMultipartUpload::new(&key, &upload_id, uploaded);
     let rs = action.request(&s3).await?;
-
-    // cleanup uploads tree and save the returned ETag
-    db_uploaded.clear()?;
-    db.insert(format!("etag: {}", &file).as_bytes(), rs.e_tag.as_bytes())?;
     Ok(format!("ETag: {}", rs.e_tag))
+    */
+    Ok(format!("ETag: {}", "sopas"))
 }
 
-async fn upload_part(
-    s3: &S3,
-    key: &str,
-    file: &str,
-    uid: &str,
+async fn a_test(
     db: &sled::Db,
-    mut part: Part,
-) -> Result<usize, Box<dyn error::Error>> {
-    let unprocessed = db.open_tree(b"parts")?;
-    let processed = db.open_tree(b"uploaded parts")?;
+) -> Result<(), Box<dyn error::Error>> {
+    let unprocessed = db.open_tree(b"tasks")?;
+    let processed = db.open_tree(b"done")?;
 
-    // do request to get the ETag and update the part
-    let pn = format!("{}", part.number);
-    let action = actions::UploadPart::new(&key, &file, &pn, &uid, part.seek, part.chunk);
-
-    // TODO implement retry
-    let etag = action.request(&s3).await?;
-
-    part.etag = etag;
+    let part = Part {1, "foo".to_string(), "bar".to_string()};
     let cbor_part = to_vec(&part)?;
-
-    // move part to uploaded
-    (&unprocessed, &processed)
+    let x = (&unprocessed, &processed)
         .transaction(|(unprocessed, processed)| {
             unprocessed.remove(pn.as_bytes())?;
             processed.insert(pn.as_bytes(), cbor_part.clone())?;
-            Ok(())
+            Ok(true)
         })
         .map_err(|err| match err {
-            TransactionError::Abort(err) => err,
-            TransactionError::Storage(err) => err,
+            sled::transaction::TransactionError::Abort(err) => err,
+            sled::transaction::TransactionError::Storage(err) => err,
         })?;
-    Ok(db.flush_async().await?)
+
+    Ok(())
 }

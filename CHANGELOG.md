@@ -1,5 +1,6 @@
 ## 0.3.0
-* Using [blake3](https://crates.io/crates/blake3), thanks @oconnor663
+* Using [blake3](https://crates.io/crates/blake3), for creating the file checksum, thanks @oconnor663
+* Using [sled](http://sled.rs/) to keep track of the uploaded  files.
 
 ## 0.2.0
 * Implemented lifetimes  🌱

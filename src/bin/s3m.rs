@@ -261,35 +261,42 @@ async fn main() {
             process::exit(1);
         }
 
+        // progress bar for the checksum
+        let pb = ProgressBar::new_spinner();
+        pb.enable_steady_tick(200);
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .tick_strings(&[
+                    "\u{2801}", "\u{2802}", "\u{2804}", "\u{2840}", "\u{2880}", "\u{2820}",
+                    "\u{2810}", "\u{2808}", "",
+                ])
+                .template("checksum: {msg}{spinner:.green}"),
+        );
+        let checksum = match tools::blake3(args[0]) {
+            Ok(c) => c,
+            Err(e) => {
+                pb.finish_and_clear();
+                eprintln!(
+                    "could not calculate the checksum for file: {}, {}",
+                    &args[0], e
+                );
+                process::exit(1);
+            }
+        };
+        pb.set_message(&checksum);
+        pb.finish();
+
+        // upload in multipart  or in one shot
         if file_size > chunk_size {
-            let pb = ProgressBar::new_spinner();
-            pb.enable_steady_tick(200);
-            pb.set_style(
-                ProgressStyle::default_spinner()
-                    .tick_chars("/|\\- ")
-                    .template("{spinner:.dim.bold} Calculating checksum"),
-            );
-            match tools::blake3(args[0]) {
-                Ok(checksum) => {
-                    pb.finish_and_clear();
-                    // &hbp[0] is the name of the file
-                    // &args[0] is the file_path
-                    match multipart_upload(
-                        &s3, hbp[0], args[0], file_size, chunk_size, threads, &checksum, &home_dir,
-                    )
-                    .await
-                    {
-                        Ok(o) => println!("{}", o),
-                        Err(e) => eprintln!("{}", e),
-                    }
-                }
-                Err(e) => {
-                    pb.finish_and_clear();
-                    eprintln!(
-                        "could not calculate the checksum for file: {}, {}",
-                        &args[0], e
-                    );
-                }
+            // &hbp[0] is the name of the file
+            // &args[0] is the file_path
+            match multipart_upload(
+                &s3, hbp[0], args[0], file_size, chunk_size, threads, &checksum, &home_dir,
+            )
+            .await
+            {
+                Ok(o) => println!("{}", o),
+                Err(e) => eprintln!("{}", e),
             }
         } else {
             match upload(&s3, hbp[0], args[0], file_size).await {

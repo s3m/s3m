@@ -39,8 +39,6 @@ impl<'a> Serialize for CompleteMultipartUpload<'a> {
 pub struct Part {
     pub etag: String,
     pub number: u16,
-    pub seek: u64,
-    pub chunk: u64,
 }
 
 impl Serialize for Part {
