@@ -286,12 +286,14 @@ async fn main() {
         pb.set_message(&checksum);
         pb.finish();
 
+        let path_key = hbp.join("/");
+
         // upload in multipart  or in one shot
         if file_size > chunk_size {
             // &hbp[0] is the name of the file
             // &args[0] is the file_path
             match multipart_upload(
-                &s3, hbp[0], args[0], file_size, chunk_size, threads, &checksum, &home_dir,
+                &s3, &path_key, args[0], file_size, chunk_size, threads, &checksum, &home_dir,
             )
             .await
             {
@@ -299,7 +301,7 @@ async fn main() {
                 Err(e) => eprintln!("{}", e),
             }
         } else {
-            match upload(&s3, hbp[0], args[0], file_size).await {
+            match upload(&s3, &path_key, args[0], file_size).await {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }

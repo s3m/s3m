@@ -7,6 +7,8 @@ pub mod signature;
 pub mod tools;
 pub use self::{credentials::Credentials, region::Region, signature::Signature};
 
+use crate::s3::tools::sha256_digest_string;
+
 #[derive(Debug, Clone)]
 pub struct S3 {
     // AWS Credentials
@@ -27,5 +29,18 @@ impl S3 {
             region: region.clone(),
             bucket,
         }
+    }
+
+    // use it to identify the connection and keep track of the uploaded files so that the same file
+    // could be uploaded into multiple provider/buckets
+    pub fn hash(&self) -> String {
+        let mut hash = String::new();
+        hash.push_str(self.credentials.aws_access_key_id());
+        hash.push_str(self.credentials.aws_secret_access_key());
+        hash.push_str(self.region.endpoint());
+        if let Some(bucket) = &self.bucket {
+            hash.push_str(&bucket);
+        }
+        sha256_digest_string(&hash)
     }
 }

@@ -66,6 +66,9 @@ pub async fn multipart_upload(
     checksum: &str,
     home_dir: &str,
 ) -> Result<String, Box<dyn error::Error>> {
+    // unique key using s3 hash and file path
+    let db_key = format!("{} {}", &s3.hash()[0..8], key);
+
     // try to upload/retry broken uploads besides keeping track of uploaded files (prevent
     // uploading again)
     let db = sled::Config::new()
@@ -73,13 +76,10 @@ pub async fn multipart_upload(
         .open()?;
 
     // check if the file has been uploaded
-    // TODO - key could be the same for different providers, maybe hashing the s3 credentials and
-    // use it as a key could be safe to prevent not uploading when file may not exist in the remote
-    // location
-    if let Ok(u) = db.get(format!("etag: {}", key).as_bytes()) {
+    if let Ok(u) = db.get(format!("etag {}", db_key).as_bytes()) {
         if let Some(u) = u {
             if let Ok(etag) = String::from_utf8(u.to_vec()) {
-                return Ok(etag.to_string());
+                return Ok(format!("ETag: {}", etag.to_string()));
             }
         }
     };
@@ -87,7 +87,7 @@ pub async fn multipart_upload(
     // If uid found try to resume the upload
     // TODO - check if still valid and if not refresh it
     let mut upload_id = String::new();
-    if let Ok(u) = db.get(key) {
+    if let Ok(u) = db.get(&db_key) {
         if let Some(u) = u {
             if let Ok(u) = String::from_utf8(u.to_vec()) {
                 upload_id = u;
@@ -95,37 +95,44 @@ pub async fn multipart_upload(
         }
     };
 
+    // trees for keeping track of parts to upload
+    let db_parts = db.open_tree("parts")?;
+    let db_uploaded = db.open_tree(b"uploaded parts")?;
+
     if upload_id.is_empty() {
         // Initiate Multipart Upload - request an Upload ID
         let action = actions::CreateMultipartUpload::new(&key);
         let response = action.request(s3).await?;
         upload_id = response.upload_id;
+        db_parts.clear()?;
     }
-    db.insert(key, upload_id.as_bytes())?;
 
-    // trees for keeping track of parts to upload
-    let db_parts = db.open_tree("parts")?;
-    let db_uploaded = db.open_tree(b"uploaded parts")?;
+    // save the upload_id to resume if required
+    db.insert(&db_key.as_bytes(), upload_id.as_bytes())?;
 
-    let mut chunk = chunk_size;
-    let mut seek: u64 = 0;
-    let mut number: u16 = 1;
-    while seek < file_size {
-        if (file_size - seek) <= chunk {
-            chunk = file_size % chunk;
+    // if db_parts is not empty it means that a previous upload did not finish successfully.
+    // skip creating the parts again and try to re-upload the pending ones
+    if db_parts.len() == 0 {
+        let mut chunk = chunk_size;
+        let mut seek: u64 = 0;
+        let mut number: u16 = 1;
+        while seek < file_size {
+            if (file_size - seek) <= chunk {
+                chunk = file_size % chunk;
+            }
+            let part = Part {
+                number,
+                seek,
+                chunk,
+                ..Default::default()
+            };
+            let cbor_part = to_vec(&part)?;
+            db_parts.insert(format!("{}", number), cbor_part)?;
+            seek += chunk;
+            number += 1;
         }
-        let part = Part {
-            number,
-            seek,
-            chunk,
-            ..Default::default()
-        };
-        let cbor_part = to_vec(&part)?;
-        db_parts.insert(format!("{}", number), cbor_part)?;
-        seek += chunk;
-        number += 1;
+        db_parts.flush()?;
     }
-    db_parts.flush()?;
 
     // Upload parts progress bar
     let pb = ProgressBar::new(db_parts.len() as u64);
@@ -169,7 +176,7 @@ pub async fn multipart_upload(
     }
 
     if db_parts.len() != 0 {
-        todo!();
+        return Err("could not upload all parts".into());
     }
 
     let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
@@ -193,7 +200,7 @@ pub async fn multipart_upload(
 
     // cleanup uploads tree and save the returned ETag
     db_uploaded.clear()?;
-    db.insert(format!("etag: {}", &file).as_bytes(), rs.e_tag.as_bytes())?;
+    db.insert(format!("etag {}", db_key).as_bytes(), rs.e_tag.as_bytes())?;
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
