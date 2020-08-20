@@ -144,8 +144,7 @@ pub async fn multipart_upload(
 
     let mut tasks = FuturesUnordered::new();
 
-    let mut parts = db_parts.iter().values();
-    while let Some(part) = parts.next() {
+    while let Some(part) = db_parts.iter().values().next() {
         if let Ok(p) = part {
             let part: Part = from_reader(&p[..])?;
             tasks.push(async { upload_part(&s3, &key, &file, &upload_id, &db, part).await });
