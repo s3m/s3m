@@ -179,42 +179,23 @@ pub async fn multipart_upload(
         return Err("could not upload all parts".into());
     }
 
-    /*
-    let mut uploaded: BTreeMap<u16, actions::Part> = BTreeMap::new();
-    let mut uploads = db_uploaded.into_iter().values();
-    while let Some(part) = uploads.next() {
-    if let Ok(part) = part {
-    let p: Part = from_reader(&part[..])?;
-    uploaded.insert(
-    p.number,
-    actions::Part {
-    etag: p.etag,
-    number: p.number,
-    },
-    );
-    }
-    }
-    */
-
     let uploaded = db_uploaded
         .into_iter()
         .values()
-        .map(|part| {
+        .flat_map(|part| {
             part.map(|part| {
-                let p: Part = from_reader(&part[..]).unwrap();
-                //
-                //    from_reader(&part[..])
-                //       .map(|p: Part| {
-                (
-                    p.number,
-                    actions::Part {
-                        etag: p.etag,
-                        number: p.number,
-                    },
-                )
-                //.map_err(|e| e.into())
+                from_reader(&part[..])
+                    .map(|p: Part| {
+                        (
+                            p.number,
+                            actions::Part {
+                                etag: p.etag,
+                                number: p.number,
+                            },
+                        )
+                    })
+                    .map_err(|e| e.into())
             })
-            .map_err(|e| e.into())
         })
         .collect::<Result<BTreeMap<u16, actions::Part>, Box<dyn error::Error>>>()?;
 
