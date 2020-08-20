@@ -79,7 +79,7 @@ pub async fn multipart_upload(
     if let Ok(u) = db.get(format!("etag {}", db_key).as_bytes()) {
         if let Some(u) = u {
             if let Ok(etag) = String::from_utf8(u.to_vec()) {
-                return Ok(format!("ETag: {}", etag.to_string()));
+                return Ok(format!("ETag: {}", etag));
             }
         }
     };
@@ -112,7 +112,7 @@ pub async fn multipart_upload(
 
     // if db_parts is not empty it means that a previous upload did not finish successfully.
     // skip creating the parts again and try to re-upload the pending ones
-    if db_parts.len() == 0 {
+    if db_parts.is_empty() {
         let mut chunk = chunk_size;
         let mut seek: u64 = 0;
         let mut number: u16 = 1;
@@ -151,7 +151,7 @@ pub async fn multipart_upload(
             // limit to N threads
             if tasks.len() == threads {
                 while let Some(r) = tasks.next().await {
-                    if let Ok(_) = r {
+                    if r.is_ok() {
                         pb.inc(1)
                     }
                 }
@@ -163,7 +163,7 @@ pub async fn multipart_upload(
     loop {
         match tasks.next().await {
             Some(r) => {
-                if let Ok(_) = r {
+                if r.is_ok() {
                     pb.inc(1)
                 }
             }
@@ -174,7 +174,7 @@ pub async fn multipart_upload(
         }
     }
 
-    if db_parts.len() != 0 {
+    if !db_parts.is_empty() {
         return Err("could not upload all parts".into());
     }
 
