@@ -1,7 +1,7 @@
 use clap::{App, AppSettings, Arg, SubCommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools, Credentials, Region, S3};
-use s3m::s3m::{multipart_upload, upload, Config};
+use s3m::s3m::{multipart_upload, upload, Config, Stream};
 use std::env;
 use std::fs::{create_dir_all, metadata, File};
 use std::process;
@@ -286,22 +286,42 @@ async fn main() {
         pb.set_message(&checksum);
         pb.finish();
 
-        let path_key = hbp.join("/");
+        let key_path = hbp.join("/");
 
-        // upload in multipart  or in one shot
+        let db = match Stream::new(&s3, &key_path, &checksum, &home_dir) {
+            Ok(db) => db.clone(),
+            Err(e) => {
+                eprintln!("could not create stream tree, {}", e);
+                process::exit(1);
+            }
+        };
+
+        // check if file has been uploded already
+        match &db.check() {
+            Ok(s) => match s {
+                Some(etag) => {
+                    return println!("{}", etag);
+                }
+                _ => {}
+            },
+            Err(e) => {
+                eprintln!("could not query stream tree: {}", e);
+                process::exit(1);
+            }
+        }
+
+        // upload in multipart or in one shot
         if file_size > chunk_size {
             // &hbp[0] is the name of the file
             // &args[0] is the file_path
-            match multipart_upload(
-                &s3, &path_key, args[0], file_size, chunk_size, threads, &checksum, &home_dir,
-            )
-            .await
+            match multipart_upload(&s3, &key_path, args[0], file_size, chunk_size, threads, &db)
+                .await
             {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }
         } else {
-            match upload(&s3, &path_key, args[0], file_size).await {
+            match upload(&s3, &key_path, args[0], file_size).await {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }

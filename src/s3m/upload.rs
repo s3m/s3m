@@ -1,5 +1,5 @@
-use crate::s3::actions;
-use crate::s3::S3;
+use crate::s3::{actions, S3};
+use crate::s3m::{Stream, DB_PARTS, DB_UPLOADED};
 use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
@@ -63,41 +63,20 @@ pub async fn multipart_upload(
     file_size: u64,
     chunk_size: u64,
     threads: usize,
-    checksum: &str,
-    home_dir: &str,
+    sdb: &Stream,
 ) -> Result<String, Box<dyn error::Error>> {
-    // unique key using s3 hash and file path
-    let db_key = format!("{} {}", &s3.hash()[0..8], key);
-
-    // try to upload/retry broken uploads besides keeping track of uploaded files (prevent
-    // uploading again)
-    let db = sled::Config::new()
-        .path(format!("{}/.s3m/streams/{}", home_dir, checksum))
-        .open()?;
-
-    // check if the file has been uploaded
-    if let Ok(u) = db.get(format!("etag {}", db_key).as_bytes()) {
-        if let Some(u) = u {
-            if let Ok(etag) = String::from_utf8(u.to_vec()) {
-                return Ok(format!("ETag: {}", etag));
-            }
-        }
-    };
-
     // If uid found try to resume the upload
     // TODO - check if still valid and if not refresh it
     let mut upload_id = String::new();
-    if let Ok(u) = db.get(&db_key) {
-        if let Some(u) = u {
-            if let Ok(u) = String::from_utf8(u.to_vec()) {
-                upload_id = u;
-            }
-        }
-    };
+
+    let uid = sdb.upload_id()?;
+    if let Some(u) = uid {
+        upload_id = u.to_string();
+    }
 
     // trees for keeping track of parts to upload
-    let db_parts = db.open_tree("parts")?;
-    let db_uploaded = db.open_tree(b"uploaded parts")?;
+    let db_parts = sdb.db_parts()?;
+    let db_uploaded = sdb.db_uploaded()?;
 
     if upload_id.is_empty() {
         // Initiate Multipart Upload - request an Upload ID
@@ -108,7 +87,7 @@ pub async fn multipart_upload(
     }
 
     // save the upload_id to resume if required
-    db.insert(&db_key.as_bytes(), upload_id.as_bytes())?;
+    sdb.save_upload_id(&upload_id)?;
 
     // if db_parts is not empty it means that a previous upload did not finish successfully.
     // skip creating the parts again and try to re-upload the pending ones
@@ -147,7 +126,7 @@ pub async fn multipart_upload(
     while let Some(part) = db_parts.iter().values().next() {
         if let Ok(p) = part {
             let part: Part = from_reader(&p[..])?;
-            tasks.push(async { upload_part(&s3, &key, &file, &upload_id, &db, part).await });
+            tasks.push(async { upload_part(&s3, &key, &file, &upload_id, sdb.db(), part).await });
             // limit to N threads
             if tasks.len() == threads {
                 while let Some(r) = tasks.next().await {
@@ -204,7 +183,7 @@ pub async fn multipart_upload(
 
     // cleanup uploads tree and save the returned ETag
     db_uploaded.clear()?;
-    db.insert(format!("etag {}", db_key).as_bytes(), rs.e_tag.as_bytes())?;
+    sdb.save_etag(&rs.e_tag)?;
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
@@ -216,8 +195,8 @@ async fn upload_part(
     db: &sled::Db,
     mut part: Part,
 ) -> Result<usize, Box<dyn error::Error>> {
-    let unprocessed = db.open_tree(b"parts")?;
-    let processed = db.open_tree(b"uploaded parts")?;
+    let unprocessed = db.open_tree(DB_PARTS)?;
+    let processed = db.open_tree(DB_UPLOADED)?;
 
     // do request to get the ETag and update the part
     let pn = format!("{}", part.number);
