@@ -3,7 +3,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools, Credentials, Region, S3};
 use s3m::s3m::{multipart_upload, upload, Config, Stream};
 use std::env;
-use std::fs::{create_dir_all, metadata, File};
+use std::fs::{create_dir_all, metadata, remove_dir_all, File};
 use std::process;
 
 const MAX_PARTS_PER_UPLOAD: u64 = 10_000;
@@ -73,6 +73,7 @@ async fn main() {
     let matches = App::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
         .setting(AppSettings::SubcommandsNegateReqs)
+        .after_help(format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/.s3m/streams] use the option (-r) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", home_dir).as_ref())
         .arg(
             Arg::with_name("buffer")
                 .help("Part size in bytes, max value: 5 GB (5,368,709,120 bytes)")
@@ -92,12 +93,10 @@ async fn main() {
                 .validator(is_num),
         )
         .arg(
-            Arg::with_name("multipart")
-                .short("m")
-                .long("multipart")
-                .help(
-                    "Multipart upload, used when reading from stdin or file > part size (--buffer)",
-                ),
+            Arg::with_name("remove")
+                .short("r")
+                .long("remove")
+                .help(&format!("remove {}/.s3m/streams directory", home_dir)),
         )
         .arg(
             Arg::with_name("config")
@@ -112,7 +111,7 @@ async fn main() {
         .arg(
             Arg::with_name("arguments")
                 .help("/path/to/file <host>/bucket/<file>")
-                .required_unless("ls")
+                .required_unless_one(&["ls", "remove"])
                 .min_values(2),
         )
         .subcommand(
@@ -135,6 +134,14 @@ async fn main() {
         }
         Ok(yml) => yml,
     };
+
+    if matches.is_present("remove") {
+        let streams = format!("{}/.s3m/streams", home_dir);
+        if let Err(e) = remove_dir_all(&streams) {
+            eprintln!("could no delete streams {}: {}", streams, e);
+        }
+        return;
+    }
 
     let buffer = matches.value_of("buffer").unwrap();
     let threads = matches
@@ -289,7 +296,7 @@ async fn main() {
         let key_path = hbp.join("/");
 
         let db = match Stream::new(&s3, &key_path, &checksum, &home_dir) {
-            Ok(db) => db.clone(),
+            Ok(db) => db,
             Err(e) => {
                 eprintln!("could not create stream tree, {}", e);
                 process::exit(1);
@@ -298,12 +305,11 @@ async fn main() {
 
         // check if file has been uploded already
         match &db.check() {
-            Ok(s) => match s {
-                Some(etag) => {
+            Ok(s) => {
+                if let Some(etag) = s {
                     return println!("{}", etag);
                 }
-                _ => {}
-            },
+            }
             Err(e) => {
                 eprintln!("could not query stream tree: {}", e);
                 process::exit(1);

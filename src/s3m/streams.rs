@@ -16,7 +16,7 @@ impl Stream {
         let db = sled::Config::new()
             .path(format!("{}/.s3m/streams/{}", path, checksum))
             .open()?;
-        Ok(Self { key: key, db: db })
+        Ok(Self { key, db })
     }
 
     pub fn db(&self) -> &sled::Db {
@@ -57,5 +57,9 @@ impl Stream {
         Ok(self
             .db
             .insert(format!("etag {}", &self.key).as_bytes(), etag)?)
+    }
+
+    pub async fn flush_async(&self) -> Result<usize> {
+        Ok(self.db.flush_async().await?)
     }
 }

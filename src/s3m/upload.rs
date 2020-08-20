@@ -1,5 +1,5 @@
 use crate::s3::{actions, S3};
-use crate::s3m::{Stream, DB_PARTS, DB_UPLOADED};
+use crate::s3m::Stream;
 use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
@@ -65,13 +65,10 @@ pub async fn multipart_upload(
     threads: usize,
     sdb: &Stream,
 ) -> Result<String, Box<dyn error::Error>> {
-    // If uid found try to resume the upload
-    // TODO - check if still valid and if not refresh it
     let mut upload_id = String::new();
 
-    let uid = sdb.upload_id()?;
-    if let Some(u) = uid {
-        upload_id = u.to_string();
+    if let Some(u) = sdb.upload_id()? {
+        upload_id = u;
     }
 
     // trees for keeping track of parts to upload
@@ -126,7 +123,7 @@ pub async fn multipart_upload(
     while let Some(part) = db_parts.iter().values().next() {
         if let Ok(p) = part {
             let part: Part = from_reader(&p[..])?;
-            tasks.push(async { upload_part(&s3, &key, &file, &upload_id, sdb.db(), part).await });
+            tasks.push(async { upload_part(&s3, &key, &file, &upload_id, &sdb, part).await });
             // limit to N threads
             if tasks.len() == threads {
                 while let Some(r) = tasks.next().await {
@@ -181,9 +178,12 @@ pub async fn multipart_upload(
     let action = actions::CompleteMultipartUpload::new(&key, &upload_id, uploaded);
     let rs = action.request(&s3).await?;
 
-    // cleanup uploads tree and save the returned ETag
+    // cleanup uploads tree
     db_uploaded.clear()?;
+
+    // save the returned Etag
     sdb.save_etag(&rs.e_tag)?;
+
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
@@ -192,11 +192,11 @@ async fn upload_part(
     key: &str,
     file: &str,
     uid: &str,
-    db: &sled::Db,
+    db: &Stream,
     mut part: Part,
 ) -> Result<usize, Box<dyn error::Error>> {
-    let unprocessed = db.open_tree(DB_PARTS)?;
-    let processed = db.open_tree(DB_UPLOADED)?;
+    let unprocessed = db.db_parts()?;
+    let processed = db.db_uploaded()?;
 
     // do request to get the ETag and update the part
     let pn = format!("{}", part.number);
