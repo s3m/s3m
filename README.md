@@ -4,7 +4,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/s3m.svg)](https://crates.io/crates/s3m)
 [![Build Status](https://travis-ci.org/s3m/s3m.svg?branch=master)](https://travis-ci.org/s3m/s3m)
-[![Build Status - develop](https://github.com/s3m/s3m/workflows/Continuous%20integration/badge.svg?branch=develop)](https://github.com/s3m/s3m/actions)
+[![Build Status - develop](https://github.com/s3m/s3m/workflows/build/badge.svg?branch=develop)](https://github.com/s3m/s3m/actions)
 
 
 ## Problem trying to solve
