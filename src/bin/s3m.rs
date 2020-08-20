@@ -75,6 +75,12 @@ async fn main() {
         .setting(AppSettings::SubcommandsNegateReqs)
         .after_help(format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/.s3m/streams] use the option (-r) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", home_dir).as_ref())
         .arg(
+            Arg::with_name("remove")
+                .short("r")
+                .long("remove")
+                .help(&format!("remove {}/.s3m/streams directory", home_dir)),
+        )
+        .arg(
             Arg::with_name("buffer")
                 .help("Part size in bytes, max value: 5 GB (5,368,709,120 bytes)")
                 .long("buffer")
@@ -91,12 +97,6 @@ async fn main() {
                 .short("t")
                 .required(true)
                 .validator(is_num),
-        )
-        .arg(
-            Arg::with_name("remove")
-                .short("r")
-                .long("remove")
-                .help(&format!("remove {}/.s3m/streams directory", home_dir)),
         )
         .arg(
             Arg::with_name("config")
@@ -138,7 +138,7 @@ async fn main() {
     if matches.is_present("remove") {
         let streams = format!("{}/.s3m/streams", home_dir);
         if let Err(e) = remove_dir_all(&streams) {
-            eprintln!("could no delete streams {}: {}", streams, e);
+            eprintln!("{}: {}", streams, e);
         }
         return;
     }
