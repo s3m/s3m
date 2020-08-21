@@ -6,6 +6,19 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
 
+fn progress_bar_parts(parts: u64) -> ProgressBar {
+    let pb = ProgressBar::new(parts);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:50.green/blue} {pos}/{len} ({eta})")
+            // "█▉▊▋▌▍▎▏  ·"
+            .progress_chars(
+                "\u{2588}\u{2589}\u{258a}\u{258b}\u{258c}\u{258d}\u{258e}\u{258f}  \u{b7}",
+            ),
+    );
+    pb
+}
+
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
 // * Upload Part
@@ -58,15 +71,7 @@ pub async fn multipart_upload(
     }
 
     // Upload parts progress bar
-    let pb = ProgressBar::new(db_parts.len() as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:50.green/blue} {pos}/{len} ({eta})")
-            // "█▉▊▋▌▍▎▏  ·"
-            .progress_chars(
-                "\u{2588}\u{2589}\u{258a}\u{258b}\u{258c}\u{258d}\u{258e}\u{258f}  \u{b7}",
-            ),
-    );
+    let pb = progress_bar_parts(db_parts.len() as u64);
 
     let mut tasks = FuturesUnordered::new();
 
