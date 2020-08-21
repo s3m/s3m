@@ -11,6 +11,9 @@ pub struct Stream {
 }
 
 impl Stream {
+    /// # Errors
+    ///
+    /// Will return `Err` if can not create the db
     pub fn new(s3: &S3, key: &str, checksum: &str, path: &str) -> Result<Self> {
         let key = format!("{} {}", &s3.hash()[0..8], key);
         let db = sled::Config::new()
@@ -24,6 +27,9 @@ impl Stream {
         &self.db
     }
 
+    /// # Errors
+    ///
+    /// Will return `Err` if can not query the db
     pub fn check(&self) -> Result<Option<String>> {
         let etag = &self
             .db
@@ -33,6 +39,9 @@ impl Stream {
         Ok(etag.to_owned())
     }
 
+    /// # Errors
+    ///
+    /// Will return `Err` if can not query the db
     pub fn upload_id(&self) -> Result<Option<String>> {
         let uid = &self
             .db
@@ -42,24 +51,39 @@ impl Stream {
         Ok(uid.to_owned())
     }
 
+    /// # Errors
+    ///
+    /// Will return `Err` if can not open the tree
     pub fn db_parts(&self) -> Result<sled::Tree> {
         Ok(self.db.open_tree(DB_PARTS)?)
     }
 
+    /// # Errors
+    ///
+    /// Will return `Err` if can not open the tree
     pub fn db_uploaded(&self) -> Result<sled::Tree> {
         Ok(self.db.open_tree(DB_UPLOADED)?)
     }
 
+    /// # Errors
+    ///
+    /// Will return `Err` if can not insert the `upload_id`
     pub fn save_upload_id(&self, uid: &str) -> Result<Option<sled::IVec>> {
         Ok(self.db.insert(&self.key, uid)?)
     }
 
+    /// # Errors
+    ///
+    /// Will return `Err` if can not insert the itag
     pub fn save_etag(&self, etag: &str) -> Result<Option<sled::IVec>> {
         Ok(self
             .db
             .insert(format!("etag {}", &self.key).as_bytes(), etag)?)
     }
 
+    /// # Errors
+    ///
+    /// Will return `Err` if can not `flush_async`
     pub async fn flush_async(&self) -> Result<usize> {
         Ok(self.db.flush_async().await?)
     }

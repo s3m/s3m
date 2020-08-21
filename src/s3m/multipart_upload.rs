@@ -79,7 +79,10 @@ pub async fn multipart_upload(
     pb.set_style(
         ProgressStyle::default_bar()
             .template("[{elapsed_precise}] {bar:50.green/blue} {pos}/{len} ({eta})")
-            .progress_chars("█▉▊▋▌▍▎▏  ·"),
+            // "█▉▊▋▌▍▎▏  ·"
+            .progress_chars(
+                "\u{2588}\u{2589}\u{258a}\u{258b}\u{258c}\u{258d}\u{258e}\u{258f}  \u{b7}",
+            ),
     );
 
     let mut tasks = FuturesUnordered::new();
