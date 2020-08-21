@@ -3,11 +3,11 @@
 
 use crate::s3::tools::{sha256_digest_string, sha256_hmac, write_hex_bytes};
 use crate::s3::S3;
+use anyhow::Result;
 use chrono::prelude::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use ring::hmac;
 use std::collections::BTreeMap;
-use std::error;
 use std::str;
 use url::Url;
 
@@ -33,7 +33,7 @@ impl<'a> Signature<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can't parse the url
-    pub fn new(s3: &'a S3, method: &'static str, url: &Url) -> Result<Self, Box<dyn error::Error>> {
+    pub fn new(s3: &'a S3, method: &'static str, url: &Url) -> Result<Self> {
         Ok(Self {
             auth: s3,
             http_method: method,

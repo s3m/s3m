@@ -1,12 +1,12 @@
 use crate::s3::{actions, S3};
 use crate::s3m::Stream;
+use anyhow::{anyhow, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
 use std::collections::BTreeMap;
-use std::error;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Part {
@@ -28,7 +28,7 @@ pub async fn multipart_upload(
     chunk_size: u64,
     threads: usize,
     sdb: &Stream,
-) -> Result<String, Box<dyn error::Error>> {
+) -> Result<String> {
     let mut upload_id = String::new();
 
     if let Some(u) = sdb.upload_id()? {
@@ -92,6 +92,7 @@ pub async fn multipart_upload(
         if let Ok(p) = bin_part {
             let part: Part = from_reader(&p[..])?;
             tasks.push(async { upload_part(s3, key, file, &upload_id, sdb, part).await });
+
             // limit to N threads
             if tasks.len() == threads {
                 while let Some(r) = tasks.next().await {
@@ -116,7 +117,7 @@ pub async fn multipart_upload(
     }
 
     if !db_parts.is_empty() {
-        return Err("could not upload all parts".into());
+        return Err(anyhow!("could not upload all parts"));
     }
 
     let uploaded = db_uploaded
@@ -137,7 +138,7 @@ pub async fn multipart_upload(
                     .map_err(|e| e.into())
             })
         })
-        .collect::<Result<BTreeMap<u16, actions::Part>, Box<dyn error::Error>>>()?;
+        .collect::<Result<BTreeMap<u16, actions::Part>>>()?;
 
     // Complete Multipart Upload
     let action = actions::CompleteMultipartUpload::new(key, &upload_id, uploaded);
@@ -159,7 +160,7 @@ async fn upload_part(
     uid: &str,
     db: &Stream,
     mut part: Part,
-) -> Result<usize, Box<dyn error::Error>> {
+) -> Result<usize> {
     let unprocessed = db.db_parts()?;
     let processed = db.db_uploaded()?;
 

@@ -8,10 +8,10 @@ use crate::s3::request;
 use crate::s3::responses::CompleteMultipartUploadResult;
 use crate::s3::tools;
 use crate::s3::S3;
+use anyhow::{anyhow, Result};
 use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
 use serde_xml_rs::{from_str, to_string};
 use std::collections::BTreeMap;
-use std::error;
 
 #[derive(Debug, Default, Clone)]
 pub struct CompleteMultipartUpload<'a> {
@@ -67,10 +67,7 @@ impl<'a> CompleteMultipartUpload<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(
-        &self,
-        s3: &S3,
-    ) -> Result<CompleteMultipartUploadResult, Box<dyn error::Error>> {
+    pub async fn request(&self, s3: &S3) -> Result<CompleteMultipartUploadResult> {
         let parts = CompleteMultipartUpload {
             parts: self.parts.clone(),
             ..Default::default()
@@ -84,7 +81,7 @@ impl<'a> CompleteMultipartUpload<'a> {
             let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;
             Ok(rs)
         } else {
-            Err(response_error(response).await?.into())
+            Err(anyhow!(response_error(response).await?))
         }
     }
 }

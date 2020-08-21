@@ -4,12 +4,12 @@
 // https://stackoverflow.com/a/63374116/1135424
 // use futures::future::Either;
 // use futures::stream::TryStreamExt;
+use anyhow::Result;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Method, Response,
 };
 use std::collections::BTreeMap;
-use std::error;
 use std::io::SeekFrom;
 use tokio::fs::File;
 use tokio::prelude::*;
@@ -27,12 +27,12 @@ pub async fn request(
     headers: &BTreeMap<String, String>,
     file: Option<String>,
     sender: Option<UnboundedSender<usize>>,
-) -> Result<Response, Box<dyn error::Error>> {
+) -> Result<Response> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
         .iter()
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
-        .collect::<Result<HeaderMap, Box<dyn error::Error>>>()?;
+        .collect::<Result<HeaderMap>>()?;
 
     let client = Client::new();
 
@@ -73,12 +73,12 @@ pub async fn multipart(
     file: String,
     seek: u64,
     chunk: u64,
-) -> Result<Response, Box<dyn error::Error>> {
+) -> Result<Response> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
         .iter()
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
-        .collect::<Result<HeaderMap, Box<dyn error::Error>>>()?;
+        .collect::<Result<HeaderMap>>()?;
 
     let client = Client::new();
 
@@ -100,12 +100,12 @@ pub async fn body(
     method: &'static str,
     headers: &BTreeMap<String, String>,
     body: String,
-) -> Result<Response, Box<dyn error::Error>> {
+) -> Result<Response> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
         .iter()
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
-        .collect::<Result<HeaderMap, Box<dyn error::Error>>>()?;
+        .collect::<Result<HeaderMap>>()?;
 
     let client = Client::new();
     let request = client.request(method, url).headers(headers).body(body);

@@ -2,8 +2,8 @@ use crate::s3::actions::{response_error, Action};
 use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
+use anyhow::{anyhow, Result};
 use std::collections::BTreeMap;
-use std::error;
 
 #[derive(Debug, Default, Clone)]
 pub struct UploadPart<'a> {
@@ -46,7 +46,7 @@ impl<'a> UploadPart<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(&self, s3: &S3) -> Result<String, Box<dyn error::Error>> {
+    pub async fn request(&self, s3: &S3) -> Result<String> {
         let (sha256, md5, length) =
             tools::sha256_md5_multipart(self.file, self.seek, self.chunk).await?;
         let (url, headers) = &self.sign(s3, &sha256, Some(&md5), Some(length))?;
@@ -62,10 +62,10 @@ impl<'a> UploadPart<'a> {
         if response.status().is_success() {
             match response.headers().get("ETag") {
                 Some(etag) => Ok(etag.to_str()?.to_string()),
-                _ => Err("missing ETag".into()),
+                _ => Err(anyhow!("missing ETag")),
             }
         } else {
-            Err(response_error(response).await?.into())
+            Err(anyhow!(response_error(response).await?))
         }
     }
 }

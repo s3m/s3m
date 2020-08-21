@@ -1,10 +1,10 @@
+use anyhow::Result;
 use futures::stream::TryStreamExt;
 use ring::{
     digest,
     digest::{Context, SHA256},
     hmac,
 };
-use std::error::Error;
 use std::fmt::Write;
 use std::io::prelude::*;
 use std::io::BufReader;
@@ -16,7 +16,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 /// # Errors
 ///
 /// Will return `Err` if can not open the file
-pub async fn sha256_md5_digest(file_path: &str) -> Result<(String, String, usize), Box<dyn Error>> {
+pub async fn sha256_md5_digest(file_path: &str) -> Result<(String, String, usize)> {
     let file = File::open(file_path).await?;
     let mut stream = FramedRead::new(file, BytesCodec::new());
     let mut context_sha = Context::new(&SHA256);
@@ -43,7 +43,7 @@ pub async fn sha256_md5_multipart(
     file_path: &str,
     seek: u64,
     chunk: u64,
-) -> Result<(String, String, usize), Box<dyn Error>> {
+) -> Result<(String, String, usize)> {
     let mut file = File::open(file_path).await?;
     file.seek(SeekFrom::Start(seek)).await?;
     let file = file.take(chunk);
@@ -88,7 +88,7 @@ pub fn write_hex_bytes(bytes: &[u8]) -> String {
 /// # Errors
 ///
 /// Will return `Err` if can not open the file
-pub fn blake3(file_path: &str) -> Result<String, Box<dyn Error>> {
+pub fn blake3(file_path: &str) -> Result<String> {
     let file = std::fs::File::open(file_path)?;
     let mut reader = BufReader::new(file);
     let mut hasher = blake3::Hasher::new();

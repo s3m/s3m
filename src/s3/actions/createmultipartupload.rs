@@ -7,9 +7,9 @@ use crate::s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256};
 use crate::s3::request;
 use crate::s3::responses::InitiateMultipartUploadResult;
 use crate::s3::S3;
+use anyhow::{anyhow, Result};
 use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
-use std::error;
 
 #[derive(Debug, Default)]
 pub struct CreateMultipartUpload<'a> {
@@ -53,10 +53,7 @@ impl<'a> CreateMultipartUpload<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(
-        &self,
-        s3: &S3,
-    ) -> Result<InitiateMultipartUploadResult, Box<dyn error::Error>> {
+    pub async fn request(&self, s3: &S3) -> Result<InitiateMultipartUploadResult> {
         let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None, None)?;
         let response = request::request(url.clone(), self.http_verb(), headers, None, None).await?;
 
@@ -64,7 +61,7 @@ impl<'a> CreateMultipartUpload<'a> {
             let upload_req: InitiateMultipartUploadResult = from_str(&response.text().await?)?;
             Ok(upload_req)
         } else {
-            Err(response_error(response).await?.into())
+            Err(anyhow!(response_error(response).await?))
         }
     }
 }

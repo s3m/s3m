@@ -2,9 +2,8 @@ use crate::s3::actions::{response_error, Action};
 use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
-// use serde_xml_rs::from_str;
+use anyhow::{anyhow, Result};
 use std::collections::BTreeMap;
-use std::error;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Default)]
@@ -54,7 +53,7 @@ impl<'a> PutObject<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(self, s3: &S3) -> Result<String, Box<dyn error::Error>> {
+    pub async fn request(self, s3: &S3) -> Result<String> {
         let (sha, md5, length) = tools::sha256_md5_digest(self.file).await?;
         let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
         let response = request::request(
@@ -87,7 +86,7 @@ impl<'a> PutObject<'a> {
                 .map(|(k, v)| format!("{}: {}\n", k, v))
                 .collect::<String>())
         } else {
-            Err(response_error(response).await?.into())
+            Err(anyhow!(response_error(response).await?))
         }
     }
 }

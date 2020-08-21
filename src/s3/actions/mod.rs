@@ -4,10 +4,10 @@
 use crate::s3::responses::ErrorResponse;
 use crate::s3::signature::Signature;
 use crate::s3::S3;
+use anyhow::{anyhow, Result};
 use reqwest::Response;
 use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
-use std::error;
 use url::Url;
 
 const EMPTY_PAYLOAD_SHA256: &str =
@@ -59,7 +59,7 @@ pub trait Action {
         hash_payload: &str,
         md5: Option<&str>,
         content_length: Option<usize>,
-    ) -> Result<(Url, BTreeMap<String, String>), Box<dyn error::Error>> {
+    ) -> Result<(Url, BTreeMap<String, String>)> {
         let mut url = match &s3.bucket {
             Some(bucket) => Url::parse(&format!("https://{}/{}", s3.region.endpoint(), bucket))?,
             None => Url::parse(&format!("https://{}", s3.region.endpoint()))?,
@@ -69,7 +69,7 @@ pub trait Action {
         if let Some(path) = self.path() {
             for p in path {
                 url.path_segments_mut()
-                    .map_err(|_| "cannot be base")?
+                    .map_err(|e| anyhow!("cannot be base: {:#?}", e))?
                     .push(p);
             }
         }
@@ -94,7 +94,7 @@ pub trait Action {
     }
 }
 
-pub async fn response_error(response: Response) -> Result<String, Box<dyn error::Error>> {
+pub async fn response_error(response: Response) -> Result<String> {
     let mut error: BTreeMap<&str, String> = BTreeMap::new();
     error.insert("HTTP Status Code", response.status().to_string());
     if let Some(x_amz_id_2) = response.headers().get("x-amz-id-2") {
