@@ -53,7 +53,7 @@ impl<'a> PutObject<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(self, s3: &S3) -> Result<String> {
+    pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
         let (sha, md5, length) = tools::sha256_md5_digest(self.file).await?;
         let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
         let response = request::request(
@@ -82,9 +82,7 @@ impl<'a> PutObject<'a> {
             if let Some(pos) = response.headers().get("x-emc-previous-object-size") {
                 h.insert("Previous object size", pos.to_str()?.to_string());
             }
-            Ok(h.iter()
-                .map(|(k, v)| format!("{}: {}\n", k, v))
-                .collect::<String>())
+            Ok(h)
         } else {
             Err(anyhow!(response_error(response).await?))
         }

@@ -3,8 +3,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools, Credentials, Region, S3};
 use s3m::s3m::{multipart_upload, upload, Config, Stream};
 use std::env;
-use std::fs::{create_dir_all, metadata, remove_dir_all, File};
+use std::fs::{create_dir_all, metadata, remove_dir_all, File, Metadata};
 use std::process;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_PARTS_PER_UPLOAD: u64 = 10_000;
 const MAX_PART_SIZE: u64 = 5_368_709_120;
@@ -36,11 +37,11 @@ fn is_file(s: String) -> Result<(), String> {
     }
 }
 
-fn file_size(path: &str) -> Result<u64, String> {
+fn file_metadata(path: &str) -> Result<Metadata, String> {
     metadata(path)
         .map(|m| {
             if m.is_file() {
-                Ok(m.len())
+                Ok(m)
             } else {
                 Err(format!(
                     "cannot read the file: {}, verify file exist and is not a directory.",
@@ -239,11 +240,26 @@ async fn main() {
             process::exit(1);
         }
 
-        let file_size = match file_size(args[0]) {
+        let file_meta = match file_metadata(args[0]) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("{}", e);
                 process::exit(1);
+            }
+        };
+
+        let file_size: u64 = file_meta.len();
+        let file_mtime = {
+            let mtime = match file_meta.modified() {
+                Ok(mtime) => mtime,
+                Err(_) => SystemTime::now(),
+            };
+            match mtime.duration_since(UNIX_EPOCH) {
+                Ok(n) => n.as_millis(),
+                Err(e) => {
+                    eprintln!("{}", e);
+                    process::exit(1);
+                }
             }
         };
 
@@ -295,7 +311,7 @@ async fn main() {
 
         let key_path = hbp.join("/");
 
-        let db = match Stream::new(&s3, &key_path, &checksum, &home_dir) {
+        let db = match Stream::new(&s3, &key_path, &checksum, file_mtime, &home_dir) {
             Ok(db) => db,
             Err(e) => {
                 eprintln!("could not create stream tree, {}", e);
@@ -327,7 +343,7 @@ async fn main() {
                 Err(e) => eprintln!("{}", e),
             }
         } else {
-            match upload(&s3, &key_path, args[0], file_size).await {
+            match upload(&s3, &key_path, args[0], file_size, &db).await {
                 Ok(o) => println!("{}", o),
                 Err(e) => eprintln!("{}", e),
             }

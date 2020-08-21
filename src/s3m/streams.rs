@@ -17,8 +17,8 @@ impl Stream {
     /// # Errors
     ///
     /// Will return `Err` if can not create the db
-    pub fn new(s3: &S3, key: &str, checksum: &str, path: &str) -> Result<Self> {
-        let key = format!("{} {}", &s3.hash()[0..8], key);
+    pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &str) -> Result<Self> {
+        let key = format!("{} {} {}", &s3.hash()[0..8], key, mtime);
         let db = sled::Config::new()
             .path(format!("{}/.s3m/streams/{}", path, checksum))
             .use_compression(true)

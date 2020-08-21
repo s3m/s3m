@@ -5,6 +5,8 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
+use std::time::Duration;
+use tokio::time;
 
 fn progress_bar_parts(parts: u64) -> ProgressBar {
     let pb = ProgressBar::new(parts);
@@ -135,10 +137,24 @@ async fn upload_part(
 
     // do request to get the ETag and update the part
     let pn = format!("{}", part.get_number());
-    let action = actions::UploadPart::new(key, file, &pn, uid, part.get_seek(), part.get_chunk());
+    let mut retries: u64 = 0;
+    let etag = loop {
+        let action =
+            actions::UploadPart::new(key, file, &pn, uid, part.get_seek(), part.get_chunk());
 
-    // TODO implement retry
-    let etag = action.request(s3).await?;
+        match action.request(s3).await {
+            Ok(etag) => break etag,
+            Err(e) => {
+                if retries < 3 {
+                    retries += 1;
+                    // TODO backoff strategy
+                    time::delay_for(Duration::from_secs(retries)).await;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    };
 
     let part = part.set_etag(etag);
     let cbor_part = to_vec(&part)?;

@@ -1,5 +1,6 @@
 use crate::s3::{actions, S3};
-use anyhow::Result;
+use crate::s3m::Stream;
+use anyhow::{anyhow, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
@@ -34,9 +35,20 @@ async fn progress_bar_bytes(file_size: u64, mut receiver: UnboundedReceiver<usiz
     Ok(())
 }
 
-pub async fn upload(s3: &S3, key: &str, file: &str, file_size: u64) -> Result<String> {
+pub async fn upload(
+    s3: &S3,
+    key: &str,
+    file: &str,
+    file_size: u64,
+    sdb: &Stream,
+) -> Result<String> {
     let (sender, receiver) = unbounded_channel();
     let action = actions::PutObject::new(key, file, Some(sender));
     let response = tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(s3))?.1;
-    Ok(response)
+    let etag = &response.get("ETag").ok_or(anyhow!("no etag"))?;
+    sdb.save_etag(etag)?;
+    Ok(response
+        .iter()
+        .map(|(k, v)| format!("{}: {}\n", k, v))
+        .collect::<String>())
 }
