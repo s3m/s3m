@@ -41,8 +41,7 @@ pub async fn upload(
     file_size: u64,
 ) -> Result<String, Box<dyn error::Error>> {
     let (sender, receiver) = unbounded_channel();
-    let action = actions::PutObject::new(&key, &file, Some(sender));
-    let response =
-        tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(&s3))?.1;
+    let action = actions::PutObject::new(key, file, Some(sender));
+    let response = tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(s3))?.1;
     Ok(response)
 }

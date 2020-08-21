@@ -78,7 +78,7 @@ impl<'a> CompleteMultipartUpload<'a> {
         let body = to_string(&parts).unwrap();
         let digest = tools::sha256_digest_string(&body);
         let (url, headers) = &self.sign(s3, &digest, None, Some(body.len()))?;
-        let response = request::request_body(url.clone(), self.http_verb(), headers, body).await?;
+        let response = request::body(url.clone(), self.http_verb(), headers, body).await?;
 
         if response.status().is_success() {
             let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;
@@ -102,7 +102,7 @@ impl<'a> Action for CompleteMultipartUpload<'a> {
     // URL query_pairs
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
         let mut map: BTreeMap<&str, &str> = BTreeMap::new();
-        map.insert("uploadId", &self.upload_id);
+        map.insert("uploadId", self.upload_id);
         Some(map)
     }
 

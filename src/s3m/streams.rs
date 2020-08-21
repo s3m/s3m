@@ -19,7 +19,8 @@ impl Stream {
         Ok(Self { key, db })
     }
 
-    pub fn db(&self) -> &sled::Db {
+    #[must_use]
+    pub const fn db(&self) -> &sled::Db {
         &self.db
     }
 

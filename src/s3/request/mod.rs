@@ -66,7 +66,7 @@ pub async fn request(
 /// # Errors
 ///
 /// Will return `Err` if can not make the request
-pub async fn request_multipart(
+pub async fn multipart(
     url: Url,
     method: &'static str,
     headers: &BTreeMap<String, String>,
@@ -95,7 +95,7 @@ pub async fn request_multipart(
 /// # Errors
 ///
 /// Will return `Err` if can not make the request
-pub async fn request_body(
+pub async fn body(
     url: Url,
     method: &'static str,
     headers: &BTreeMap<String, String>,

@@ -85,6 +85,9 @@ pub fn write_hex_bytes(bytes: &[u8]) -> String {
     s
 }
 
+/// # Errors
+///
+/// Will return `Err` if can not open the file
 pub fn blake3(file_path: &str) -> Result<String, Box<dyn Error>> {
     let file = std::fs::File::open(file_path)?;
     let mut reader = BufReader::new(file);

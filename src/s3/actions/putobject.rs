@@ -55,7 +55,7 @@ impl<'a> PutObject<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<String, Box<dyn error::Error>> {
-        let (sha, md5, length) = tools::sha256_md5_digest(&self.file).await?;
+        let (sha, md5, length) = tools::sha256_md5_digest(self.file).await?;
         let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
         let response = request::request(
             url.clone(),

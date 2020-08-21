@@ -41,7 +41,7 @@ pub async fn multipart_upload(
 
     if upload_id.is_empty() {
         // Initiate Multipart Upload - request an Upload ID
-        let action = actions::CreateMultipartUpload::new(&key);
+        let action = actions::CreateMultipartUpload::new(key);
         let response = action.request(s3).await?;
         upload_id = response.upload_id;
         db_parts.clear()?;
@@ -84,11 +84,11 @@ pub async fn multipart_upload(
 
     let mut tasks = FuturesUnordered::new();
 
-    let mut bin_parts = db_parts.iter().values();
-    while let Some(bin_part) = bin_parts.next() {
+    let bin_parts = db_parts.iter().values();
+    for bin_part in bin_parts {
         if let Ok(p) = bin_part {
             let part: Part = from_reader(&p[..])?;
-            tasks.push(async { upload_part(&s3, &key, &file, &upload_id, &sdb, part).await });
+            tasks.push(async { upload_part(s3, key, file, &upload_id, sdb, part).await });
             // limit to N threads
             if tasks.len() == threads {
                 while let Some(r) = tasks.next().await {
@@ -102,16 +102,13 @@ pub async fn multipart_upload(
 
     // consume remaining tasks
     loop {
-        match tasks.next().await {
-            Some(r) => {
-                if r.is_ok() {
-                    pb.inc(1)
-                }
+        if let Some(r) = tasks.next().await {
+            if r.is_ok() {
+                pb.inc(1)
             }
-            None => {
-                pb.finish();
-                break;
-            }
+        } else {
+            pb.finish();
+            break;
         }
     }
 
@@ -140,8 +137,8 @@ pub async fn multipart_upload(
         .collect::<Result<BTreeMap<u16, actions::Part>, Box<dyn error::Error>>>()?;
 
     // Complete Multipart Upload
-    let action = actions::CompleteMultipartUpload::new(&key, &upload_id, uploaded);
-    let rs = action.request(&s3).await?;
+    let action = actions::CompleteMultipartUpload::new(key, &upload_id, uploaded);
+    let rs = action.request(s3).await?;
 
     // cleanup uploads tree
     db_uploaded.clear()?;
@@ -165,10 +162,10 @@ async fn upload_part(
 
     // do request to get the ETag and update the part
     let pn = format!("{}", part.number);
-    let action = actions::UploadPart::new(&key, &file, &pn, &uid, part.seek, part.chunk);
+    let action = actions::UploadPart::new(key, file, &pn, uid, part.seek, part.chunk);
 
     // TODO implement retry
-    let etag = action.request(&s3).await?;
+    let etag = action.request(s3).await?;
 
     part.etag = etag;
     let cbor_part = to_vec(&part)?;
@@ -181,8 +178,7 @@ async fn upload_part(
             Ok(())
         })
         .map_err(|err| match err {
-            TransactionError::Abort(err) => err,
-            TransactionError::Storage(err) => err,
+            TransactionError::Abort(err) | TransactionError::Storage(err) => err,
         })?;
     Ok(db.flush_async().await?)
 }

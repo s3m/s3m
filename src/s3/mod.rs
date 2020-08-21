@@ -33,6 +33,7 @@ impl S3 {
 
     // use it to identify the connection and keep track of the uploaded files so that the same file
     // could be uploaded into multiple provider/buckets
+    #[must_use]
     pub fn hash(&self) -> String {
         let mut hash = String::new();
         hash.push_str(self.credentials.aws_access_key_id());

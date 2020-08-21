@@ -48,9 +48,9 @@ impl<'a> UploadPart<'a> {
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: &S3) -> Result<String, Box<dyn error::Error>> {
         let (sha256, md5, length) =
-            tools::sha256_md5_multipart(&self.file, self.seek, self.chunk).await?;
+            tools::sha256_md5_multipart(self.file, self.seek, self.chunk).await?;
         let (url, headers) = &self.sign(s3, &sha256, Some(&md5), Some(length))?;
-        let response = request::request_multipart(
+        let response = request::multipart(
             url.clone(),
             self.http_verb(),
             headers,
@@ -83,8 +83,8 @@ impl<'a> Action for UploadPart<'a> {
     // URL query_pairs
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
         let mut map: BTreeMap<&str, &str> = BTreeMap::new();
-        map.insert("partNumber", &self.part_number);
-        map.insert("uploadId", &self.upload_id);
+        map.insert("partNumber", self.part_number);
+        map.insert("uploadId", self.upload_id);
         Some(map)
     }
 
