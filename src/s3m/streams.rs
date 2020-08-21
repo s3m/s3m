@@ -1,5 +1,8 @@
-use crate::s3::S3;
+use crate::s3::{actions, S3};
+use crate::s3m::Part;
 use anyhow::Result;
+use serde_cbor::{de::from_reader, to_vec};
+use std::collections::BTreeMap;
 
 pub const DB_PARTS: &str = "parts";
 pub const DB_UPLOADED: &str = "uploaded parts";
@@ -86,5 +89,40 @@ impl Stream {
     /// Will return `Err` if can not `flush_async`
     pub async fn flush_async(&self) -> Result<usize> {
         Ok(self.db.flush_async().await?)
+    }
+
+    /// # Errors
+    ///
+    /// Will return `Err` if can not insert a `Part`
+    pub fn create_part(&self, number: u16, seek: u64, chunk: u64) -> Result<Option<sled::IVec>> {
+        let part = Part::new(number, seek, chunk);
+        let cbor_part = to_vec(&part)?;
+        Ok(self.db_parts()?.insert(format!("{}", number), cbor_part)?)
+    }
+
+    /// # Errors
+    ///
+    /// Will return `Err` if can not create the `BTreeMap<u16, actions::Part>`
+    pub fn uploaded_parts(&self) -> Result<BTreeMap<u16, actions::Part>> {
+        Ok(self
+            .db_uploaded()?
+            .into_iter()
+            .values()
+            .flat_map(|part| {
+                part.map(|part| {
+                    from_reader(&part[..])
+                        .map(|p: Part| {
+                            (
+                                p.get_number(),
+                                actions::Part {
+                                    etag: p.get_etag(),
+                                    number: p.get_number(),
+                                },
+                            )
+                        })
+                        .map_err(|e| e.into())
+                })
+            })
+            .collect::<Result<BTreeMap<u16, actions::Part>>>()?)
     }
 }

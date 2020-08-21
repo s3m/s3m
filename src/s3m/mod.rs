@@ -9,3 +9,6 @@ pub use self::multipart_upload::multipart_upload;
 
 mod streams;
 pub use self::streams::Stream;
+
+mod part;
+pub use self::part::Part;

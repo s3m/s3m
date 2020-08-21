@@ -1,20 +1,10 @@
 use crate::s3::{actions, S3};
-use crate::s3m::Stream;
+use crate::s3m::{Part, Stream};
 use anyhow::{anyhow, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
-use serde::{Deserialize, Serialize};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
-use std::collections::BTreeMap;
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-struct Part {
-    etag: String,
-    number: u16,
-    seek: u64,
-    chunk: u64,
-}
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
@@ -60,14 +50,7 @@ pub async fn multipart_upload(
             if (file_size - seek) <= chunk {
                 chunk = file_size % chunk;
             }
-            let part = Part {
-                number,
-                seek,
-                chunk,
-                ..Default::default()
-            };
-            let cbor_part = to_vec(&part)?;
-            db_parts.insert(format!("{}", number), cbor_part)?;
+            sdb.create_part(number, seek, chunk)?;
             seek += chunk;
             number += 1;
         }
@@ -120,27 +103,8 @@ pub async fn multipart_upload(
         return Err(anyhow!("could not upload all parts"));
     }
 
-    let uploaded = db_uploaded
-        .into_iter()
-        .values()
-        .flat_map(|part| {
-            part.map(|part| {
-                from_reader(&part[..])
-                    .map(|p: Part| {
-                        (
-                            p.number,
-                            actions::Part {
-                                etag: p.etag,
-                                number: p.number,
-                            },
-                        )
-                    })
-                    .map_err(|e| e.into())
-            })
-        })
-        .collect::<Result<BTreeMap<u16, actions::Part>>>()?;
-
     // Complete Multipart Upload
+    let uploaded = sdb.uploaded_parts()?;
     let action = actions::CompleteMultipartUpload::new(key, &upload_id, uploaded);
     let rs = action.request(s3).await?;
 
@@ -159,19 +123,19 @@ async fn upload_part(
     file: &str,
     uid: &str,
     db: &Stream,
-    mut part: Part,
+    part: Part,
 ) -> Result<usize> {
     let unprocessed = db.db_parts()?;
     let processed = db.db_uploaded()?;
 
     // do request to get the ETag and update the part
-    let pn = format!("{}", part.number);
-    let action = actions::UploadPart::new(key, file, &pn, uid, part.seek, part.chunk);
+    let pn = format!("{}", part.get_number());
+    let action = actions::UploadPart::new(key, file, &pn, uid, part.get_seek(), part.get_chunk());
 
     // TODO implement retry
     let etag = action.request(s3).await?;
 
-    part.etag = etag;
+    let part = part.set_etag(etag);
     let cbor_part = to_vec(&part)?;
 
     // move part to uploaded
