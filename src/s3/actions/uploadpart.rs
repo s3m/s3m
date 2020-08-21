@@ -59,7 +59,6 @@ impl<'a> UploadPart<'a> {
             self.chunk,
         )
         .await?;
-        // probaby to much paranid
         if response.status().is_success() {
             match response.headers().get("ETag") {
                 Some(etag) => Ok(etag.to_str()?.to_string()),
