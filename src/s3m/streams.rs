@@ -21,6 +21,8 @@ impl Stream {
         let key = format!("{} {}", &s3.hash()[0..8], key);
         let db = sled::Config::new()
             .path(format!("{}/.s3m/streams/{}", path, checksum))
+            .use_compression(true)
+            .mode(sled::Mode::LowSpace)
             .open()?;
         Ok(Self { key, db })
     }
