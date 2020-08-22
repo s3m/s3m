@@ -34,26 +34,21 @@ pub async fn multipart_upload(
     threads: usize,
     sdb: &Stream,
 ) -> Result<String> {
-    let mut upload_id = String::new();
-
-    if let Some(u) = sdb.upload_id()? {
-        upload_id = u;
-    }
-
     // trees for keeping track of parts to upload
     let db_parts = sdb.db_parts()?;
     let db_uploaded = sdb.db_uploaded()?;
 
-    if upload_id.is_empty() {
+    let upload_id = if let Some(uid) = sdb.upload_id()? {
+        uid
+    } else {
         // Initiate Multipart Upload - request an Upload ID
         let action = actions::CreateMultipartUpload::new(key);
         let response = action.request(s3).await?;
-        upload_id = response.upload_id;
         db_parts.clear()?;
-    }
-
-    // save the upload_id to resume if required
-    sdb.save_upload_id(&upload_id)?;
+        // save the upload_id to resume if required
+        sdb.save_upload_id(&response.upload_id)?;
+        response.upload_id
+    };
 
     // if db_parts is not empty it means that a previous upload did not finish successfully.
     // skip creating the parts again and try to re-upload the pending ones
@@ -87,6 +82,7 @@ pub async fn multipart_upload(
         // limit to N threads
         if tasks.len() == threads {
             while let Some(r) = tasks.next().await {
+                // TODO better error handling
                 if r.is_ok() {
                     pb.inc(1)
                 }
