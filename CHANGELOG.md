@@ -1,6 +1,6 @@
 ## 0.3.0
 * Using [blake3](https://crates.io/crates/blake3), for creating the file checksum, thanks @oconnor663
-* Using [sled](http://sled.rs/) with [serde_cbor](https://crates.io/crates/serde_cbor) to keep track of the uploaded files, thanks @D1plo1d
+* Using [sled](http://sled.rs/) with [serde_cbor](https://crates.io/crates/serde_cbor) to keep track of the uploaded files. thanks @spacejam, @D1plo1d
 * Multipart uploads can be resumed and is the default behavior.
 * The file checksum, mtime and the s3 credentials are used to keep track of the uploads this also prevent uploading the same file multiple times to the same location.
 * Added option `-r` to cleanup `~/.s3m/streams` directory.
