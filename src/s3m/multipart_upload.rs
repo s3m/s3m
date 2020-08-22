@@ -132,11 +132,18 @@ async fn upload_part(
     let processed = db.db_uploaded()?;
 
     // do request to get the ETag and update the part
-    let pn = format!("{}", part.get_number());
+    let part_number = part.get_number();
+    let part_number_str = part_number.to_string();
     let mut retries: u64 = 0;
     let etag = loop {
-        let action =
-            actions::UploadPart::new(key, file, &pn, uid, part.get_seek(), part.get_chunk());
+        let action = actions::UploadPart::new(
+            key,
+            file,
+            &part_number_str,
+            uid,
+            part.get_seek(),
+            part.get_chunk(),
+        );
 
         match action.request(s3).await {
             Ok(etag) => break etag,
@@ -158,12 +165,12 @@ async fn upload_part(
     // move part to uploaded
     (&unprocessed, &processed)
         .transaction(|(unprocessed, processed)| {
-            unprocessed.remove(pn.as_bytes())?;
-            processed.insert(pn.as_bytes(), cbor_part.clone())?;
+            unprocessed.remove(&part_number.to_be_bytes())?;
+            processed.insert(&part_number.to_be_bytes(), cbor_part.clone())?;
             Ok(())
         })
         .map_err(|err| match err {
             TransactionError::Abort(err) | TransactionError::Storage(err) => err,
         })?;
-    Ok(db.flush_async().await?)
+    Ok(db.flush()?)
 }

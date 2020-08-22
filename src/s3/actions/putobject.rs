@@ -17,7 +17,6 @@ pub struct PutObject<'a> {
     pub content_encoding: Option<String>,
     pub content_language: Option<String>,
     pub content_length: Option<String>,
-    pub content_md5: Option<String>,
     pub content_type: Option<String>,
     pub expires: Option<String>,
     pub x_amz_grant_full_control: Option<String>,

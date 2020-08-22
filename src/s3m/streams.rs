@@ -88,9 +88,9 @@ impl Stream {
 
     /// # Errors
     ///
-    /// Will return `Err` if can not `flush_async`
-    pub async fn flush_async(&self) -> Result<usize> {
-        Ok(self.db.flush_async().await?)
+    /// Will return `Err` if can not `flush`
+    pub fn flush(&self) -> Result<usize> {
+        Ok(self.db.flush()?)
     }
 
     /// # Errors
@@ -99,7 +99,19 @@ impl Stream {
     pub fn create_part(&self, number: u16, seek: u64, chunk: u64) -> Result<Option<sled::IVec>> {
         let part = Part::new(number, seek, chunk);
         let cbor_part = to_vec(&part)?;
-        Ok(self.db_parts()?.insert(format!("{}", number), cbor_part)?)
+        Ok(self.db_parts()?.insert(number.to_be_bytes(), cbor_part)?)
+    }
+
+    /// # Errors
+    ///
+    /// Will return `Err` if can not insert a `Part`
+    pub fn get_part(&self, number: u16) -> Result<Option<Part>> {
+        let part = &self
+            .db_parts()?
+            .get(number.to_be_bytes())?
+            .map(|part| from_reader(&part[..]).map(|p: Part| p))
+            .transpose()?;
+        Ok(part.to_owned())
     }
 
     /// # Errors

@@ -14,7 +14,6 @@ pub struct UploadPart<'a> {
     seek: u64,
     chunk: u64,
     pub content_length: Option<String>,
-    pub content_md5: Option<String>,
     pub content_type: Option<String>,
     pub x_amz_server_side_encryption_customer_algorithm: Option<String>,
     pub x_amz_server_side_encryption_customer_key: Option<String>,
