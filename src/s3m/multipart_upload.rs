@@ -72,6 +72,10 @@ pub async fn multipart_upload(
 
     let mut tasks = FuturesUnordered::new();
 
+    // TODO https://github.com/spacejam/sled/issues/1148
+    // put keys/parts in a vector then iterate over it
+    // probably better to pass only the part since needs to be decoded to extract the part_number
+
     let bin_parts = db_parts.iter().values();
     for bin_part in bin_parts {
         if let Ok(p) = bin_part {
