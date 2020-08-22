@@ -82,13 +82,13 @@ pub async fn multipart_upload(
         if let Ok(p) = bin_part {
             let part: Part = from_reader(&p[..])?;
             tasks.push(async { upload_part(s3, key, file, &upload_id, sdb, part).await });
+        }
 
-            // limit to N threads
-            if tasks.len() == threads {
-                while let Some(r) = tasks.next().await {
-                    if r.is_ok() {
-                        pb.inc(1)
-                    }
+        // limit to N threads
+        if tasks.len() == threads {
+            while let Some(r) = tasks.next().await {
+                if r.is_ok() {
+                    pb.inc(1)
                 }
             }
         }

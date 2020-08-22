@@ -45,7 +45,7 @@ pub async fn upload(
     let (sender, receiver) = unbounded_channel();
     let action = actions::PutObject::new(key, file, Some(sender));
     let response = tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(s3))?.1;
-    let etag = &response.get("ETag").ok_or(anyhow!("no etag"))?;
+    let etag = &response.get("ETag").ok_or_else(|| anyhow!("no etag"))?;
     sdb.save_etag(etag)?;
     Ok(response
         .iter()
