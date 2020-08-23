@@ -137,13 +137,12 @@ async fn upload_part(
 
     // do request to get the ETag and update the part
     let part_number = part.get_number();
-    let part_number_str = part_number.to_string();
     let mut retries: u64 = 0;
     let etag = loop {
         let action = actions::UploadPart::new(
             key,
             file,
-            &part_number_str,
+            part_number,
             uid,
             part.get_seek(),
             part.get_chunk(),

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 pub struct UploadPart<'a> {
     key: &'a str,
     file: &'a str,
-    part_number: &'a str,
+    part_number: String,
     upload_id: &'a str,
     seek: u64,
     chunk: u64,
@@ -26,15 +26,16 @@ impl<'a> UploadPart<'a> {
     pub fn new(
         key: &'a str,
         file: &'a str,
-        part_number: &'a str,
+        part_number: u16,
         upload_id: &'a str,
         seek: u64,
         chunk: u64,
     ) -> Self {
+        let pn = part_number.to_string();
         Self {
             key,
             file,
-            part_number,
+            part_number: pn,
             upload_id,
             seek,
             chunk,
@@ -82,7 +83,7 @@ impl<'a> Action for UploadPart<'a> {
     // URL query_pairs
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
         let mut map: BTreeMap<&str, &str> = BTreeMap::new();
-        map.insert("partNumber", self.part_number);
+        map.insert("partNumber", &self.part_number);
         map.insert("uploadId", self.upload_id);
         Some(map)
     }
