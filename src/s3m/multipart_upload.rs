@@ -1,5 +1,5 @@
 use crate::s3::{actions, S3};
-use crate::s3m::{Part, Stream};
+use crate::s3m::{Db, Part};
 use anyhow::{anyhow, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -32,7 +32,7 @@ pub async fn multipart_upload(
     file_size: u64,
     chunk_size: u64,
     threads: usize,
-    sdb: &Stream,
+    sdb: &Db,
 ) -> Result<String> {
     // trees for keeping track of parts to upload
     let db_parts = sdb.db_parts()?;
@@ -129,7 +129,7 @@ async fn upload_part(
     key: &str,
     file: &str,
     uid: &str,
-    db: &Stream,
+    db: &Db,
     part: Part,
 ) -> Result<usize> {
     let unprocessed = db.db_parts()?;

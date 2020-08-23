@@ -8,12 +8,12 @@ pub const DB_PARTS: &str = "parts";
 pub const DB_UPLOADED: &str = "uploaded parts";
 
 #[derive(Debug, Clone)]
-pub struct Stream {
+pub struct Db {
     db: sled::Db,
     key: String,
 }
 
-impl Stream {
+impl Db {
     /// # Errors
     ///
     /// Will return `Err` if can not create the db
