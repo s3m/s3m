@@ -1,7 +1,7 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools, S3};
 // use s3m::s3m::{multipart_upload, options, prebuffer, upload, Config, Db};
-use s3m::s3m::start;
+use s3m::s3m::{start, Action};
 use std::fs::{create_dir_all, metadata, remove_dir_all, File, Metadata};
 use std::process::exit;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,19 +10,11 @@ const MAX_PARTS_PER_UPLOAD: u64 = 10_000;
 const MAX_PART_SIZE: u64 = 5_368_709_120;
 
 #[tokio::main]
-async fn main() {
-    let action = match start() {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("{}", e);
-            exit(1);
-        }
-    };
+async fn main() -> Result<(), anyhow::Error> {
+    let (s3, action) = start()?;
 
-    println!("{:#?}", action);
-
-    /*
-        if matches.subcommand_matches("ls").is_some() {
+    match action {
+        Action::ListObjects(bucket) => {
             if bucket.is_some() {
                 let mut action = actions::ListObjectsV2::new();
                 action.prefix = Some(String::from(""));
@@ -38,6 +30,22 @@ async fn main() {
                     Err(e) => eprintln!("{}", e),
                 }
             }
+        }
+        Action::PutObject {
+            stdin,
+            file,
+            key,
+            buffer,
+            threads,
+        } => {
+            println!("-------");
+        }
+    }
+
+    Ok(())
+
+    /*
+        if matches.subcommand_matches("ls").is_some() {
         } else {
             // Upload a file if > buffer size try multipart
             if hbp.is_empty() {
