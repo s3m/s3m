@@ -92,7 +92,7 @@ pub fn blake3(file_path: &str) -> Result<String> {
     let file = std::fs::File::open(file_path)?;
     let mut reader = BufReader::new(file);
     let mut hasher = blake3::Hasher::new();
-    let mut buf: [u8; 65536] = [0; 65536];
+    let mut buf = [0; 65536];
     while let Ok(size) = reader.read(&mut buf[..]) {
         if size == 0 {
             break;

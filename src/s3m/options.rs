@@ -1,6 +1,6 @@
 use crate::s3::{Credentials, Region, S3};
 use crate::s3m::Config;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{App, AppSettings, Arg, SubCommand};
 use std::env;
 use std::fs;
@@ -11,10 +11,11 @@ use std::process::exit;
 pub enum Action {
     ListObjects(Option<String>),
     PutObject {
-        stdin: bool,
-        file: String,
-        key: String,
         buffer: u64,
+        file: String,
+        home_dir: PathBuf,
+        key: String,
+        stdin: bool,
         threads: usize,
     },
 }
@@ -122,8 +123,7 @@ pub fn start() -> Result<(S3, Action)> {
     let file = fs::File::open(config).context("Unable to open file")?;
     let config: Config = match serde_yaml::from_reader(file) {
         Err(e) => {
-            eprintln!("Error parsing configuration file: {}", e);
-            exit(1);
+            return Err(anyhow!("Error parsing configuration file: {}", e));
         }
         Ok(yml) => yml,
     };
@@ -140,7 +140,7 @@ pub fn start() -> Result<(S3, Action)> {
 
     // Host, Bucket, Path
     let mut hbp: Vec<&str>;
-    let mut input_stdin = false;
+    let input_stdin = !atty::is(atty::Stream::Stdin); // isatty returns false if there's something in stdin.
     let mut input_file = "";
 
     // ListObjects
@@ -153,13 +153,12 @@ pub fn start() -> Result<(S3, Action)> {
         if args.len() == 2 {
             hbp = args[1].split('/').filter(|s| !s.is_empty()).collect();
             input_file = args[0];
-        } else if !atty::is(atty::Stream::Stdin) {
-            // isatty returns false if there's something in stdin.
-            input_stdin = true;
+        } else if input_stdin {
             hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
         } else {
-            eprintln!("Missing argument or Standar input. For more information try: --help");
-            exit(1);
+            return Err(anyhow!(
+                "Missing argument or Standar input. For more information try: --help"
+            ));
         }
     }
 
@@ -168,8 +167,7 @@ pub fn start() -> Result<(S3, Action)> {
         let key = hbp.remove(0);
         &config.hosts[key]
     } else {
-        eprintln!("No \"host\" found, check ~/.s3m/config.yml");
-        exit(1);
+        return Err(anyhow!("No \"host\" found, check ~/.s3m/config.yml"));
     };
 
     // REGION
@@ -177,8 +175,7 @@ pub fn start() -> Result<(S3, Action)> {
         Some(h) => match h.parse::<Region>() {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("{}", e);
-                exit(1);
+                return Err(anyhow!(e));
             }
         },
         None => match &host.endpoint {
@@ -187,8 +184,7 @@ pub fn start() -> Result<(S3, Action)> {
                 endpoint: r.to_string(),
             },
             None => {
-                eprintln!("Error parsing host need an endpoint or region");
-                exit(1);
+                return Err(anyhow!("Error parsing host need an endpoint or region"));
             }
         },
     };
@@ -199,11 +195,10 @@ pub fn start() -> Result<(S3, Action)> {
     } else if matches.subcommand_matches("ls").is_some() {
         None
     } else {
-        eprintln!(
+        return Err(anyhow!(
             "No \"bucket\" found, try: {} /path/to/file <s3 provider>/<bucket name>/file",
             me().unwrap_or_else(|| "s3m".to_string()),
-        );
-        exit(1);
+        ));
     };
 
     // AUTH
@@ -216,23 +211,23 @@ pub fn start() -> Result<(S3, Action)> {
         Ok((s3, Action::ListObjects(bucket)))
     } else {
         if hbp.is_empty() {
-            eprintln!(
-                "File name missing, try: {} {} <s3 provider>/<bucket>/{}",
+            return Err(anyhow!(
+                "file name missing, try: {} {} <s3 provider>/<bucket>/{}",
                 me().unwrap_or_else(|| "s3m".to_string()),
                 input_file,
                 input_file.split('/').next_back().unwrap_or("")
-            );
-            exit(1);
+            ));
         }
         let chunk_size = buffer.parse::<u64>()?;
         Ok((
             s3,
             Action::PutObject {
-                stdin: input_stdin,
-                file: input_file.to_string(),
-                key: hbp.join("/"),
                 buffer: chunk_size,
-                threads: threads,
+                file: input_file.to_string(),
+                home_dir,
+                key: hbp.join("/"),
+                stdin: input_stdin,
+                threads,
             },
         ))
     }

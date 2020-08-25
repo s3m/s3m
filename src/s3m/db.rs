@@ -3,6 +3,7 @@ use crate::s3m::Part;
 use anyhow::Result;
 use serde_cbor::{de::from_reader, to_vec};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 pub const DB_PARTS: &str = "parts";
 pub const DB_UPLOADED: &str = "uploaded parts";
@@ -17,10 +18,10 @@ impl Db {
     /// # Errors
     ///
     /// Will return `Err` if can not create the db
-    pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &str) -> Result<Self> {
+    pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &PathBuf) -> Result<Self> {
         let key = format!("{} {} {}", &s3.hash()[0..8], key, mtime);
         let db = sled::Config::new()
-            .path(format!("{}/.s3m/streams/{}", path, checksum))
+            .path(format!("{}/.s3m/streams/{}", path.display(), checksum))
             .use_compression(true)
             .mode(sled::Mode::LowSpace)
             .open()?;

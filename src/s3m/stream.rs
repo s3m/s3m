@@ -19,7 +19,7 @@ pub async fn prebuffer(buffer: u64) -> Result<()> {
                 break;
             }
         }
-        if let None = stream.try_next().await? {
+        if stream.try_next().await?.is_none() {
             break;
         }
     }
