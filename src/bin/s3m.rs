@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Local};
 use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools};
 use s3m::s3m::{multipart_upload, prebuffer, upload, Db};
@@ -20,12 +21,29 @@ async fn main() -> Result<()> {
                 let mut action = actions::ListObjectsV2::new();
                 action.prefix = Some(String::from(""));
                 let rs = action.request(&s3).await?;
-                println!("objects: {:#?}", rs);
+                for object in rs.contents {
+                    let dt = DateTime::parse_from_rfc3339(&object.last_modified)?;
+                    let last_modified: DateTime<Local> = DateTime::from(dt);
+                    println!(
+                        "[{}] {:>10} {:<}",
+                        last_modified.format("%F %T %Z"),
+                        bytesize::to_string(object.size, true),
+                        object.key
+                    );
+                }
             } else {
                 // list buckets
                 let action = actions::ListBuckets::new();
                 let rs = action.request(&s3).await?;
-                println!("objects: {:#?}", rs);
+                for bucket in rs.buckets.bucket {
+                    let dt = DateTime::parse_from_rfc3339(&bucket.creation_date)?;
+                    let creation_date: DateTime<Local> = DateTime::from(dt);
+                    println!(
+                        "[{}] {:>10}/",
+                        creation_date.format("%F %T %Z"),
+                        bucket.name
+                    );
+                }
             }
         }
         // Upload

@@ -54,7 +54,7 @@ pub fn start() -> Result<(S3, Action)> {
     };
 
     fs::create_dir_all(format!("{}/.s3m/", home_dir.display()))
-        .context("Unable to create ~/.s3m dir")?;
+        .context("unable to create home dir ~/.s3m")?;
 
     let default_config = format!("{}/.s3m/config.yml", home_dir.display());
     let default_threads = if num_cpus::get() > 8 {
@@ -120,10 +120,10 @@ pub fn start() -> Result<(S3, Action)> {
 
     // parse config file
     let config = matches.value_of("config").unwrap();
-    let file = fs::File::open(config).context("Unable to open file")?;
+    let file = fs::File::open(config).context("unable to open file")?;
     let config: Config = match serde_yaml::from_reader(file) {
         Err(e) => {
-            return Err(anyhow!("Error parsing configuration file: {}", e));
+            return Err(anyhow!("could not parse the configuration file: {}", e));
         }
         Ok(yml) => yml,
     };
@@ -157,7 +157,7 @@ pub fn start() -> Result<(S3, Action)> {
             hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
         } else {
             return Err(anyhow!(
-                "Missing argument or Standar input. For more information try: --help"
+                "missing argument or standar input. For more information try: --help"
             ));
         }
     }
@@ -167,7 +167,7 @@ pub fn start() -> Result<(S3, Action)> {
         let key = hbp.remove(0);
         &config.hosts[key]
     } else {
-        return Err(anyhow!("No \"host\" found, check ~/.s3m/config.yml"));
+        return Err(anyhow!("no \"host\" found, check ~/.s3m/config.yml"));
     };
 
     // REGION
@@ -184,7 +184,7 @@ pub fn start() -> Result<(S3, Action)> {
                 endpoint: r.to_string(),
             },
             None => {
-                return Err(anyhow!("Error parsing host need an endpoint or region"));
+                return Err(anyhow!("could not parse host need an endpoint or region"));
             }
         },
     };
@@ -196,7 +196,7 @@ pub fn start() -> Result<(S3, Action)> {
         None
     } else {
         return Err(anyhow!(
-            "No \"bucket\" found, try: {} /path/to/file <s3 provider>/<bucket name>/file",
+            "no \"bucket\" found, try: {} /path/to/file <s3 provider>/<bucket name>/file",
             me().unwrap_or_else(|| "s3m".to_string()),
         ));
     };
