@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Local};
+use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools};
 use s3m::s3m::{multipart_upload, prebuffer, upload, Db};
@@ -25,9 +26,9 @@ async fn main() -> Result<()> {
                     let dt = DateTime::parse_from_rfc3339(&object.last_modified)?;
                     let last_modified: DateTime<Local> = DateTime::from(dt);
                     println!(
-                        "[{}] {:>10} {:<}",
-                        last_modified.format("%F %T %Z"),
-                        bytesize::to_string(object.size, true),
+                        "{} {:>10} {:<}",
+                        format!("[{}]", last_modified.format("%F %T %Z")).green(),
+                        bytesize::to_string(object.size, true).yellow(),
                         object.key
                     );
                 }
@@ -39,9 +40,9 @@ async fn main() -> Result<()> {
                     let dt = DateTime::parse_from_rfc3339(&bucket.creation_date)?;
                     let creation_date: DateTime<Local> = DateTime::from(dt);
                     println!(
-                        "[{}] {:>10}/",
-                        creation_date.format("%F %T %Z"),
-                        bucket.name
+                        "{} {:>10}/",
+                        format!("[{}]", creation_date.format("%F %T %Z")).green(),
+                        bucket.name.yellow()
                     );
                 }
             }
