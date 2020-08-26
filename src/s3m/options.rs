@@ -133,7 +133,7 @@ pub fn start() -> Result<(S3, Action)> {
         .subcommand(
             SubCommand::with_name("rm").about("Delete objects and aborts a multipart upload").arg(
                 Arg::with_name("arguments")
-                    .help("<s3 provider>/bucket/[<file or UploadID>]")
+                    .help("<s3 provider>/bucket/<file>")
                     .required(true)
                     .min_values(1),
             )

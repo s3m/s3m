@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
             let checksum = checksum(&file)?;
 
             let db = Db::new(&s3, &key, &checksum, file_mtime, &home_dir)
-                .context("could not create stream tree")?;
+                .context("could not create stream tree, try option \"-r\"")?;
 
             // check if file has been uploded already
             let etag = &db
