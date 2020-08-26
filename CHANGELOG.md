@@ -4,6 +4,10 @@
 * Multipart uploads can be resumed and is the default behavior.
 * The file checksum, mtime and the s3 credentials are used to keep track of the uploads this also prevent uploading the same file multiple times to the same location.
 * Added option `-r` to cleanup `~/.s3m/streams` directory.
+* Added option `ls -m` to list in-progress multipart uploads.
+* New sub-command `rm` to remove objects and abort a multipart upload.
+* `ls` list format (green, yellow, key) "date, size, file name"
+
 
 ## 0.2.0
 * Implemented lifetimes  🌱

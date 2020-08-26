@@ -30,6 +30,15 @@ pub struct Owner {
     pub id: String,
 }
 
+/// Initiator - Identifies who initiated the multipart upload.
+#[derive(Deserialize, Debug, Clone)]
+pub struct Initiator {
+    #[serde(rename = "DisplayName")]
+    pub display_name: Option<String>,
+    #[serde(rename = "ID")]
+    pub id: String,
+}
+
 /// An individual object in a `ListBucketResult`
 #[derive(Deserialize, Debug, Clone)]
 pub struct Object {
@@ -171,4 +180,48 @@ pub struct CompleteMultipartUploadResult {
     pub key: String,
     #[serde(rename = "ETag")]
     pub e_tag: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ListMultipartUploadsResult {
+    #[serde(rename = "Bucket")]
+    pub bucket: String,
+    #[serde(rename = "KeyMarker")]
+    pub key_marker: Option<String>,
+    #[serde(rename = "UploadIdMarker")]
+    pub upload_id_marker: Option<String>,
+    #[serde(rename = "NextKeyMarker")]
+    pub next_key_marker: Option<String>,
+    #[serde(rename = "Prefix")]
+    pub prefix: Option<String>,
+    #[serde(rename = "Delimiter")]
+    pub delimiter: Option<String>,
+    #[serde(rename = "NextUploadIdMarker")]
+    pub next_upload_id_marker: Option<String>,
+    #[serde(rename = "MaxUploads")]
+    pub max_uploads: usize,
+    #[serde(rename = "IsTruncated", deserialize_with = "bool_deserializer")]
+    pub is_truncated: bool,
+    #[serde(rename = "Upload", default)]
+    pub upload: Option<Vec<Upload>>,
+    #[serde(rename = "CommonPrefixes", default)]
+    pub common_prefixes: Option<Vec<CommonPrefix>>,
+    #[serde(rename = "EncodingType")]
+    pub encoding_type: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Upload {
+    #[serde(rename = "Initiated")]
+    pub initiated: String,
+    #[serde(rename = "Initiator")]
+    pub initiator: Option<Initiator>,
+    #[serde(rename = "Key")]
+    pub key: String,
+    #[serde(rename = "Owner")]
+    pub owner: Option<Owner>,
+    #[serde(rename = "StorageClass")]
+    pub storage_class: String,
+    #[serde(rename = "UploadId")]
+    pub upload_id: String,
 }

@@ -37,6 +37,18 @@ pub use self::uploadpart::UploadPart;
 mod completemultipartupload;
 pub use self::completemultipartupload::{CompleteMultipartUpload, Part};
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListMultipartUploads.html>
+mod listmultipartuploads;
+pub use self::listmultipartuploads::ListMultipartUploads;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_AbortMultipartUpload.html>
+mod abortmultipartupload;
+pub use self::abortmultipartupload::AbortMultipartUpload;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html}
+mod deleteobject;
+pub use self::deleteobject::DeleteObject;
+
 pub trait Action {
     // headers to send in the request
     fn headers(&self) -> Option<BTreeMap<&str, &str>>;

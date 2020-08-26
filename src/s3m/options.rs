@@ -2,6 +2,7 @@ use crate::s3::{Credentials, Region, S3};
 use crate::s3m::Config;
 use anyhow::{anyhow, Context, Result};
 use clap::{App, AppSettings, Arg, SubCommand};
+use colored::Colorize;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -9,7 +10,10 @@ use std::process::exit;
 
 #[derive(Debug)]
 pub enum Action {
-    ListObjects(Option<String>),
+    ListObjects {
+        bucket: Option<String>,
+        list_multipart_uploads: bool,
+    },
     PutObject {
         buffer: u64,
         file: String,
@@ -17,6 +21,10 @@ pub enum Action {
         key: String,
         stdin: bool,
         threads: usize,
+    },
+    DeleteObject {
+        key: String,
+        upload_id: String,
     },
 }
 
@@ -104,16 +112,37 @@ pub fn start() -> Result<(S3, Action)> {
         .arg(
             Arg::with_name("arguments")
                 .help("/path/to/file <host>/bucket/<file>")
-                .required_unless_one(&["ls", "remove"])
+                .required_unless_one(&["rm", "ls", "remove"])
                 .min_values(1)
                 .max_values(2),
         )
         .subcommand(
-            SubCommand::with_name("ls").about("list objects").arg(
+            SubCommand::with_name("ls").about("List objects and in-progress multipart uploads").arg(
                 Arg::with_name("arguments")
                     .help("\"host\" to list buckets or \"host/bucket\" to list bucket contents")
                     .required(true)
                     .min_values(1),
+            )
+            .arg(
+                Arg::with_name("ListMultipartUploads")
+                .help("Lists in-progress multipart uploads")
+                .long("multipart")
+                .short("m")
+            ),
+        )
+        .subcommand(
+            SubCommand::with_name("rm").about("Delete objects and aborts a multipart upload").arg(
+                Arg::with_name("arguments")
+                    .help("<s3 provider>/bucket/[<file or UploadID>]")
+                    .required(true)
+                    .min_values(1),
+            )
+            .arg(
+                Arg::with_name("UploadId")
+                .help("aborts a multipart upload")
+                .long("abort")
+                .short("a")
+                .takes_value(true),
             ),
         )
         .get_matches();
@@ -146,6 +175,9 @@ pub fn start() -> Result<(S3, Action)> {
     // ListObjects
     if let Some(ls) = matches.subcommand_matches("ls") {
         let args: Vec<&str> = ls.values_of("arguments").unwrap_or_default().collect();
+        hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
+    } else if let Some(rm) = matches.subcommand_matches("rm") {
+        let args: Vec<&str> = rm.values_of("arguments").unwrap_or_default().collect();
         hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
     } else {
         // PutObject
@@ -207,28 +239,43 @@ pub fn start() -> Result<(S3, Action)> {
     // S3
     let s3 = S3::new(&credentials, &region, bucket.clone());
 
-    if matches.subcommand_matches("ls").is_some() {
-        Ok((s3, Action::ListObjects(bucket)))
+    if let Some(sub_m) = matches.subcommand_matches("ls") {
+        let list_multipart_uploads = sub_m.is_present("ListMultipartUploads");
+        Ok((
+            s3,
+            Action::ListObjects {
+                bucket,
+                list_multipart_uploads,
+            },
+        ))
     } else {
         if hbp.is_empty() {
             return Err(anyhow!(
-                "file name missing, try: {} {} <s3 provider>/<bucket>/{}",
+                "file name missing, try: {} <s3 provider>/<bucket>/{}, For more information {}",
                 me().unwrap_or_else(|| "s3m".to_string()),
-                input_file,
-                input_file.split('/').next_back().unwrap_or("")
+                "<file name>".red(),
+                "--help".green()
             ));
         }
-        let chunk_size = buffer.parse::<u64>()?;
-        Ok((
-            s3,
-            Action::PutObject {
-                buffer: chunk_size,
-                file: input_file.to_string(),
-                home_dir,
-                key: hbp.join("/"),
-                stdin: input_stdin,
-                threads,
-            },
-        ))
+
+        let key = hbp.join("/");
+
+        if let Some(sub_m) = matches.subcommand_matches("rm") {
+            let upload_id = sub_m.value_of("UploadId").unwrap_or_default().to_string();
+            Ok((s3, Action::DeleteObject { key, upload_id }))
+        } else {
+            let chunk_size = buffer.parse::<u64>()?;
+            Ok((
+                s3,
+                Action::PutObject {
+                    buffer: chunk_size,
+                    file: input_file.to_string(),
+                    home_dir,
+                    key,
+                    stdin: input_stdin,
+                    threads,
+                },
+            ))
+        }
     }
 }

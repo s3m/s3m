@@ -17,20 +17,40 @@ async fn main() -> Result<()> {
     let (s3, action) = start()?;
 
     match action {
-        Action::ListObjects(bucket) => {
+        Action::ListObjects {
+            bucket,
+            list_multipart_uploads,
+        } => {
             if bucket.is_some() {
-                let mut action = actions::ListObjectsV2::new();
-                action.prefix = Some(String::from(""));
-                let rs = action.request(&s3).await?;
-                for object in rs.contents {
-                    let dt = DateTime::parse_from_rfc3339(&object.last_modified)?;
-                    let last_modified: DateTime<Local> = DateTime::from(dt);
-                    println!(
-                        "{} {:>10} {:<}",
-                        format!("[{}]", last_modified.format("%F %T %Z")).green(),
-                        bytesize::to_string(object.size, true).yellow(),
-                        object.key
-                    );
+                if list_multipart_uploads {
+                    let action = actions::ListMultipartUploads::new();
+                    let rs = action.request(&s3).await?;
+                    if let Some(uploads) = rs.upload {
+                        for upload in uploads {
+                            let dt = DateTime::parse_from_rfc3339(&upload.initiated)?;
+                            let initiated: DateTime<Local> = DateTime::from(dt);
+                            println!(
+                                "{} {} {}",
+                                format!("[{}]", initiated.format("%F %T %Z")).green(),
+                                upload.upload_id.yellow(),
+                                upload.key
+                            );
+                        }
+                    }
+                } else {
+                    let mut action = actions::ListObjectsV2::new();
+                    action.prefix = Some(String::from(""));
+                    let rs = action.request(&s3).await?;
+                    for object in rs.contents {
+                        let dt = DateTime::parse_from_rfc3339(&object.last_modified)?;
+                        let last_modified: DateTime<Local> = DateTime::from(dt);
+                        println!(
+                            "{} {:>10} {:<}",
+                            format!("[{}]", last_modified.format("%F %T %Z")).green(),
+                            bytesize::to_string(object.size, true).yellow(),
+                            object.key
+                        );
+                    }
                 }
             } else {
                 // list buckets
@@ -121,6 +141,15 @@ async fn main() -> Result<()> {
             } else {
                 let rs = upload(&s3, &key, &file, file_size, &db).await?;
                 println!("{}", rs);
+            }
+        }
+        Action::DeleteObject { key, upload_id } => {
+            if upload_id.is_empty() {
+                let action = actions::DeleteObject::new(&key);
+                action.request(&s3).await?;
+            } else {
+                let action = actions::AbortMultipartUpload::new(&key, &upload_id);
+                action.request(&s3).await?;
             }
         }
     }
