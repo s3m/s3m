@@ -5,7 +5,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools};
 use s3m::s3m::{multipart_upload, prebuffer, upload, Db};
 use s3m::s3m::{start, Action};
-use std::fs::metadata;
+use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_PART_SIZE: u64 = 5_368_709_120;
@@ -70,18 +70,22 @@ async fn main() -> Result<()> {
         // Upload
         Action::PutObject {
             mut buffer,
+            bufferpath,
             file,
             home_dir,
             key,
             stdin,
             threads,
         } => {
+            // upload from stdin
             if stdin {
-                return prebuffer(buffer).await;
+                prebuffer(buffer, &bufferpath).await?;
+                //                fs::remove_dir_all(&bufferpath)?;
+                return Ok(());
             }
 
             // Get file size and last modified time
-            let (file_size, file_mtime) = metadata(&file)
+            let (file_size, file_mtime) = fs::metadata(&file)
                 .map(|m| {
                     if m.is_file() {
                         Ok(m)

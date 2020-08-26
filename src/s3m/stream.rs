@@ -5,12 +5,12 @@ use tokio::io::stdin;
 use tokio::prelude::*;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
-pub async fn prebuffer(buffer: u64) -> Result<()> {
+pub async fn prebuffer(buffer: u64, bufferpath: &str) -> Result<()> {
     let mut i: usize = 0;
     let mut size: u64 = 0;
     let mut stream = FramedRead::new(stdin(), BytesCodec::new());
     loop {
-        let mut f = File::create(format!("/tmp/c/chunk_{}", i)).await?;
+        let mut f = File::create(format!("{}/chunk_{}", bufferpath, i)).await?;
         while let Some(bytes) = stream.try_next().await? {
             size += bytes.len() as u64;
             f.write_all(&bytes).await?;

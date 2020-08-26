@@ -16,6 +16,7 @@ pub enum Action {
     },
     PutObject {
         buffer: u64,
+        bufferpath: String,
         file: String,
         home_dir: PathBuf,
         key: String,
@@ -55,6 +56,21 @@ fn is_file(s: String) -> Result<(), String> {
     }
 }
 
+fn is_empty_dir(s: String) -> Result<(), String> {
+    let is_empty = PathBuf::from(&s)
+        .read_dir()
+        .map(|mut i| i.next().is_none())
+        .map_err(|e| e.to_string())?;
+    if is_empty {
+        Ok(())
+    } else {
+        Err(format!(
+            "verify that the directory {} exists and is empty",
+            s
+        ))
+    }
+}
+
 pub fn start() -> Result<(S3, Action)> {
     let home_dir = match dirs::home_dir() {
         Some(h) => h,
@@ -70,6 +86,9 @@ pub fn start() -> Result<(S3, Action)> {
     } else {
         num_cpus::get().to_string()
     };
+
+    let default_bufferpath = format!("{}/.s3m/buffer", home_dir.display());
+    fs::create_dir_all(&default_bufferpath)?;
 
     let matches = App::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
@@ -89,6 +108,15 @@ pub fn start() -> Result<(S3, Action)> {
                 .short("b")
                 .required(true)
                 .validator(is_num),
+        )
+        .arg(
+            Arg::with_name("bufferpath")
+                .help("Path used for storing STDIN streams before uploading them")
+                .long("bufferpath")
+                .default_value(&default_bufferpath)
+                .short("p")
+                .required(true)
+                .validator(is_empty_dir),
         )
         .arg(
             Arg::with_name("threads")
@@ -111,7 +139,7 @@ pub fn start() -> Result<(S3, Action)> {
         )
         .arg(
             Arg::with_name("arguments")
-                .help("/path/to/file <host>/bucket/<file>")
+                .help("/path/to/file <s3 provider>/<bucket>/<file>")
                 .required_unless_one(&["rm", "ls", "remove"])
                 .min_values(1)
                 .max_values(2),
@@ -133,7 +161,7 @@ pub fn start() -> Result<(S3, Action)> {
         .subcommand(
             SubCommand::with_name("rm").about("Delete objects and aborts a multipart upload").arg(
                 Arg::with_name("arguments")
-                    .help("<s3 provider>/bucket/<file>")
+                    .help("<s3 provider>/<bucket>/<file>")
                     .required(true)
                     .min_values(1),
             )
@@ -164,7 +192,7 @@ pub fn start() -> Result<(S3, Action)> {
     }
 
     let buffer = matches.value_of("buffer").unwrap();
-
+    let bufferpath = matches.value_of("bufferpath").unwrap();
     let threads = matches.value_of("threads").unwrap().parse::<usize>()?;
 
     // Host, Bucket, Path
@@ -269,6 +297,7 @@ pub fn start() -> Result<(S3, Action)> {
                 s3,
                 Action::PutObject {
                     buffer: chunk_size,
+                    bufferpath: bufferpath.to_string(),
                     file: input_file.to_string(),
                     home_dir,
                     key,
