@@ -3,7 +3,7 @@ use chrono::{DateTime, Local};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools};
-use s3m::s3m::{multipart_upload, prebuffer, upload, Db};
+use s3m::s3m::{dispatcher, multipart_upload, upload, Db};
 use s3m::s3m::{start, Action};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -70,7 +70,6 @@ async fn main() -> Result<()> {
         // Upload
         Action::PutObject {
             mut buffer,
-            bufferpath,
             file,
             home_dir,
             key,
@@ -79,72 +78,70 @@ async fn main() -> Result<()> {
         } => {
             // upload from stdin
             if stdin {
-                prebuffer(buffer, &bufferpath).await?;
-                //                fs::remove_dir_all(&bufferpath)?;
-                return Ok(());
-            }
-
-            // Get file size and last modified time
-            let (file_size, file_mtime) = fs::metadata(&file)
-                .map(|m| {
-                    if m.is_file() {
-                        Ok(m)
-                    } else {
-                        Err(anyhow!(
+                dispatcher().await?;
+            } else {
+                // Get file size and last modified time
+                let (file_size, file_mtime) = fs::metadata(&file)
+                    .map(|m| {
+                        if m.is_file() {
+                            Ok(m)
+                        } else {
+                            Err(anyhow!(
                             "cannot read the file: {}, verify file exist and is not a directory.",
                             &file
                         ))
-                    }
-                })?
-                .and_then(|md| {
-                    Ok((
-                        md.len(),
-                        md.modified()
-                            .unwrap_or_else(|_| SystemTime::now())
-                            .duration_since(UNIX_EPOCH)
-                            .map(|d| d.as_millis())?,
-                    ))
-                })?;
+                        }
+                    })?
+                    .and_then(|md| {
+                        Ok((
+                            md.len(),
+                            md.modified()
+                                .unwrap_or_else(|_| SystemTime::now())
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_millis())?,
+                        ))
+                    })?;
 
-            // <https://aws.amazon.com/blogs/aws/amazon-s3-object-size-limit/>
-            if file_size > MAX_FILE_SIZE {
-                return Err(anyhow!("object size limit 5 TB"));
-            }
+                // <https://aws.amazon.com/blogs/aws/amazon-s3-object-size-limit/>
+                if file_size > MAX_FILE_SIZE {
+                    return Err(anyhow!("object size limit 5 TB"));
+                }
 
-            // calculate the chunk size
-            let mut parts = file_size / buffer;
-            while parts > MAX_PARTS_PER_UPLOAD {
-                buffer *= 2;
-                parts = file_size / buffer;
-            }
+                // calculate the chunk size
+                let mut parts = file_size / buffer;
+                while parts > MAX_PARTS_PER_UPLOAD {
+                    buffer *= 2;
+                    parts = file_size / buffer;
+                }
 
-            if buffer > MAX_PART_SIZE {
-                return Err(anyhow!("max part size 5 GB"));
-            }
+                if buffer > MAX_PART_SIZE {
+                    return Err(anyhow!("max part size 5 GB"));
+                }
 
-            let checksum = checksum(&file)?;
+                let checksum = checksum(&file)?;
 
-            let db = Db::new(&s3, &key, &checksum, file_mtime, &home_dir)
-                .context("could not create stream tree, try option \"-r\"")?;
+                let db = Db::new(&s3, &key, &checksum, file_mtime, &home_dir)
+                    .context("could not create stream tree, try option \"-r\"")?;
 
-            // check if file has been uploded already
-            let etag = &db
-                .check()?
-                .context("could not query db, try option \"-r\", to clean it");
-            if let Ok(etag) = etag {
-                println!("{}", etag);
-                return Ok(());
-            };
+                // check if file has been uploded already
+                let etag = &db
+                    .check()?
+                    .context("could not query db, try option \"-r\", to clean it");
+                if let Ok(etag) = etag {
+                    println!("{}", etag);
+                    return Ok(());
+                };
 
-            // upload in multipart
-            if file_size > buffer {
-                let rs = multipart_upload(&s3, &key, &file, file_size, buffer, threads, &db)
-                    .await
-                    .context("multipart upload failed")?;
-                println!("{}", rs);
-            } else {
-                let rs = upload(&s3, &key, &file, file_size, &db).await?;
-                println!("{}", rs);
+                // upload in multipart
+                if file_size > buffer {
+                    let rs = multipart_upload(&s3, &key, &file, file_size, buffer, threads, &db)
+                        .await
+                        .context("multipart upload failed")?;
+                    println!("{}", rs);
+                } else {
+                    let rs = upload(&s3, &key, &file, file_size, &db).await?;
+                    println!("{}", rs);
+                }
             }
         }
         Action::DeleteObject { key, upload_id } => {

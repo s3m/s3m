@@ -11,7 +11,7 @@ mod db;
 pub use self::db::Db;
 
 mod stream;
-pub use self::stream::prebuffer;
+pub use self::stream::dispatcher;
 
 mod part;
 pub use self::part::Part;
