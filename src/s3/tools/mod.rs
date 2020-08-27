@@ -39,7 +39,7 @@ pub async fn sha256_md5_digest(file_path: &str) -> Result<(String, String, usize
 /// # Errors
 ///
 /// Will return `Err` if can not open the file
-pub async fn sha256_md5_multipart(
+pub async fn sha256_md5_digest_multipart(
     file_path: &str,
     seek: u64,
     chunk: u64,

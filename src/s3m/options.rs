@@ -15,7 +15,7 @@ pub enum Action {
         list_multipart_uploads: bool,
     },
     PutObject {
-        buffer: u64,
+        buf_size: u64,
         file: String,
         home_dir: PathBuf,
         key: String,
@@ -83,7 +83,7 @@ pub fn start() -> Result<(S3, Action)> {
         )
         .arg(
             Arg::with_name("buffer")
-                .help("Part size in bytes, max value: 5 GB (5,368,709,120 bytes)")
+                .help("Buffer size in bytes, max value: 5 GB (5,368,709,120 bytes)")
                 .long("buffer")
                 .default_value("10485760")
                 .short("b")
@@ -163,7 +163,7 @@ pub fn start() -> Result<(S3, Action)> {
         exit(0);
     }
 
-    let buffer = matches.value_of("buffer").unwrap();
+    let buf_size = matches.value_of("buffer").unwrap();
     let threads = matches.value_of("threads").unwrap().parse::<usize>()?;
 
     // Host, Bucket, Path
@@ -263,11 +263,11 @@ pub fn start() -> Result<(S3, Action)> {
             let upload_id = sub_m.value_of("UploadId").unwrap_or_default().to_string();
             Ok((s3, Action::DeleteObject { key, upload_id }))
         } else {
-            let chunk_size = buffer.parse::<u64>()?;
+            let chunk_size = buf_size.parse::<u64>()?;
             Ok((
                 s3,
                 Action::PutObject {
-                    buffer: chunk_size,
+                    buf_size: chunk_size,
                     file: input_file.to_string(),
                     home_dir,
                     key,

@@ -3,7 +3,7 @@ use chrono::{DateTime, Local};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools};
-use s3m::s3m::{dispatcher, multipart_upload, upload, Db};
+use s3m::s3m::{multipart_upload, stream, upload, Db};
 use s3m::s3m::{start, Action};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
         }
         // Upload
         Action::PutObject {
-            mut buffer,
+            mut buf_size,
             file,
             home_dir,
             key,
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
         } => {
             // upload from stdin
             if stdin {
-                dispatcher().await?;
+                stream(&s3, &key).await?;
             } else {
                 // Get file size and last modified time
                 let (file_size, file_mtime) = fs::metadata(&file)
@@ -108,13 +108,13 @@ async fn main() -> Result<()> {
                 }
 
                 // calculate the chunk size
-                let mut parts = file_size / buffer;
+                let mut parts = file_size / buf_size;
                 while parts > MAX_PARTS_PER_UPLOAD {
-                    buffer *= 2;
-                    parts = file_size / buffer;
+                    buf_size *= 2;
+                    parts = file_size / buf_size;
                 }
 
-                if buffer > MAX_PART_SIZE {
+                if buf_size > MAX_PART_SIZE {
                     return Err(anyhow!("max part size 5 GB"));
                 }
 
@@ -133,8 +133,8 @@ async fn main() -> Result<()> {
                 };
 
                 // upload in multipart
-                if file_size > buffer {
-                    let rs = multipart_upload(&s3, &key, &file, file_size, buffer, threads, &db)
+                if file_size > buf_size {
+                    let rs = multipart_upload(&s3, &key, &file, file_size, buf_size, threads, &db)
                         .await
                         .context("multipart upload failed")?;
                     println!("{}", rs);

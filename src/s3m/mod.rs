@@ -11,7 +11,7 @@ mod db;
 pub use self::db::Db;
 
 mod stream;
-pub use self::stream::dispatcher;
+pub use self::stream::stream;
 
 mod part;
 pub use self::part::Part;
