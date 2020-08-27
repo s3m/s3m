@@ -1239,6 +1239,7 @@ dependencies = [
  "atty",
  "base64 0.12.3",
  "blake3",
+ "bytes",
  "bytesize",
  "chrono",
  "clap",
