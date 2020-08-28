@@ -35,4 +35,4 @@ upload without the need to start all over again.
 
 This operation aborts a multipart upload:
 
-    s3m ls -m <s3>/<bucket> | awk '{system("s3m <s3>/<bucket>/"$5 "-a "$4);}'
+    s3m ls -m <s3>/<bucket> | awk '{system("s3m rm <s3>/<bucket>/"$5 "-a "$4);}'
