@@ -1,4 +1,4 @@
-## [Unreleased]
+## 0.3.0  🚲
 * Using [blake3](https://crates.io/crates/blake3), for creating the file checksum, thanks @oconnor663
 * Using [sled](http://sled.rs/) with [serde_cbor](https://crates.io/crates/serde_cbor) to keep track of the uploaded files. thanks @spacejam, @D1plo1d
 * Multipart uploads can be resumed and is the default behavior.
@@ -7,6 +7,7 @@
 * Added option `ls -m` to list in-progress multipart uploads.
 * New sub-command `rm` to remove objects and abort a multipart upload.
 * `ls` list format (green, yellow, key) "date, size, file name"
+* STDIN pipe/stream uploads (WIP #17)
 
 
 ## 0.2.0

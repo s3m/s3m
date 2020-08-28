@@ -15,7 +15,7 @@ pub enum Action {
         list_multipart_uploads: bool,
     },
     PutObject {
-        buf_size: u64,
+        buf_size: usize,
         file: String,
         home_dir: PathBuf,
         key: String,
@@ -263,7 +263,7 @@ pub fn start() -> Result<(S3, Action)> {
             let upload_id = sub_m.value_of("UploadId").unwrap_or_default().to_string();
             Ok((s3, Action::DeleteObject { key, upload_id }))
         } else {
-            let chunk_size = buf_size.parse::<u64>()?;
+            let chunk_size = buf_size.parse::<usize>()?;
             Ok((
                 s3,
                 Action::PutObject {

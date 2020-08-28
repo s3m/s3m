@@ -8,9 +8,9 @@ use s3m::s3m::{start, Action};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MAX_PART_SIZE: u64 = 5_368_709_120;
-const MAX_FILE_SIZE: u64 = 5_497_558_138_880;
-const MAX_PARTS_PER_UPLOAD: u64 = 10_000;
+const MAX_PART_SIZE: usize = 5_368_709_120;
+const MAX_FILE_SIZE: usize = 5_497_558_138_880;
+const MAX_PARTS_PER_UPLOAD: usize = 10_000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
         } => {
             // upload from stdin
             if stdin {
-                let etag = stream(&s3, &key).await?;
+                let etag = stream(&s3, &key, buf_size).await?;
                 println!("{}", etag);
             } else {
                 // Get file size and last modified time
@@ -104,15 +104,15 @@ async fn main() -> Result<()> {
                     })?;
 
                 // <https://aws.amazon.com/blogs/aws/amazon-s3-object-size-limit/>
-                if file_size > MAX_FILE_SIZE {
+                if file_size > MAX_FILE_SIZE as u64 {
                     return Err(anyhow!("object size limit 5 TB"));
                 }
 
                 // calculate the chunk size
-                let mut parts = file_size / buf_size;
-                while parts > MAX_PARTS_PER_UPLOAD {
+                let mut parts = file_size / buf_size as u64;
+                while parts > MAX_PARTS_PER_UPLOAD as u64 {
                     buf_size *= 2;
-                    parts = file_size / buf_size;
+                    parts = file_size / buf_size as u64;
                 }
 
                 if buf_size > MAX_PART_SIZE {
@@ -134,10 +134,18 @@ async fn main() -> Result<()> {
                 };
 
                 // upload in multipart
-                if file_size > buf_size {
-                    let rs = multipart_upload(&s3, &key, &file, file_size, buf_size, threads, &db)
-                        .await
-                        .context("multipart upload failed")?;
+                if file_size > buf_size as u64 {
+                    let rs = multipart_upload(
+                        &s3,
+                        &key,
+                        &file,
+                        file_size,
+                        buf_size as u64,
+                        threads,
+                        &db,
+                    )
+                    .await
+                    .context("multipart upload failed")?;
                     println!("{}", rs);
                 } else {
                     let rs = upload(&s3, &key, &file, file_size, &db).await?;

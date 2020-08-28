@@ -7,8 +7,6 @@ use tokio::io::stdin;
 use tokio::prelude::*;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
-const BUFFER_SIZE: usize = 1024 * 1024 * 5;
-
 enum StreamWriter {
     Init {
         buf_size: usize,
@@ -27,13 +25,13 @@ enum StreamWriter {
     },
 }
 
-pub async fn stream(s3: &S3, key: &str) -> Result<String> {
+pub async fn stream(s3: &S3, key: &str, buf_size: usize) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key);
     let response = action.request(s3).await?;
 
     let writer = StreamWriter::Init {
-        buf_size: BUFFER_SIZE,
+        buf_size,
         key: key.to_string(),
         s3: s3.clone(),
         upload_id: response.upload_id,
@@ -100,14 +98,13 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
             part_number,
             s3,
             upload_id,
-        } => match buffer.len() + bytes.len() >= buf_size {
-            true => {
+        } => {
+            if buffer.len() + bytes.len() >= buf_size {
                 let mut new_buf = Vec::with_capacity(buf_size);
                 new_buf.write_all(&bytes).await?;
                 let action = actions::StreamPart::new(&key, buffer, part_number, &upload_id);
                 let etag = action.request(&s3).await.unwrap();
                 etags.push(etag);
-
                 Ok(StreamWriter::Uploading {
                     buf_size,
                     buffer: new_buf,
@@ -117,8 +114,7 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
                     s3,
                     upload_id,
                 })
-            }
-            false => {
+            } else {
                 buffer.write_all(&bytes).await?;
                 Ok(StreamWriter::Uploading {
                     buf_size,
@@ -130,7 +126,7 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
                     upload_id,
                 })
             }
-        },
+        }
         _ => todo!(),
     }
 }
