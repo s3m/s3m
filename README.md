@@ -30,3 +30,9 @@ the procedure of the data stream to so that even if the server lost network
 connectivity, the stream could still be received and queued so that when the
 network re-establishes it can continue where it was left and resume the
 upload without the need to start all over again.
+
+### AbortMultipartUpload
+
+This operation aborts a multipart upload:
+
+    s3m ls -m <s3>/<bucket> | awk '{system("s3m <s3>/<bucket>/"$5 "-a "$4);}'

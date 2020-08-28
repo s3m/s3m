@@ -2,59 +2,75 @@ use crate::s3::{actions, S3};
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::stream::TryStreamExt;
+use std::collections::BTreeMap;
 use tokio::io::stdin;
 use tokio::prelude::*;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
-// const BUFFER_SIZE: usize = 1024 * 1024 * 5;
+const BUFFER_SIZE: usize = 1024 * 1024 * 5;
 
 enum StreamWriter {
     Init {
         buf_size: usize,
         key: String,
+        s3: S3,
         upload_id: String,
     },
     Uploading {
-        key: String,
-        upload_id: String,
         buf_size: usize,
-        part_number: u16,
-        etags: Vec<String>,
         buffer: Vec<u8>,
+        etags: Vec<String>,
+        key: String,
+        part_number: u16,
+        s3: S3,
+        upload_id: String,
     },
 }
 
-pub async fn stream(s3: &S3, key: &str) -> Result<()> {
+pub async fn stream(s3: &S3, key: &str) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key);
     let response = action.request(s3).await?;
 
     let writer = StreamWriter::Init {
-        buf_size: 1024 * 1024 * 10,
-        upload_id: response.upload_id,
+        buf_size: BUFFER_SIZE,
         key: key.to_string(),
+        s3: s3.clone(),
+        upload_id: response.upload_id,
     };
 
-    // Turn an AsyncRead into a stream of Result<BytesMut, Error>.
+    // try_fold will pass writer to fold_fn until there are no more bytes to
+    // read.  FrameRead return a stream of Result<BytesMut, Error>.
     let result = FramedRead::new(stdin(), BytesCodec::new())
         .try_fold(writer, fold_fn)
         .await?;
 
+    // compleat the multipart upload
     match result {
         StreamWriter::Uploading {
-            key,
-            upload_id,
-            buf_size,
-            part_number,
+            buf_size: _,
             buffer,
-            etags,
+            mut etags,
+            key,
+            part_number,
+            s3,
+            upload_id,
         } => {
-            println!("remaining: {}", buffer.len());
+            let action = actions::StreamPart::new(&key, buffer, part_number, &upload_id);
+            let etag = action.request(&s3).await.unwrap();
+            etags.push(etag);
+
+            let uploaded: BTreeMap<u16, actions::Part> = etags
+                .into_iter()
+                .zip(1..)
+                .map(|(etag, number)| (number, actions::Part { etag, number }))
+                .collect();
+            let action = actions::CompleteMultipartUpload::new(&key, &upload_id, uploaded);
+            let rs = action.request(&s3).await?;
+            Ok(format!("ETag: {}", rs.e_tag))
         }
         _ => todo!(),
     }
-
-    Ok(())
 }
 
 async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, std::io::Error> {
@@ -62,6 +78,7 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
         StreamWriter::Init {
             buf_size,
             key,
+            s3,
             upload_id,
         } => StreamWriter::Uploading {
             buf_size,
@@ -69,6 +86,7 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
             etags: Vec::new(),
             key,
             part_number: 1,
+            s3,
             upload_id,
         },
         _ => writer,
@@ -80,11 +98,15 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
             mut etags,
             key,
             part_number,
+            s3,
             upload_id,
         } => match buffer.len() + bytes.len() >= buf_size {
             true => {
                 let mut new_buf = Vec::with_capacity(buf_size);
                 new_buf.write_all(&bytes).await?;
+                let action = actions::StreamPart::new(&key, buffer, part_number, &upload_id);
+                let etag = action.request(&s3).await.unwrap();
+                etags.push(etag);
 
                 Ok(StreamWriter::Uploading {
                     buf_size,
@@ -92,6 +114,7 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
                     etags,
                     key,
                     part_number: part_number + 1,
+                    s3,
                     upload_id,
                 })
             }
@@ -103,6 +126,7 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
                     etags,
                     key,
                     part_number,
+                    s3,
                     upload_id,
                 })
             }

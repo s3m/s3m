@@ -33,6 +33,9 @@ pub use self::createmultipartupload::CreateMultipartUpload;
 mod uploadpart;
 pub use self::uploadpart::UploadPart;
 
+mod streampart;
+pub use self::streampart::StreamPart;
+
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html>
 mod completemultipartupload;
 pub use self::completemultipartupload::{CompleteMultipartUpload, Part};

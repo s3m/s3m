@@ -111,3 +111,25 @@ pub async fn body(
     let request = client.request(method, url).headers(headers).body(body);
     Ok(request.send().await?)
 }
+
+/// # Errors
+///
+/// Will return `Err` if can not make the request
+// TODO:  how to create chunks from body without consuming memory per chunk
+// https://www.reddit.com/r/rust/comments/8bn1p3/is_it_possible_to_obtain_multiple_vecu8_chunks/?utm_source=share&utm_medium=web2x&context=3
+pub async fn stream(
+    url: Url,
+    method: &'static str,
+    headers: &BTreeMap<String, String>,
+    body: Vec<u8>,
+) -> Result<Response> {
+    let method = Method::from_bytes(method.as_bytes())?;
+    let headers = headers
+        .iter()
+        .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
+        .collect::<Result<HeaderMap>>()?;
+
+    let client = Client::new();
+    let request = client.request(method, url).headers(headers).body(body);
+    Ok(request.send().await?)
+}

@@ -6,8 +6,7 @@ pub mod responses;
 pub mod signature;
 pub mod tools;
 pub use self::{credentials::Credentials, region::Region, signature::Signature};
-
-use crate::s3::tools::sha256_digest_string;
+use crate::s3::tools::sha256_digest;
 
 #[derive(Debug, Clone)]
 pub struct S3 {
@@ -42,6 +41,6 @@ impl S3 {
         if let Some(bucket) = &self.bucket {
             hash.push_str(bucket);
         }
-        sha256_digest_string(&hash)
+        sha256_digest(&hash)
     }
 }

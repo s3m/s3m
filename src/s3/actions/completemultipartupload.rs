@@ -73,7 +73,7 @@ impl<'a> CompleteMultipartUpload<'a> {
             ..Default::default()
         };
         let body = to_string(&parts).unwrap();
-        let digest = tools::sha256_digest_string(&body);
+        let digest = tools::sha256_digest(&body);
         let (url, headers) = &self.sign(s3, &digest, None, Some(body.len()))?;
         let response = request::body(url.clone(), self.http_verb(), headers, body).await?;
 

@@ -66,8 +66,13 @@ pub async fn sha256_md5_digest_multipart(
 }
 
 #[must_use]
-pub fn sha256_digest_string(string: &str) -> String {
-    write_hex_bytes(digest::digest(&digest::SHA256, string.as_bytes()).as_ref())
+pub fn sha256_digest(input: impl AsRef<[u8]>) -> String {
+    write_hex_bytes(digest::digest(&digest::SHA256, input.as_ref()).as_ref())
+}
+
+pub fn base64_md5(input: impl AsRef<[u8]>) -> String {
+    let md5_digest = md5::compute(input);
+    base64::encode(md5_digest.as_ref())
 }
 
 #[must_use]

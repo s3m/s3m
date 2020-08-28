@@ -1,7 +1,7 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
-use crate::s3::tools::{sha256_digest_string, sha256_hmac, write_hex_bytes};
+use crate::s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes};
 use crate::s3::S3;
 use anyhow::Result;
 use chrono::prelude::{DateTime, Utc};
@@ -107,7 +107,7 @@ impl<'a> Signature<'a> {
             &current_date,
             self.auth.region.name()
         );
-        let canonical_request_hash = sha256_digest_string(&canonical_request);
+        let canonical_request_hash = sha256_digest(&canonical_request);
         let string_to_sign = string_to_sign(
             &current_datetime.to_string(),
             &scope,

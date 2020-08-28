@@ -78,7 +78,8 @@ async fn main() -> Result<()> {
         } => {
             // upload from stdin
             if stdin {
-                stream(&s3, &key).await?;
+                let etag = stream(&s3, &key).await?;
+                println!("{}", etag);
             } else {
                 // Get file size and last modified time
                 let (file_size, file_mtime) = fs::metadata(&file)
