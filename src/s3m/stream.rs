@@ -6,25 +6,25 @@ use std::collections::BTreeMap;
 use tokio::io::stdin;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
-enum StreamWriter {
+enum StreamWriter<'a> {
     Init {
         buf_size: usize,
-        key: String,
-        s3: S3,
-        upload_id: String,
+        key: &'a str,
+        s3: &'a S3,
+        upload_id: &'a str,
     },
     Uploading {
         buf_size: usize,
         buffer: BytesMut,
         etags: Vec<String>,
-        key: String,
+        key: &'a str,
         part_number: u16,
-        s3: S3,
-        upload_id: String,
+        s3: &'a S3,
+        upload_id: &'a str,
     },
 }
 
-pub async fn stream(s3: &S3, key: &str, buf_size: usize) -> Result<String> {
+pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key);
     let response = action.request(s3).await?;
@@ -33,9 +33,9 @@ pub async fn stream(s3: &S3, key: &str, buf_size: usize) -> Result<String> {
     // TODO use references instead of copy the values
     let writer = StreamWriter::Init {
         buf_size,
-        key: key.to_string(),
-        s3: s3.clone(),
-        upload_id: response.upload_id,
+        key,
+        s3,
+        upload_id: &response.upload_id,
     };
 
     // try_fold will pass writer to fold_fn until there are no more bytes to
@@ -55,8 +55,8 @@ pub async fn stream(s3: &S3, key: &str, buf_size: usize) -> Result<String> {
             s3,
             upload_id,
         } => {
-            let action = actions::StreamPart::new(&key, buffer.freeze(), part_number, &upload_id);
-            let etag = action.request(&s3).await.unwrap();
+            let action = actions::StreamPart::new(key, buffer.freeze(), part_number, upload_id);
+            let etag = action.request(s3).await.unwrap();
             etags.push(etag);
 
             // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html
@@ -66,15 +66,18 @@ pub async fn stream(s3: &S3, key: &str, buf_size: usize) -> Result<String> {
                 .map(|(etag, number)| (number, actions::Part { etag, number }))
                 .collect();
 
-            let action = actions::CompleteMultipartUpload::new(&key, &upload_id, uploaded);
-            let rs = action.request(&s3).await?;
+            let action = actions::CompleteMultipartUpload::new(key, upload_id, uploaded);
+            let rs = action.request(s3).await?;
             Ok(format!("ETag: {}", rs.e_tag))
         }
         _ => todo!(),
     }
 }
 
-async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, std::io::Error> {
+async fn fold_fn<'a>(
+    writer: StreamWriter<'_>,
+    bytes: BytesMut,
+) -> Result<StreamWriter<'_>, std::io::Error> {
     let writer = match writer {
         StreamWriter::Init {
             buf_size,
@@ -108,10 +111,9 @@ async fn fold_fn(writer: StreamWriter, bytes: BytesMut) -> Result<StreamWriter, 
                 new_buf.put(bytes);
 
                 // upload the old buffer
-                let action =
-                    actions::StreamPart::new(&key, buffer.freeze(), part_number, &upload_id);
+                let action = actions::StreamPart::new(key, buffer.freeze(), part_number, upload_id);
                 // TODO remove unwrap
-                let etag = action.request(&s3).await.unwrap();
+                let etag = action.request(s3).await.unwrap();
                 etags.push(etag);
 
                 // loop again until buffer is full

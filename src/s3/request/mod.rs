@@ -2,10 +2,9 @@
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
 // https://stackoverflow.com/a/63374116/1135424
-// use futures::future::Either;
-// use futures::stream::TryStreamExt;
 use anyhow::Result;
 use bytes::Bytes;
+use crossbeam::channel::Sender;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Method, Response,
@@ -15,7 +14,6 @@ use std::io::SeekFrom;
 use tokio::fs::File;
 use tokio::prelude::*;
 use tokio::stream::StreamExt;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 
@@ -27,7 +25,7 @@ pub async fn request(
     method: &'static str,
     headers: &BTreeMap<String, String>,
     file: Option<String>,
-    sender: Option<UnboundedSender<usize>>,
+    sender: Option<Sender<usize>>,
 ) -> Result<Response> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
@@ -67,7 +65,7 @@ pub async fn request(
 /// # Errors
 ///
 /// Will return `Err` if can not make the request
-pub async fn multipart(
+pub async fn multipart_upload(
     url: Url,
     method: &'static str,
     headers: &BTreeMap<String, String>,
@@ -96,29 +94,7 @@ pub async fn multipart(
 /// # Errors
 ///
 /// Will return `Err` if can not make the request
-pub async fn body(
-    url: Url,
-    method: &'static str,
-    headers: &BTreeMap<String, String>,
-    body: String,
-) -> Result<Response> {
-    let method = Method::from_bytes(method.as_bytes())?;
-    let headers = headers
-        .iter()
-        .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
-        .collect::<Result<HeaderMap>>()?;
-
-    let client = Client::new();
-    let request = client.request(method, url).headers(headers).body(body);
-    Ok(request.send().await?)
-}
-
-/// # Errors
-///
-/// Will return `Err` if can not make the request
-// TODO:  how to create chunks from body without consuming memory per chunk
-// https://www.reddit.com/r/rust/comments/8bn1p3/is_it_possible_to_obtain_multiple_vecu8_chunks/?utm_source=share&utm_medium=web2x&context=3
-pub async fn stream(
+pub async fn upload(
     url: Url,
     method: &'static str,
     headers: &BTreeMap<String, String>,

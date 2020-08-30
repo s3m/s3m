@@ -3,14 +3,14 @@ use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
+use crossbeam::channel::Sender;
 use std::collections::BTreeMap;
-use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Default)]
 pub struct PutObject<'a> {
     key: &'a str,
     file: &'a str,
-    sender: Option<UnboundedSender<usize>>,
+    sender: Option<Sender<usize>>,
     pub x_amz_acl: Option<String>,
     pub cache_control: Option<String>,
     pub content_disposition: Option<String>,
@@ -40,7 +40,7 @@ pub struct PutObject<'a> {
 
 impl<'a> PutObject<'a> {
     #[must_use]
-    pub fn new(key: &'a str, file: &'a str, sender: Option<UnboundedSender<usize>>) -> Self {
+    pub fn new(key: &'a str, file: &'a str, sender: Option<Sender<usize>>) -> Self {
         Self {
             key,
             file,

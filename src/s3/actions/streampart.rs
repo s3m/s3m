@@ -41,7 +41,7 @@ impl<'a> StreamPart<'a> {
         let md5 = tools::base64_md5(&self.stream);
 
         let (url, headers) = &self.sign(s3, &sha256, Some(&md5), None)?;
-        let response = request::stream(
+        let response = request::upload(
             url.clone(),
             self.http_verb(),
             headers,
