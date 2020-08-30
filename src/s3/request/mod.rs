@@ -5,6 +5,7 @@
 // use futures::future::Either;
 // use futures::stream::TryStreamExt;
 use anyhow::Result;
+use bytes::Bytes;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Method, Response,
@@ -121,7 +122,7 @@ pub async fn stream(
     url: Url,
     method: &'static str,
     headers: &BTreeMap<String, String>,
-    body: Vec<u8>,
+    body: Bytes,
 ) -> Result<Response> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers

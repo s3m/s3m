@@ -3,12 +3,13 @@ use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Clone)]
 pub struct StreamPart<'a> {
     key: &'a str,
-    stream: Vec<u8>,
+    stream: Bytes,
     part_number: String,
     upload_id: &'a str,
     pub content_length: Option<String>,
@@ -21,7 +22,7 @@ pub struct StreamPart<'a> {
 
 impl<'a> StreamPart<'a> {
     #[must_use]
-    pub fn new(key: &'a str, stream: Vec<u8>, part_number: u16, upload_id: &'a str) -> Self {
+    pub fn new(key: &'a str, stream: Bytes, part_number: u16, upload_id: &'a str) -> Self {
         let pn = part_number.to_string();
         Self {
             key,
@@ -39,9 +40,14 @@ impl<'a> StreamPart<'a> {
         let sha256 = tools::sha256_digest(&self.stream);
         let md5 = tools::base64_md5(&self.stream);
 
-        let (url, headers) = &self.sign(s3, &sha256, Some(&md5), Some(self.stream.len()))?;
-        let response =
-            request::stream(url.clone(), self.http_verb(), headers, self.stream.clone()).await?;
+        let (url, headers) = &self.sign(s3, &sha256, Some(&md5), None)?;
+        let response = request::stream(
+            url.clone(),
+            self.http_verb(),
+            headers,
+            self.stream.to_owned(),
+        )
+        .await?;
         if response.status().is_success() {
             match response.headers().get("ETag") {
                 Some(etag) => Ok(etag.to_str()?.to_string()),
