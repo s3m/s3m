@@ -37,7 +37,7 @@ pub async fn request(
 
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
-        let mut stream = FramedRead::new(file, BytesCodec::new());
+        let mut stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 128);
         let stream = async_stream::stream! {
             if let Some(tx) = sender {
                 while let Some(bytes) = stream.next().await {
@@ -85,7 +85,7 @@ pub async fn multipart_upload(
     let mut file = File::open(&file).await?;
     file.seek(SeekFrom::Start(seek)).await?;
     let file = file.take(chunk);
-    let stream = FramedRead::new(file, BytesCodec::new());
+    let stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 128);
     let body = Body::wrap_stream(stream);
     let request = client.request(method, url).headers(headers).body(body);
     Ok(request.send().await?)

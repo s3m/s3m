@@ -18,7 +18,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 /// Will return `Err` if can not open the file
 pub async fn sha256_md5_digest(file_path: &str) -> Result<(String, String, usize)> {
     let file = File::open(file_path).await?;
-    let mut stream = FramedRead::new(file, BytesCodec::new());
+    let mut stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 256);
     let mut context_sha = Context::new(&SHA256);
     let mut context_md5 = md5::Context::new();
     let mut length: usize = 0;
@@ -47,7 +47,7 @@ pub async fn sha256_md5_digest_multipart(
     let mut file = File::open(file_path).await?;
     file.seek(SeekFrom::Start(seek)).await?;
     let file = file.take(chunk);
-    let mut stream = FramedRead::new(file, BytesCodec::new());
+    let mut stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 256);
     let mut context_sha = Context::new(&SHA256);
     let mut context_md5 = md5::Context::new();
     let mut length: usize = 0;
