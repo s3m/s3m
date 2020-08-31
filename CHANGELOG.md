@@ -1,7 +1,8 @@
 ## [Unreleased]
 * STDIN pipe/stream will upload the chunks in oneshot not using `Transfer-Encoding: chunked`
-* `{bytes}/{total_bytes}` in progressbar.
+* `{bytes}/{total_bytes}` in progress bar.
 * `UTC` timezone when listing objects/buckets.
+* Print uploaded bytes when streaming (#19).
 
 
 ## 0.3.0  🚲
