@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Utc};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools};
@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
                     if let Some(uploads) = rs.upload {
                         for upload in uploads {
                             let dt = DateTime::parse_from_rfc3339(&upload.initiated)?;
-                            let initiated: DateTime<Local> = DateTime::from(dt);
+                            let initiated: DateTime<Utc> = DateTime::from(dt);
                             println!(
                                 "{} {} {}",
                                 format!("[{}]", initiated.format("%F %T %Z")).green(),
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
                     let rs = action.request(&s3).await?;
                     for object in rs.contents {
                         let dt = DateTime::parse_from_rfc3339(&object.last_modified)?;
-                        let last_modified: DateTime<Local> = DateTime::from(dt);
+                        let last_modified: DateTime<Utc> = DateTime::from(dt);
                         println!(
                             "{} {:>10} {:<}",
                             format!("[{}]", last_modified.format("%F %T %Z")).green(),
@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
                 let rs = action.request(&s3).await?;
                 for bucket in rs.buckets.bucket {
                     let dt = DateTime::parse_from_rfc3339(&bucket.creation_date)?;
-                    let creation_date: DateTime<Local> = DateTime::from(dt);
+                    let creation_date: DateTime<Utc> = DateTime::from(dt);
                     println!(
                         "{} {:>10}/",
                         format!("[{}]", creation_date.format("%F %T %Z")).green(),
