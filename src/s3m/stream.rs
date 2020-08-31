@@ -2,6 +2,7 @@ use crate::s3::{actions, S3};
 use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use futures::stream::TryStreamExt;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::BTreeMap;
 use tokio::io::stdin;
 use tokio_util::codec::{BytesCodec, FramedRead};
@@ -12,6 +13,7 @@ enum StreamWriter<'a> {
         key: &'a str,
         s3: &'a S3,
         upload_id: &'a str,
+        pb: &'a ProgressBar,
     },
     Uploading {
         buf_size: usize,
@@ -21,6 +23,8 @@ enum StreamWriter<'a> {
         part_number: u16,
         s3: &'a S3,
         upload_id: &'a str,
+        count: usize,
+        pb: &'a ProgressBar,
     },
 }
 
@@ -29,6 +33,17 @@ pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<Str
     let action = actions::CreateMultipartUpload::new(key);
     let response = action.request(s3).await?;
 
+    let pb = ProgressBar::new_spinner();
+    pb.enable_steady_tick(200);
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .tick_strings(&[
+                "\u{2801}", "\u{2802}", "\u{2804}", "\u{2840}", "\u{2880}", "\u{2820}", "\u{2810}",
+                "\u{2808}", "",
+            ])
+            .template("{spinner:.green}  {msg}"),
+    );
+
     // initialize writer
     // TODO use references instead of copy the values
     let writer = StreamWriter::Init {
@@ -36,6 +51,7 @@ pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<Str
         key,
         s3,
         upload_id: &response.upload_id,
+        pb: &pb,
     };
 
     // try_fold will pass writer to fold_fn until there are no more bytes to
@@ -54,7 +70,15 @@ pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<Str
             part_number,
             s3,
             upload_id,
+            count,
+            pb,
         } => {
+            pb.finish_and_clear();
+            println!(
+                "Uploaded Bytes: {}",
+                bytesize::to_string(count as u64, true)
+            );
+
             let action = actions::StreamPart::new(key, buffer.freeze(), part_number, upload_id);
             let etag = action.request(s3).await.unwrap();
             etags.push(etag);
@@ -84,6 +108,7 @@ async fn fold_fn<'a>(
             key,
             s3,
             upload_id,
+            pb,
         } => StreamWriter::Uploading {
             buf_size,
             buffer: BytesMut::with_capacity(buf_size),
@@ -92,6 +117,8 @@ async fn fold_fn<'a>(
             part_number: 1,
             s3,
             upload_id,
+            count: 0,
+            pb,
         },
         _ => writer,
     };
@@ -104,9 +131,14 @@ async fn fold_fn<'a>(
             part_number,
             s3,
             upload_id,
+            mut count,
+            pb,
         } => {
             // if buffer size > buf_size create another buffer and upload the previous one
             if buffer.len() + bytes.len() >= buf_size {
+                count += bytes.len();
+                pb.set_message(&bytesize::to_string(count as u64, true));
+
                 let mut new_buf = BytesMut::with_capacity(buf_size);
                 new_buf.put(bytes);
 
@@ -125,8 +157,12 @@ async fn fold_fn<'a>(
                     part_number: part_number + 1,
                     s3,
                     upload_id,
+                    count,
+                    pb,
                 })
             } else {
+                count += bytes.len();
+                pb.set_message(&bytesize::to_string(count as u64, true));
                 buffer.put(bytes);
                 Ok(StreamWriter::Uploading {
                     buf_size,
@@ -136,6 +172,8 @@ async fn fold_fn<'a>(
                     part_number,
                     s3,
                     upload_id,
+                    count,
+                    pb,
                 })
             }
         }
