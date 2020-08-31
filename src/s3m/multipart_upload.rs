@@ -1,18 +1,19 @@
 use crate::s3::{actions, S3};
 use crate::s3m::{Db, Part};
 use anyhow::{anyhow, Result};
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::FuturesUnordered;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
 use std::time::Duration;
+use tokio::stream::StreamExt;
 use tokio::time;
 
-fn progress_bar_parts(parts: u64) -> ProgressBar {
-    let pb = ProgressBar::new(parts);
+fn progress_bar_parts(file_size: u64) -> ProgressBar {
+    let pb = ProgressBar::new(file_size);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:50.green/blue} {pos}/{len} ({eta})")
+            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})")
             // "█▉▊▋▌▍▎▏  ·"
             .progress_chars(
                 "\u{2588}\u{2589}\u{258a}\u{258b}\u{258c}\u{258d}\u{258e}\u{258f}  \u{b7}",
@@ -68,7 +69,8 @@ pub async fn multipart_upload(
     }
 
     // Upload parts progress bar
-    let pb = progress_bar_parts(db_parts.len() as u64);
+    let pb = progress_bar_parts(file_size);
+    pb.inc(db_uploaded.len() as u64 * chunk_size);
 
     let mut tasks = FuturesUnordered::new();
 
@@ -90,31 +92,27 @@ pub async fn multipart_upload(
     for part in xxx {
         //if let Ok(p) = bin_part {
         //   let part: Part = from_reader(&p[..])?;
-        tasks.push(async { upload_part(s3, key, file, &upload_id, sdb, part).await });
+        tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
         //}
 
         // limit to N threads
         if tasks.len() == threads {
-            while let Some(r) = tasks.next().await {
+            if let Some(r) = tasks.next().await {
                 // TODO better error handling
                 if r.is_ok() {
-                    pb.inc(1)
+                    pb.inc(chunk_size)
                 }
             }
         }
     }
 
     // consume remaining tasks
-    loop {
-        if let Some(r) = tasks.next().await {
-            if r.is_ok() {
-                pb.inc(1)
-            }
-        } else {
-            pb.finish();
-            break;
+    while let Some(r) = tasks.next().await {
+        if r.is_ok() {
+            pb.inc(chunk_size)
         }
     }
+    pb.finish();
 
     if !db_parts.is_empty() {
         return Err(anyhow!("could not upload all parts"));
