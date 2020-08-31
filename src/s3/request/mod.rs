@@ -4,7 +4,6 @@
 // https://stackoverflow.com/a/63374116/1135424
 use anyhow::Result;
 use bytes::Bytes;
-use crossbeam::channel::Sender;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Method, Response,
@@ -14,6 +13,7 @@ use std::io::SeekFrom;
 use tokio::fs::File;
 use tokio::prelude::*;
 use tokio::stream::StreamExt;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 
@@ -25,7 +25,7 @@ pub async fn request(
     method: &'static str,
     headers: &BTreeMap<String, String>,
     file: Option<String>,
-    sender: Option<Sender<usize>>,
+    sender: Option<UnboundedSender<usize>>,
 ) -> Result<Response> {
     let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
@@ -42,8 +42,9 @@ pub async fn request(
             if let Some(tx) = sender {
                 while let Some(bytes) = stream.next().await {
                     if let Ok(bytes) = &bytes {
-                        // TODO
-                        tx.send(bytes.len()).unwrap();
+                        if let Err(e) = tx.send(bytes.len()){
+                            eprintln!("{} - {}", e, bytes.len());
+                        }
                     }
                     yield bytes;
                 }

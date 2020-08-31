@@ -1,10 +1,10 @@
 use crate::s3::{actions, S3};
 use crate::s3m::Db;
 use anyhow::{anyhow, Result};
-use crossbeam::channel::{unbounded, Receiver};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Part {
@@ -14,11 +14,11 @@ struct Part {
     chunk: u64,
 }
 
-async fn progress_bar_bytes(file_size: u64, receiver: Receiver<usize>) -> Result<()> {
+async fn progress_bar_bytes(file_size: u64, mut receiver: UnboundedReceiver<usize>) -> Result<()> {
     let pb = ProgressBar::new(file_size);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({eta})")
+            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})")
             // "█▉▊▋▌▍▎▏  ·"
             .progress_chars(
                 "\u{2588}\u{2589}\u{258a}\u{258b}\u{258c}\u{258d}\u{258e}\u{258f}  \u{b7}",
@@ -26,7 +26,7 @@ async fn progress_bar_bytes(file_size: u64, receiver: Receiver<usize>) -> Result
     );
     // print progress bar
     let mut uploaded = 0;
-    while let Ok(i) = receiver.try_recv() {
+    while let Some(i) = receiver.recv().await {
         let new = min(uploaded + i as u64, file_size);
         uploaded = new;
         pb.set_position(new);
@@ -36,7 +36,7 @@ async fn progress_bar_bytes(file_size: u64, receiver: Receiver<usize>) -> Result
 }
 
 pub async fn upload(s3: &S3, key: &str, file: &str, file_size: u64, sdb: &Db) -> Result<String> {
-    let (sender, receiver) = unbounded();
+    let (sender, receiver) = unbounded_channel();
     let action = actions::PutObject::new(key, file, Some(sender));
     let response = tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(s3))?.1;
     let etag = &response.get("ETag").ok_or_else(|| anyhow!("no etag"))?;
