@@ -25,14 +25,10 @@ provider), therefore if for some reason the connection gets lost while streaming
 almost before finishing, the whole backup procedure could be corrupted and in
 worst scenario everything should start all over again.
 
-The aim of **s3m** is to make as much as possible "fault-tolerant" the storage
-the procedure of the data stream to so that even if the server lost network
+The aim of **s3m** is to make as much as possible “fault-tolerant” the storage
+procedure of the incoming stream so that even if the server lost network
 connectivity, the stream could still be received and queued so that when the
-network re-establishes it can continue where it was left and resume the
-upload without the need to start all over again.
+network re-establishes it can continue where it was left and resume the upload
+without the need to start all over again.
 
-### AbortMultipartUpload
-
-This operation aborts a multipart upload:
-
-    s3m ls -m <s3>/<bucket> | awk '{system("s3m rm <s3>/<bucket>/"$5" -a "$4);}'
+https://s3m.stream
