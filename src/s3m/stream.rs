@@ -11,20 +11,20 @@ enum StreamWriter<'a> {
     Init {
         buf_size: usize,
         key: &'a str,
+        pb: &'a ProgressBar,
         s3: &'a S3,
         upload_id: &'a str,
-        pb: &'a ProgressBar,
     },
     Uploading {
         buf_size: usize,
         buffer: BytesMut,
+        count: usize,
         etags: Vec<String>,
         key: &'a str,
         part_number: u16,
+        pb: &'a ProgressBar,
         s3: &'a S3,
         upload_id: &'a str,
-        count: usize,
-        pb: &'a ProgressBar,
     },
 }
 
@@ -65,13 +65,13 @@ pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<Str
         StreamWriter::Uploading {
             buf_size: _,
             buffer,
-            mut etags,
+            count,
             key,
+            mut etags,
             part_number,
+            pb,
             s3,
             upload_id,
-            count,
-            pb,
         } => {
             pb.finish_and_clear();
             println!(
@@ -106,33 +106,33 @@ async fn fold_fn<'a>(
         StreamWriter::Init {
             buf_size,
             key,
+            pb,
             s3,
             upload_id,
-            pb,
         } => StreamWriter::Uploading {
             buf_size,
             buffer: BytesMut::with_capacity(buf_size),
+            count: 0,
             etags: Vec::new(),
             key,
             part_number: 1,
+            pb,
             s3,
             upload_id,
-            count: 0,
-            pb,
         },
         _ => writer,
     };
     match writer {
         StreamWriter::Uploading {
             buf_size,
-            mut buffer,
-            mut etags,
             key,
+            mut buffer,
+            mut count,
+            mut etags,
             part_number,
+            pb,
             s3,
             upload_id,
-            mut count,
-            pb,
         } => {
             // if buffer size > buf_size create another buffer and upload the previous one
             if buffer.len() + bytes.len() >= buf_size {
@@ -152,28 +152,26 @@ async fn fold_fn<'a>(
                 Ok(StreamWriter::Uploading {
                     buf_size,
                     buffer: new_buf,
+                    count,
                     etags,
                     key,
                     part_number: part_number + 1,
+                    pb,
                     s3,
                     upload_id,
-                    count,
-                    pb,
                 })
             } else {
-                count += bytes.len();
-                pb.set_message(&bytesize::to_string(count as u64, true));
                 buffer.put(bytes);
                 Ok(StreamWriter::Uploading {
                     buf_size,
                     buffer,
+                    count,
                     etags,
                     key,
                     part_number,
+                    pb,
                     s3,
                     upload_id,
-                    count,
-                    pb,
                 })
             }
         }
