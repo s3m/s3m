@@ -1,4 +1,4 @@
-## [Unreleased]
+## 0.3.1 🛴
 * STDIN pipe/stream will upload the chunks in oneshot not using `Transfer-Encoding: chunked`
 * `{bytes}/{total_bytes}` in progress bar.
 * `UTC` timezone when listing objects/buckets.
