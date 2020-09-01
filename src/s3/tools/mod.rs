@@ -7,7 +7,6 @@ use ring::{
 };
 use std::fmt::Write;
 use std::io::prelude::*;
-use std::io::BufReader;
 use std::io::SeekFrom;
 use tokio::fs::File;
 use tokio::prelude::*;
@@ -94,11 +93,10 @@ pub fn write_hex_bytes(bytes: &[u8]) -> String {
 ///
 /// Will return `Err` if can not open the file
 pub fn blake3(file_path: &str) -> Result<String> {
-    let file = std::fs::File::open(file_path)?;
-    let mut reader = BufReader::new(file);
+    let mut file = std::fs::File::open(file_path)?;
     let mut hasher = blake3::Hasher::new();
-    let mut buf = [0; 65536];
-    while let Ok(size) = reader.read(&mut buf[..]) {
+    let mut buf = [0_u8; 65536];
+    while let Ok(size) = file.read(&mut buf[..]) {
         if size == 0 {
             break;
         }
