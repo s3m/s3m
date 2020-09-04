@@ -21,6 +21,10 @@ pub use self::listbuckets::ListBuckets;
 mod listobjectsv2;
 pub use self::listobjectsv2::ListObjectsV2;
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html>
+mod headobject;
+pub use self::headobject::HeadObject;
+
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
 mod putobject;
 pub use self::putobject::PutObject;

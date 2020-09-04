@@ -1,3 +1,7 @@
+## [Unreleased]
+* New sub-command `get` with option `-h` to return HeadObject.
+
+
 ## 0.3.1 🛴
 * STDIN pipe/stream will upload the chunks in oneshot not using `Transfer-Encoding: chunked`
 * `{bytes}/{total_bytes}` in progress bar.

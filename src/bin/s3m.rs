@@ -17,6 +17,21 @@ async fn main() -> Result<()> {
     let (s3, action) = start()?;
 
     match action {
+        Action::GetObject { key, get_head } => {
+            if get_head {
+                println!("{}", key);
+                let action = actions::HeadObject::new(&key);
+                let headers = action.request(&s3).await?;
+                let mut i = 0;
+                for k in headers.keys() {
+                    i = k.len();
+                }
+                for (k, v) in headers {
+                    println!("{:<width$} {}", format!("{}:", k).green(), v, width = i)
+                }
+            }
+        }
+
         Action::ListObjects {
             bucket,
             list_multipart_uploads,
@@ -53,7 +68,7 @@ async fn main() -> Result<()> {
                     }
                 }
             } else {
-                // list buckets
+                // LIST BUCKETS
                 let action = actions::ListBuckets::new();
                 let rs = action.request(&s3).await?;
                 for bucket in rs.buckets.bucket {
@@ -67,6 +82,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
+
         // Upload
         Action::PutObject {
             mut buf_size,

@@ -26,6 +26,10 @@ pub enum Action {
         key: String,
         upload_id: String,
     },
+    GetObject {
+        key: String,
+        get_head: bool,
+    },
 }
 
 fn me() -> Option<String> {
@@ -145,6 +149,20 @@ pub fn start() -> Result<(S3, Action)> {
                 .takes_value(true),
             ),
         )
+        .subcommand(
+            SubCommand::with_name("get").about("Retrieves objects").arg(
+                Arg::with_name("arguments")
+                    .help("<s3 provider>/<bucket>/<file>")
+                    .required(true)
+                    .min_values(1),
+            )
+            .arg(
+                Arg::with_name("HeadObject")
+                .help("Retrieves metadata from an object without returning the object itself")
+                .long("head")
+                .short("h")
+            ),
+        )
         .get_matches();
 
     // parse config file
@@ -174,6 +192,9 @@ pub fn start() -> Result<(S3, Action)> {
     // ListObjects
     if let Some(ls) = matches.subcommand_matches("ls") {
         let args: Vec<&str> = ls.values_of("arguments").unwrap_or_default().collect();
+        hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
+    } else if let Some(get) = matches.subcommand_matches("get") {
+        let args: Vec<&str> = get.values_of("arguments").unwrap_or_default().collect();
         hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
     } else if let Some(rm) = matches.subcommand_matches("rm") {
         let args: Vec<&str> = rm.values_of("arguments").unwrap_or_default().collect();
@@ -250,16 +271,17 @@ pub fn start() -> Result<(S3, Action)> {
     } else {
         if hbp.is_empty() {
             return Err(anyhow!(
-                "file name missing, try: {} <s3 provider>/<bucket>/{}, For more information {}",
-                me().unwrap_or_else(|| "s3m".to_string()),
+                "file name missing, <s3 provider>/<bucket>/{}, For more information try {}",
                 "<file name>".red(),
                 "--help".green()
             ));
         }
-
         let key = hbp.join("/");
 
-        if let Some(sub_m) = matches.subcommand_matches("rm") {
+        if let Some(sub_m) = matches.subcommand_matches("get") {
+            let get_head = sub_m.is_present("HeadObject");
+            Ok((s3, Action::GetObject { key, get_head }))
+        } else if let Some(sub_m) = matches.subcommand_matches("rm") {
             let upload_id = sub_m.value_of("UploadId").unwrap_or_default().to_string();
             Ok((s3, Action::DeleteObject { key, upload_id }))
         } else {
