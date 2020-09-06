@@ -30,7 +30,7 @@ impl ListBuckets {
     }
 }
 
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
 impl Action for ListBuckets {
     fn http_verb(&self) -> &'static str {
         "GET"

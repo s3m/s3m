@@ -144,8 +144,6 @@ pub struct ListAllMyBucketsResult {
     /// list of Buckets
     #[serde(rename = "Buckets")]
     pub buckets: Buckets,
-    #[serde(rename = "IsTruncated", deserialize_with = "bool_deserializer")]
-    pub is_truncated: bool,
 }
 
 #[derive(Deserialize, Debug)]
