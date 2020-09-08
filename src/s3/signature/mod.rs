@@ -306,3 +306,33 @@ fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &st
     let k_service = sha256_hmac(k_region.as_ref(), service.as_bytes());
     sha256_hmac(k_service.as_ref(), b"aws4_request")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::s3::{Credentials, Region};
+
+    #[test]
+    fn test_presigned_url() {
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+        let credentials = Credentials::new(
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        );
+        let region = Region::Custom {
+            name: "us-east-1".to_string(),
+            endpoint: "examplebucket.s3.amazonaws.com".to_string(),
+        };
+        let date = DateTime::parse_from_rfc2822("Fri, 24 May 2013 00:00:00 GMT").unwrap();
+        let date_utc: DateTime<Utc> = date.with_timezone(&Utc);
+
+        let s3 = S3::new(&credentials, &region, None);
+        let mut sign = Signature::new(&s3, "s3", Method::from_bytes(b"GET").unwrap()).unwrap();
+        sign.datetime = date_utc;
+        let rs = sign.presigned_url("/test.txt", 86400).unwrap();
+        assert_eq!("https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404", &rs);
+    }
+
+    #[test]
+    fn test_calculate_signature() {}
+}
