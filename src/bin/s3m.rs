@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
-use s3m::s3::{actions, tools};
+use s3m::s3::{actions, tools, Signature};
 use s3m::s3m::{multipart_upload, stream, upload, Db};
 use s3m::s3m::{start, Action};
 use std::fs;
@@ -17,6 +17,13 @@ async fn main() -> Result<()> {
     let (s3, action) = start()?;
 
     match action {
+        Action::ShareObject { key, expire } => {
+            let url = s3.endpoint()?;
+            let mut action = Signature::new(&s3, "GET", &url)?;
+            let url = action.presigned_url(&key, expire)?;
+            println!("{:#?}", url);
+        }
+
         Action::GetObject { key, get_head } => {
             if get_head {
                 println!("{}", key);

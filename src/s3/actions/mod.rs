@@ -79,6 +79,7 @@ pub trait Action {
         md5: Option<&str>,
         content_length: Option<usize>,
     ) -> Result<(Url, BTreeMap<String, String>)> {
+        // TODO replace with s3.endpoint()?
         let mut url = match &s3.bucket {
             Some(bucket) => Url::parse(&format!("https://{}/{}", s3.region.endpoint(), bucket))?,
             None => Url::parse(&format!("https://{}", s3.region.endpoint()))?,

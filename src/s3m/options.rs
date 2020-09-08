@@ -30,6 +30,10 @@ pub enum Action {
         key: String,
         get_head: bool,
     },
+    ShareObject {
+        key: String,
+        expire: usize,
+    },
 }
 
 fn me() -> Option<String> {
@@ -116,7 +120,7 @@ pub fn start() -> Result<(S3, Action)> {
         .arg(
             Arg::with_name("arguments")
                 .help("/path/to/file <s3 provider>/<bucket>/<file>")
-                .required_unless_one(&["rm", "ls", "remove"])
+                .required_unless_one(&["rm", "ls", "remove", "get", "share"])
                 .min_values(1)
                 .max_values(2),
         )
@@ -163,6 +167,23 @@ pub fn start() -> Result<(S3, Action)> {
                 .short("h")
             ),
         )
+        .subcommand(
+            SubCommand::with_name("share").about("Share object using a presigned URL").arg(
+                Arg::with_name("arguments")
+                    .help("<s3 provider>/<bucket>/<file>")
+                    .required(true)
+                    .min_values(1),
+            )
+            .arg(
+                Arg::with_name("expire")
+                .help("Time period in seconds, max value 604800 (seven days)")
+                .long("expire")
+                .short("e")
+                .default_value("43200")
+                .required(true)
+                .validator(is_num),
+            ),
+        )
         .get_matches();
 
     // parse config file
@@ -193,9 +214,15 @@ pub fn start() -> Result<(S3, Action)> {
     if let Some(ls) = matches.subcommand_matches("ls") {
         let args: Vec<&str> = ls.values_of("arguments").unwrap_or_default().collect();
         hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
+    // ShareObject
+    } else if let Some(share) = matches.subcommand_matches("share") {
+        let args: Vec<&str> = share.values_of("arguments").unwrap_or_default().collect();
+        hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
+    // GetObject
     } else if let Some(get) = matches.subcommand_matches("get") {
         let args: Vec<&str> = get.values_of("arguments").unwrap_or_default().collect();
         hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
+    // DeleteObject
     } else if let Some(rm) = matches.subcommand_matches("rm") {
         let args: Vec<&str> = rm.values_of("arguments").unwrap_or_default().collect();
         hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
@@ -278,12 +305,19 @@ pub fn start() -> Result<(S3, Action)> {
         }
         let key = hbp.join("/");
 
+        // GetObject
         if let Some(sub_m) = matches.subcommand_matches("get") {
             let get_head = sub_m.is_present("HeadObject");
             Ok((s3, Action::GetObject { key, get_head }))
+        // ShareObject
+        } else if let Some(sub_m) = matches.subcommand_matches("share") {
+            let expire = sub_m.value_of("expire").unwrap().parse::<usize>()?;
+            Ok((s3, Action::ShareObject { key, expire }))
+        // DeleteObject
         } else if let Some(sub_m) = matches.subcommand_matches("rm") {
             let upload_id = sub_m.value_of("UploadId").unwrap_or_default().to_string();
             Ok((s3, Action::DeleteObject { key, upload_id }))
+        // PutObject
         } else {
             let chunk_size = buf_size.parse::<usize>()?;
             Ok((

@@ -7,6 +7,8 @@ pub mod signature;
 pub mod tools;
 pub use self::{credentials::Credentials, region::Region, signature::Signature};
 use crate::s3::tools::sha256_digest;
+use anyhow::Result;
+use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct S3 {
@@ -42,5 +44,14 @@ impl S3 {
             hash.push_str(bucket);
         }
         sha256_digest(&hash)
+    }
+
+    pub fn endpoint(&self) -> Result<Url> {
+        let url = if let Some(bucket) = &self.bucket {
+            Url::parse(&format!("https://{}/{}", &self.region.endpoint(), bucket))?
+        } else {
+            Url::parse(&format!("https://{}", &self.region.endpoint()))?
+        };
+        Ok(url)
     }
 }

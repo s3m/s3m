@@ -3,7 +3,7 @@
 
 use crate::s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes};
 use crate::s3::S3;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::prelude::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use ring::hmac;
@@ -133,6 +133,100 @@ impl<'a> Signature<'a> {
         );
         self.add_header("Authorization", &authorization_header);
         self.headers.clone()
+    }
+
+    pub fn presigned_url(&mut self, key: &'a str, expire: usize) -> Result<String> {
+        //        let datetime = DateTime::parse_from_rfc2822("Fri, 24 May 2013 00:00:00 GMT")?;
+        let current_date = self.datetime.format("%Y%m%d");
+        let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ");
+
+        let mut url = self.auth.endpoint()?;
+
+        let clean_path = key
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<&str>>();
+
+        for p in clean_path {
+            url.path_segments_mut()
+                .map_err(|e| anyhow!("cannot be base: {:#?}", e))?
+                .push(p);
+        }
+
+        let scope = format!(
+            "{}/{}/s3/aws4_request",
+            &current_date,
+            self.auth.region.name()
+        );
+
+        url.query_pairs_mut()
+            .append_pair("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
+        url.query_pairs_mut().append_pair(
+            "X-Amz-Credential",
+            &format!("{}/{}", self.auth.credentials.aws_access_key_id(), scope),
+        );
+        url.query_pairs_mut()
+            .append_pair("X-Amz-Date", &current_datetime.to_string());
+        url.query_pairs_mut()
+            .append_pair("X-Amz-Expires", &expire.to_string());
+        url.query_pairs_mut()
+            .append_pair("X-Amz-SignedHeaders", "host");
+
+        self.add_header("host", &self.auth.region.endpoint().to_string());
+
+        let signed_headers = signed_headers(&self.headers);
+
+        // https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
+        // 1. Create a canonical request for Signature Version 4
+        //
+        //     CanonicalRequest =
+        //         HTTPRequestMethod + '\n' +
+        //         CanonicalURI + '\n' +
+        //         CanonicalQueryString + '\n' +
+        //         CanonicalHeaders + '\n' +
+        //         SignedHeaders + '\n' +
+        //         UNSIGNED-PAYLOAD
+        let canonical_request = format!(
+            "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
+            &self.http_method,
+            canonical_uri(&url),
+            canonical_query_string(&url),
+            canonical_headers(&self.headers),
+            signed_headers,
+        );
+
+        println!("canonical request: \n---\n{}\n---\n", canonical_request);
+
+        // 2. Create a string to sign for Signature Version 4
+        //
+        //     StringToSign =
+        //         Algorithm + \n +
+        //         RequestDateTime + \n +
+        //         CredentialScope + \n +
+        //         HashedCanonicalRequest
+        //
+        let canonical_request_hash = sha256_digest(&canonical_request);
+        let string_to_sign = string_to_sign(
+            &current_datetime.to_string(),
+            &scope,
+            &canonical_request_hash,
+        );
+        println!("String to sign: \n---\n{}\n---\n", string_to_sign);
+
+        // 3. Calculate the signature for AWS Signature Version 4
+        let signing_key = signature_key(
+            self.auth.credentials.aws_secret_access_key(),
+            &current_date.to_string(),
+            self.auth.region.name(),
+            "s3",
+        );
+
+        let signature =
+            write_hex_bytes(sha256_hmac(signing_key.as_ref(), string_to_sign.as_bytes()).as_ref());
+
+        url.query_pairs_mut()
+            .append_pair("X-Amz-Signature", &signature);
+        Ok(url.to_string())
     }
 
     pub fn add_header(&mut self, key: &str, value: &str) {
