@@ -334,5 +334,19 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_signature() {}
+    fn test_signature_key() {
+        let rs = write_hex_bytes(
+            signature_key(
+                "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+                "20150830",
+                "us-east-1",
+                "iam",
+            )
+            .as_ref(),
+        );
+        assert_eq!(
+            "c4afb1cc5771d871763a393e44b703571b55cc28424d1a5e86da6ed3c154a4b9",
+            rs
+        );
+    }
 }
