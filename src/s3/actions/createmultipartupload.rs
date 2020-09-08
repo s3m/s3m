@@ -8,6 +8,7 @@ use crate::s3::request;
 use crate::s3::responses::InitiateMultipartUploadResult;
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
+use http::method::Method;
 use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 
@@ -55,7 +56,8 @@ impl<'a> CreateMultipartUpload<'a> {
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: &S3) -> Result<InitiateMultipartUploadResult> {
         let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None, None)?;
-        let response = request::request(url.clone(), self.http_verb(), headers, None, None).await?;
+        let response =
+            request::request(url.clone(), self.http_method(), headers, None, None).await?;
 
         if response.status().is_success() {
             let upload_req: InitiateMultipartUploadResult = from_str(&response.text().await?)?;
@@ -68,8 +70,8 @@ impl<'a> CreateMultipartUpload<'a> {
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
 impl<'a> Action for CreateMultipartUpload<'a> {
-    fn http_verb(&self) -> &'static str {
-        "POST"
+    fn http_method(&self) -> Method {
+        Method::from_bytes(b"POST").unwrap()
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -94,5 +96,16 @@ impl<'a> Action for CreateMultipartUpload<'a> {
             .filter(|p| !p.is_empty())
             .collect::<Vec<&str>>();
         Some(clean_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_method() {
+        let action = CreateMultipartUpload::new("key");
+        assert_eq!(Method::POST, action.http_method());
     }
 }

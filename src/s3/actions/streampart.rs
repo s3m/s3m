@@ -4,6 +4,7 @@ use crate::s3::tools;
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
+use http::method::Method;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Clone)]
@@ -43,7 +44,7 @@ impl<'a> StreamPart<'a> {
         let (url, headers) = &self.sign(s3, &sha256, Some(&md5), None)?;
         let response = request::upload(
             url.clone(),
-            self.http_verb(),
+            self.http_method(),
             headers,
             self.stream.to_owned(),
         )
@@ -61,8 +62,8 @@ impl<'a> StreamPart<'a> {
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
 impl<'a> Action for StreamPart<'a> {
-    fn http_verb(&self) -> &'static str {
-        "PUT"
+    fn http_method(&self) -> Method {
+        Method::from_bytes(b"PUT").unwrap()
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -85,5 +86,16 @@ impl<'a> Action for StreamPart<'a> {
             .filter(|p| !p.is_empty())
             .collect::<Vec<&str>>();
         Some(clean_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_method() {
+        let action = StreamPart::new("key", Bytes::from("Hello world"), 1, "uid");
+        assert_eq!(Method::PUT, action.http_method());
     }
 }

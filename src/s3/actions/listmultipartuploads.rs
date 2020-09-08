@@ -3,6 +3,7 @@ use crate::s3::request;
 use crate::s3::responses::ListMultipartUploadsResult;
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
+use http::method::Method;
 use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 
@@ -20,7 +21,8 @@ impl ListMultipartUploads {
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: &S3) -> Result<ListMultipartUploadsResult> {
         let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None, None)?;
-        let response = request::request(url.clone(), self.http_verb(), headers, None, None).await?;
+        let response =
+            request::request(url.clone(), self.http_method(), headers, None, None).await?;
         if response.status().is_success() {
             let uploads: ListMultipartUploadsResult = from_str(&response.text().await?)?;
             Ok(uploads)
@@ -32,8 +34,8 @@ impl ListMultipartUploads {
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListMultipartUploads.html
 impl Action for ListMultipartUploads {
-    fn http_verb(&self) -> &'static str {
-        "GET"
+    fn http_method(&self) -> Method {
+        Method::from_bytes(b"GET").unwrap()
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -53,5 +55,16 @@ impl Action for ListMultipartUploads {
         map.insert("uploads", "");
 
         Some(map)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_method() {
+        let action = ListMultipartUploads::new();
+        assert_eq!(Method::GET, action.http_method());
     }
 }

@@ -6,7 +6,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
-    Body, Client, Method, Response,
+    Body, Client, Response,
 };
 use std::collections::BTreeMap;
 use std::io::SeekFrom;
@@ -22,12 +22,11 @@ use url::Url;
 /// Will return `Err` if can not make the request
 pub async fn request(
     url: Url,
-    method: &'static str,
+    method: http::method::Method,
     headers: &BTreeMap<String, String>,
     file: Option<String>,
     sender: Option<UnboundedSender<usize>>,
 ) -> Result<Response> {
-    let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
         .iter()
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
@@ -68,13 +67,12 @@ pub async fn request(
 /// Will return `Err` if can not make the request
 pub async fn multipart_upload(
     url: Url,
-    method: &'static str,
+    method: http::method::Method,
     headers: &BTreeMap<String, String>,
     file: String,
     seek: u64,
     chunk: u64,
 ) -> Result<Response> {
-    let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
         .iter()
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
@@ -97,11 +95,10 @@ pub async fn multipart_upload(
 /// Will return `Err` if can not make the request
 pub async fn upload(
     url: Url,
-    method: &'static str,
+    method: http::method::Method,
     headers: &BTreeMap<String, String>,
     body: Bytes,
 ) -> Result<Response> {
-    let method = Method::from_bytes(method.as_bytes())?;
     let headers = headers
         .iter()
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))

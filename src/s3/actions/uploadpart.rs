@@ -3,6 +3,7 @@ use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
+use http::method::Method;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Clone)]
@@ -52,7 +53,7 @@ impl<'a> UploadPart<'a> {
         let (url, headers) = &self.sign(s3, &sha256, Some(&md5), Some(length))?;
         let response = request::multipart_upload(
             url.clone(),
-            self.http_verb(),
+            self.http_method(),
             headers,
             self.file.to_string(),
             self.seek,
@@ -72,8 +73,8 @@ impl<'a> UploadPart<'a> {
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
 impl<'a> Action for UploadPart<'a> {
-    fn http_verb(&self) -> &'static str {
-        "PUT"
+    fn http_method(&self) -> Method {
+        Method::from_bytes(b"PUT").unwrap()
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -96,5 +97,16 @@ impl<'a> Action for UploadPart<'a> {
             .filter(|p| !p.is_empty())
             .collect::<Vec<&str>>();
         Some(clean_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_method() {
+        let action = UploadPart::new("key", "file", 1, "uid", 1, 1);
+        assert_eq!(Method::PUT, action.http_method());
     }
 }

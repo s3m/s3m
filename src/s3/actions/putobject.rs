@@ -3,6 +3,7 @@ use crate::s3::request;
 use crate::s3::tools;
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
+use http::method::Method;
 use std::collections::BTreeMap;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -57,7 +58,7 @@ impl<'a> PutObject<'a> {
         let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
         let response = request::request(
             url.clone(),
-            self.http_verb(),
+            self.http_method(),
             headers,
             Some(self.file.to_string()),
             self.sender,
@@ -90,8 +91,8 @@ impl<'a> PutObject<'a> {
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
 impl<'a> Action for PutObject<'a> {
-    fn http_verb(&self) -> &'static str {
-        "PUT"
+    fn http_method(&self) -> Method {
+        Method::from_bytes(b"PUT").unwrap()
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -110,5 +111,16 @@ impl<'a> Action for PutObject<'a> {
             .filter(|p| !p.is_empty())
             .collect::<Vec<&str>>();
         Some(clean_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_method() {
+        let action = PutObject::new("key", "file", None);
+        assert_eq!(Method::PUT, action.http_method());
     }
 }

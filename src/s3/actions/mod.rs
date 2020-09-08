@@ -61,7 +61,7 @@ pub trait Action {
     fn headers(&self) -> Option<BTreeMap<&str, &str>>;
 
     // method to use GET/PUT...
-    fn http_verb(&self) -> &'static str;
+    fn http_method(&self) -> http::method::Method;
 
     // URL query pairs
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>>;
@@ -79,11 +79,7 @@ pub trait Action {
         md5: Option<&str>,
         content_length: Option<usize>,
     ) -> Result<(Url, BTreeMap<String, String>)> {
-        // TODO replace with s3.endpoint()?
-        let mut url = match &s3.bucket {
-            Some(bucket) => Url::parse(&format!("https://{}/{}", s3.region.endpoint(), bucket))?,
-            None => Url::parse(&format!("https://{}", s3.region.endpoint()))?,
-        };
+        let mut url = s3.endpoint()?;
 
         // mainly for PUT when uploading an object
         if let Some(path) = self.path() {
@@ -108,8 +104,8 @@ pub trait Action {
             BTreeMap::new()
         };
 
-        let mut signature = Signature::new(s3, self.http_verb(), &url)?;
-        let headers = signature.sign(hash_payload, md5, content_length);
+        let mut signature = Signature::new(s3, "s3", self.http_method())?;
+        let headers = signature.sign(&url, hash_payload, md5, content_length);
         Ok((url, headers))
     }
 }

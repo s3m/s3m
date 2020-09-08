@@ -10,6 +10,7 @@ use crate::s3::tools;
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
+use http::method::Method;
 use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
 use serde_xml_rs::{from_str, to_string};
 use std::collections::BTreeMap;
@@ -77,7 +78,7 @@ impl<'a> CompleteMultipartUpload<'a> {
         let digest = tools::sha256_digest(&body);
         let (url, headers) = &self.sign(s3, &digest, None, Some(body.len()))?;
         let response =
-            request::upload(url.clone(), self.http_verb(), headers, Bytes::from(body)).await?;
+            request::upload(url.clone(), self.http_method(), headers, Bytes::from(body)).await?;
 
         if response.status().is_success() {
             let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;
@@ -90,8 +91,8 @@ impl<'a> CompleteMultipartUpload<'a> {
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
 impl<'a> Action for CompleteMultipartUpload<'a> {
-    fn http_verb(&self) -> &'static str {
-        "POST"
+    fn http_method(&self) -> Method {
+        Method::from_bytes(b"POST").unwrap()
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -113,5 +114,17 @@ impl<'a> Action for CompleteMultipartUpload<'a> {
             .filter(|p| !p.is_empty())
             .collect::<Vec<&str>>();
         Some(clean_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_method() {
+        let parts: BTreeMap<u16, Part> = BTreeMap::new();
+        let action = CompleteMultipartUpload::new("key", "uid", parts);
+        assert_eq!(Method::POST, action.http_method());
     }
 }
