@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
                 for k in headers.keys() {
                     i = k.len();
                 }
+                i += 1;
                 for (k, v) in headers {
                     println!("{:<width$} {}", format!("{}:", k).green(), v, width = i)
                 }
