@@ -74,26 +74,11 @@ pub async fn multipart_upload(
 
     let mut tasks = FuturesUnordered::new();
 
-    // TODO https://github.com/spacejam/sled/issues/1148
-    // put keys/parts in a vector then iterate over it
-    // probably better to pass only the part since needs to be decoded to extract the part_number
-    let mut xxx: Vec<Part> = Vec::new();
-    {
-        let bin_parts = db_parts.iter().values();
-
-        for bin_part in bin_parts {
-            if let Ok(p) = bin_part {
-                let part: Part = from_reader(&p[..])?;
-                xxx.push(part);
-            }
+    for part in db_parts.iter().values() {
+        if let Ok(p) = part {
+            let part: Part = from_reader(&p[..])?;
+            tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
         }
-    }
-
-    for part in xxx {
-        //if let Ok(p) = bin_part {
-        //   let part: Part = from_reader(&p[..])?;
-        tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
-        //}
 
         // limit to N threads
         if tasks.len() == threads {
