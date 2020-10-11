@@ -110,7 +110,7 @@ impl Db {
         let part = &self
             .db_parts()?
             .get(number.to_be_bytes())?
-            .map(|part| from_reader(&part[..]).map(|p: Part| p))
+            .map(|part| from_reader(&part[..]))
             .transpose()?;
         Ok(part.to_owned())
     }

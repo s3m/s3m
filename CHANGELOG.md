@@ -1,3 +1,5 @@
+## [Unreleased]
+
 ## 0.4.0 ⛸
 * New sub-command `get` with option `-h` to return HeadObject.
 * New sub-command `share` to create presigned URL's.
