@@ -8,6 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
 
+const STDIN_BUFF_SIZE: usize = 536_870_912;
+
 #[derive(Debug)]
 pub enum Action {
     ListObjects {
@@ -202,13 +204,19 @@ pub fn start() -> Result<(S3, Action)> {
         exit(0);
     }
 
-    let buf_size = matches.value_of("buffer").unwrap();
     let threads = matches.value_of("threads").unwrap().parse::<usize>()?;
 
     // Host, Bucket, Path
     let mut hbp: Vec<&str>;
     let input_stdin = !atty::is(atty::Stream::Stdin); // isatty returns false if there's something in stdin.
     let mut input_file = "";
+
+    // If stdin use 512M (probably input is close to 5TB) if buffer is not defined
+    let buf_size = if input_stdin && matches.occurrences_of("buffer") == 0 {
+        STDIN_BUFF_SIZE
+    } else {
+        matches.value_of("buffer").unwrap().parse::<usize>()?
+    };
 
     // ListObjects
     if let Some(ls) = matches.subcommand_matches("ls") {
@@ -319,11 +327,10 @@ pub fn start() -> Result<(S3, Action)> {
             Ok((s3, Action::DeleteObject { key, upload_id }))
         // PutObject
         } else {
-            let chunk_size = buf_size.parse::<usize>()?;
             Ok((
                 s3,
                 Action::PutObject {
-                    buf_size: chunk_size,
+                    buf_size,
                     file: input_file.to_string(),
                     home_dir,
                     key,

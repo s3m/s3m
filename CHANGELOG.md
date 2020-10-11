@@ -1,6 +1,7 @@
-## [Unreleased]
+## 0.4.0 ⛸
 * New sub-command `get` with option `-h` to return HeadObject.
 * New sub-command `share` to create presigned URL's.
+* Defaults to 512MB buffer size when no `-b` defined in case input is 5TB when uploading from STDIN.
 
 
 ## 0.3.1 🛴
