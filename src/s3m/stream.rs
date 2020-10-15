@@ -161,6 +161,8 @@ async fn fold_fn<'a>(
                     upload_id,
                 })
             } else {
+                count += bytes.len();
+                pb.set_message(&bytesize::to_string(count as u64, true));
                 buffer.put(bytes);
                 Ok(StreamWriter::Uploading {
                     buf_size,
