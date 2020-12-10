@@ -6,8 +6,12 @@ use indicatif::{ProgressBar, ProgressStyle};
 use s3m::s3::{actions, tools, Signature};
 use s3m::s3m::{multipart_upload, stream, upload, Db};
 use s3m::s3m::{start, Action};
-use std::fs;
+use std::cmp::min;
+use std::fs::metadata;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::fs::File;
+use tokio::prelude::*;
 
 const MAX_PART_SIZE: usize = 5_368_709_120;
 const MAX_FILE_SIZE: usize = 5_497_558_138_880;
@@ -36,6 +40,42 @@ async fn main() -> Result<()> {
                 i += 1;
                 for (k, v) in headers {
                     println!("{:<width$} {}", format!("{}:", k).green(), v, width = i)
+                }
+            } else {
+                // crate a new destination
+                let file_name = Path::new(&key)
+                    .file_name()
+                    .with_context(|| format!("Failed to get file name from: {}", key))?;
+                let path = Path::new(".").join(file_name);
+
+                // do the request
+                let action = actions::GetObject::new(&key);
+                let mut res = action.request(&s3).await?;
+                let mut file = File::create(&path).await?;
+
+                // get the file_size in bytes by using the content_length
+                if let Some(file_size) = res.content_length() {
+                    let pb = ProgressBar::new(file_size);
+                    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})")
+            // "█▉▊▋▌▍▎▏  ·"
+            .progress_chars(
+                "\u{2588}\u{2589}\u{258a}\u{258b}\u{258c}\u{258d}\u{258e}\u{258f}  \u{b7}",
+            ),
+    );
+                    let mut downloaded = 0;
+                    while let Some(bytes) = res.chunk().await? {
+                        let new = min(downloaded + bytes.len() as u64, file_size);
+                        downloaded = new;
+                        pb.set_position(new);
+                        file.write_all(&bytes).await?;
+                    }
+                    pb.finish();
+                } else {
+                    while let Some(bytes) = res.chunk().await? {
+                        file.write_all(&bytes).await?;
+                    }
                 }
             }
         }
@@ -106,7 +146,7 @@ async fn main() -> Result<()> {
                 println!("{}", etag);
             } else {
                 // Get file size and last modified time
-                let (file_size, file_mtime) = fs::metadata(&file)
+                let (file_size, file_mtime) = metadata(&file)
                     .map(|m| {
                         if m.is_file() {
                             Ok(m)

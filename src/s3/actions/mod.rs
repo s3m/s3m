@@ -25,6 +25,10 @@ pub use self::listobjectsv2::ListObjectsV2;
 mod headobject;
 pub use self::headobject::HeadObject;
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
+mod getobject;
+pub use self::getobject::GetObject;
+
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
 mod putobject;
 pub use self::putobject::PutObject;
