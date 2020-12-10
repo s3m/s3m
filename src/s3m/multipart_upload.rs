@@ -147,7 +147,8 @@ async fn upload_part(
                 if retries < 3 {
                     retries += 1;
                     // TODO backoff strategy
-                    time::sleep(Duration::from_secs(retries)).await;
+                    //                    time::sleep(Duration::from_secs(retries)).await;
+                    time::delay_for(Duration::from_secs(retries)).await;
                 } else {
                     return Err(e);
                 }

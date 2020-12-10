@@ -21,7 +21,7 @@ async-stream = "0.3"
 atty = "0.2"
 base64 = "0.13"
 blake3 = "0.3"
-bytes = "0.6"
+bytes = "0.5"
 bytesize = "1.0.1"
 chrono = "0.4"
 clap = "2.33"
@@ -41,6 +41,6 @@ serde_cbor = "0.11"
 serde_yaml = "0.8"
 sled = { version = "0.34", features = ["compression"] }
 tempfile = "3"
-tokio = { version = "0.3", features = ["full"] }
-tokio-util = { version = "0.5", features = ["codec"] }
+tokio = { version = "0.2", features = ["full"] }
+tokio-util = { version = "0.3", features = ["codec"] }
 url = "2.2"

@@ -1,4 +1,6 @@
-## [Unreleased]
+## 0.5.0 [Unreleased]
+* removed ending `/` when listing buckets
+* bump libraries (tokio 3)
 
 ## 0.4.0 ⛸
 * New sub-command `get` with option `-h` to return HeadObject.

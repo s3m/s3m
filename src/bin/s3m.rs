@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
                     let dt = DateTime::parse_from_rfc3339(&bucket.creation_date)?;
                     let creation_date: DateTime<Utc> = DateTime::from(dt);
                     println!(
-                        "{} {:>10}/",
+                        "{} {}",
                         format!("[{}]", creation_date.format("%F %T %Z")).green(),
                         bucket.name.yellow()
                     );
