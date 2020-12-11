@@ -28,7 +28,11 @@ async fn main() -> Result<()> {
             println!("{}", url);
         }
 
-        Action::GetObject { key, get_head } => {
+        Action::GetObject {
+            key,
+            get_head,
+            dest,
+        } => {
             if get_head {
                 println!("{}", key);
                 let action = actions::HeadObject::new(&key);
@@ -42,6 +46,7 @@ async fn main() -> Result<()> {
                     println!("{:<width$} {}", format!("{}:", k).green(), v, width = i)
                 }
             } else {
+                println!("{:#?}", dest);
                 // crate a new destination
                 let file_name = Path::new(&key)
                     .file_name()

@@ -31,6 +31,7 @@ pub enum Action {
     GetObject {
         key: String,
         get_head: bool,
+        dest: Option<String>,
     },
     ShareObject {
         key: String,
@@ -209,7 +210,8 @@ pub fn start() -> Result<(S3, Action)> {
     // Host, Bucket, Path
     let mut hbp: Vec<&str>;
     let input_stdin = !atty::is(atty::Stream::Stdin); // isatty returns false if there's something in stdin.
-    let mut input_file = "";
+    let mut input_file: Option<String> = None;
+    let mut dest: Option<String> = None;
 
     // If stdin use 512M (probably input is close to 5TB) if buffer is not defined
     let buf_size = if input_stdin && matches.occurrences_of("buffer") == 0 {
@@ -230,6 +232,9 @@ pub fn start() -> Result<(S3, Action)> {
     } else if let Some(get) = matches.subcommand_matches("get") {
         let args: Vec<&str> = get.values_of("arguments").unwrap_or_default().collect();
         hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
+        if args.len() == 2 {
+            dest = Some(args[1].to_string());
+        }
     // DeleteObject
     } else if let Some(rm) = matches.subcommand_matches("rm") {
         let args: Vec<&str> = rm.values_of("arguments").unwrap_or_default().collect();
@@ -239,7 +244,7 @@ pub fn start() -> Result<(S3, Action)> {
         let args: Vec<&str> = matches.values_of("arguments").unwrap_or_default().collect();
         if args.len() == 2 {
             hbp = args[1].split('/').filter(|s| !s.is_empty()).collect();
-            input_file = args[0];
+            input_file = Some(args[0].to_string());
         } else if input_stdin {
             hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
         } else {
@@ -316,7 +321,14 @@ pub fn start() -> Result<(S3, Action)> {
         // GetObject
         if let Some(sub_m) = matches.subcommand_matches("get") {
             let get_head = sub_m.is_present("HeadObject");
-            Ok((s3, Action::GetObject { key, get_head }))
+            Ok((
+                s3,
+                Action::GetObject {
+                    key,
+                    get_head,
+                    dest,
+                },
+            ))
         // ShareObject
         } else if let Some(sub_m) = matches.subcommand_matches("share") {
             let expire = sub_m.value_of("expire").unwrap().parse::<usize>()?;
@@ -331,7 +343,7 @@ pub fn start() -> Result<(S3, Action)> {
                 s3,
                 Action::PutObject {
                     buf_size,
-                    file: input_file.to_string(),
+                    file: input_file.unwrap(),
                     home_dir,
                     key,
                     stdin: input_stdin,

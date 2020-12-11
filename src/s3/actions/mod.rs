@@ -101,13 +101,6 @@ pub trait Action {
             }
         }
 
-        // headers to be sent
-        let _headers: BTreeMap<&str, &str> = if let Some(headers) = self.headers() {
-            headers
-        } else {
-            BTreeMap::new()
-        };
-
         let mut signature = Signature::new(s3, "s3", self.http_method())?;
         let headers = signature.sign(&url, hash_payload, md5, content_length);
         Ok((url, headers))
