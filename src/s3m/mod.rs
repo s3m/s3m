@@ -16,8 +16,8 @@ pub use self::stream::stream;
 mod part;
 pub use self::part::Part;
 
-mod options;
-pub use self::options::{start, Action};
+mod start;
+pub use self::start::{start, Action};
 
 mod args;
 pub use self::args::ArgParser;

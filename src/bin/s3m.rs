@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use http::method::Method;
+// use http::method::Method;
 use indicatif::{ProgressBar, ProgressStyle};
-use s3m::s3::{actions, tools, Signature};
+use s3m::options;
+use s3m::s3::{actions, tools};
 use s3m::s3m::{multipart_upload, stream, upload, Db};
 use s3m::s3m::{start, Action};
 use std::cmp::min;
@@ -23,8 +24,7 @@ async fn main() -> Result<()> {
 
     match action {
         Action::ShareObject { key, expire } => {
-            let url = Signature::new(&s3, "s3", Method::from_bytes(b"GET").unwrap())?
-                .presigned_url(&key, expire)?;
+            let url = options::share(s3, key, expire)?;
             println!("{}", url);
         }
 
@@ -34,17 +34,7 @@ async fn main() -> Result<()> {
             dest,
         } => {
             if get_head {
-                println!("{}", key);
-                let action = actions::HeadObject::new(&key);
-                let headers = action.request(&s3).await?;
-                let mut i = 0;
-                for k in headers.keys() {
-                    i = k.len();
-                }
-                i += 1;
-                for (k, v) in headers {
-                    println!("{:<width$} {}", format!("{}:", k).green(), v, width = i)
-                }
+                options::get_head(s3, key).await?;
             } else {
                 println!("{:#?}", dest);
                 // crate a new destination
