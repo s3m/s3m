@@ -20,3 +20,4 @@ mod options;
 pub use self::options::{start, Action};
 
 mod args;
+pub use self::args::ArgParser;

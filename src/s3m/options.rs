@@ -1,5 +1,5 @@
 use crate::s3::{Credentials, Region, S3};
-use crate::s3m::{args, Config};
+use crate::s3m::{ArgParser, Config};
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use std::fs;
@@ -17,7 +17,7 @@ pub enum Action {
     PutObject {
         buf_size: usize,
         file: String,
-        home_dir: PathBuf,
+        s3m_dir: PathBuf,
         key: String,
         stdin: bool,
         threads: usize,
@@ -56,18 +56,11 @@ pub fn start() -> Result<(S3, Action)> {
     let s3m_dir = Path::new(&home_dir).join(".s3m");
     fs::create_dir_all(&s3m_dir).context("unable to create home dir ~/.s3m")?;
 
-    /* TODO
-    let default_threads = if num_cpus::get() > 8 {
-        "8".to_string()
-    } else {
-        num_cpus::get().to_string()
-    };
-    */
-
-    let matches = args::get_matches(&s3m_dir.display().to_string());
+    let arg_parser = ArgParser::new(&s3m_dir);
+    let matches = arg_parser.get_matches();
 
     // parse config file
-    let config = matches.value_of("config").unwrap();
+    let config = matches.value_of("config").context("config file missing")?;
     let file = fs::File::open(config).context("unable to open file")?;
     let config: Config = match serde_yaml::from_reader(file) {
         Err(e) => {
@@ -76,13 +69,17 @@ pub fn start() -> Result<(S3, Action)> {
         Ok(yml) => yml,
     };
 
+    // clean up ~/.streams options: -r / --remove
     if matches.is_present("remove") {
-        let streams = format!("{}/.s3m/streams", home_dir.display());
+        let streams = s3m_dir.join("streams");
         fs::remove_dir_all(&streams)?;
         exit(0);
     }
 
-    let threads = matches.value_of("threads").unwrap().parse::<usize>()?;
+    let threads = matches
+        .value_of("threads")
+        .context("could not get threads")?
+        .parse::<usize>()?;
 
     // Host, Bucket, Path
     let mut hbp: Vec<&str>;
@@ -94,7 +91,10 @@ pub fn start() -> Result<(S3, Action)> {
     let buf_size = if input_stdin && matches.occurrences_of("buffer") == 0 {
         STDIN_BUFF_SIZE
     } else {
-        matches.value_of("buffer").unwrap().parse::<usize>()?
+        matches
+            .value_of("buffer")
+            .context("could not get buffer size")?
+            .parse::<usize>()?
     };
 
     // ListObjects
@@ -221,7 +221,7 @@ pub fn start() -> Result<(S3, Action)> {
                 Action::PutObject {
                     buf_size,
                     file: input_file.unwrap(),
-                    home_dir,
+                    s3m_dir,
                     key,
                     stdin: input_stdin,
                     threads,

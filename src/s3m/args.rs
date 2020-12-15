@@ -1,6 +1,8 @@
 use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 fn is_num(s: String) -> Result<(), String> {
     if let Err(..) = s.parse::<u64>() {
@@ -20,14 +22,37 @@ fn is_file(s: String) -> Result<(), String> {
     }
 }
 
-pub fn get_matches(home_dir: &str) -> ArgMatches<'static> {
-    App::new("s3m")
+pub struct ArgParser {
+    s3m_dir: PathBuf,
+    default_config: OsString,
+    default_threads: String,
+}
+
+impl ArgParser {
+    #[must_use]
+    pub fn new(s3m_dir: &Path) -> Self {
+        let default_config_path: PathBuf = s3m_dir.join("config.yml");
+        let default_threads = if num_cpus::get() > 8 {
+            "8".to_string()
+        } else {
+            num_cpus::get().to_string()
+        };
+        Self {
+            s3m_dir: s3m_dir.to_owned(),
+            default_config: default_config_path.as_os_str().to_owned(),
+            default_threads,
+        }
+    }
+
+    #[must_use]
+    pub fn get_matches(&self) -> ArgMatches {
+        App::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
         .setting(AppSettings::SubcommandsNegateReqs)
-                .after_help(format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/.s3m/streams] use the option (-r) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", home_dir).as_ref())
+                .after_help(format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/streams] use the option (-r) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", self.s3m_dir.display()).as_ref())
         .arg(
             Arg::with_name("remove").short("r").long("remove")
-           .help(format!("remove {}/.s3m/streams directory", home_dir).as_ref()),
+           .help(format!("remove {}/streams directory", self.s3m_dir.display()).as_ref()),
         )
         .arg(
             Arg::with_name("buffer")
@@ -42,8 +67,8 @@ pub fn get_matches(home_dir: &str) -> ArgMatches<'static> {
             Arg::with_name("threads")
                 .help("Number of threads to use")
                 .long("threads")
-                .default_value("4")
                 .short("t")
+                .default_value(&self.default_threads)
                 .required(true)
                 .validator(is_num),
         )
@@ -52,8 +77,7 @@ pub fn get_matches(home_dir: &str) -> ArgMatches<'static> {
                 .help("config.yml")
                 .long("config")
                 .short("c")
-                .default_value(format!("{}/.s3m/config.yml", home_dir).as_ref())
-                //.default_value("/Users/nbari/.s3m/config.yml")
+                .default_value_os(&self.default_config)
                 .required(true)
                 .value_name("config.yml")
                 .validator(is_file),
@@ -136,4 +160,5 @@ pub fn get_matches(home_dir: &str) -> ArgMatches<'static> {
                 ),
         )
         .get_matches()
+    }
 }

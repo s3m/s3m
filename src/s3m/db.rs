@@ -21,7 +21,7 @@ impl Db {
     pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &PathBuf) -> Result<Self> {
         let key = format!("{} {} {}", &s3.hash()[0..8], key, mtime);
         let db = sled::Config::new()
-            .path(format!("{}/.s3m/streams/{}", path.display(), checksum))
+            .path(format!("{}/streams/{}", path.display(), checksum))
             .use_compression(true)
             .mode(sled::Mode::LowSpace)
             .open()?;

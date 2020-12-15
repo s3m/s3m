@@ -140,7 +140,7 @@ async fn main() -> Result<()> {
         Action::PutObject {
             mut buf_size,
             file,
-            home_dir,
+            s3m_dir,
             key,
             stdin,
             threads,
@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
 
                 let checksum = checksum(&file)?;
 
-                let db = Db::new(&s3, &key, &checksum, file_mtime, &home_dir)
+                let db = Db::new(&s3, &key, &checksum, file_mtime, &s3m_dir)
                     .context("could not create stream tree, try option \"-r\"")?;
 
                 // check if file has been uploded already
