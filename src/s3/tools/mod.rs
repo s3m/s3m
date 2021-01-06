@@ -9,7 +9,7 @@ use std::fmt::Write;
 use std::io::prelude::*;
 use std::io::SeekFrom;
 use tokio::fs::File;
-use tokio::prelude::*;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 /// # Errors

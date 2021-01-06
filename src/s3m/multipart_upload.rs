@@ -6,8 +6,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
 use std::time::Duration;
-use tokio::stream::StreamExt;
 use tokio::time;
+use tokio_stream::StreamExt;
 
 fn progress_bar_parts(file_size: u64) -> ProgressBar {
     let pb = ProgressBar::new(file_size);
@@ -147,8 +147,7 @@ async fn upload_part(
                 if retries < 3 {
                     retries += 1;
                     // TODO backoff strategy
-                    //                    time::sleep(Duration::from_secs(retries)).await;
-                    time::delay_for(Duration::from_secs(retries)).await;
+                    time::sleep(Duration::from_secs(retries)).await;
                 } else {
                     return Err(e);
                 }

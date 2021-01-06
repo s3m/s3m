@@ -11,9 +11,9 @@ use reqwest::{
 use std::collections::BTreeMap;
 use std::io::SeekFrom;
 use tokio::fs::File;
-use tokio::prelude::*;
-use tokio::stream::StreamExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 

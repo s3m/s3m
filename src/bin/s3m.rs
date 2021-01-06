@@ -12,7 +12,7 @@ use std::fs::metadata;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::File;
-use tokio::prelude::*;
+use tokio::io::AsyncWriteExt;
 
 const MAX_PART_SIZE: usize = 5_368_709_120;
 const MAX_FILE_SIZE: usize = 5_497_558_138_880;
