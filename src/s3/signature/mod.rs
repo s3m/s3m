@@ -61,6 +61,8 @@ impl<'a> Signature<'a> {
         self.add_header("x-amz-date", &current_datetime);
         self.add_header("User-Agent", &APP_USER_AGENT.to_string());
         self.add_header("x-amz-content-sha256", digest);
+        self.add_header("Content-Type", "text/plain");
+        self.add_header("x-amz-meta-sopas", "foo");
         if let Some(length) = length {
             self.add_header("content-length", format!("{}", length).as_ref());
         }
