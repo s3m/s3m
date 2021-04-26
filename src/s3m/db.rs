@@ -119,8 +119,7 @@ impl Db {
     ///
     /// Will return `Err` if can not create the `BTreeMap<u16, actions::Part>`
     pub fn uploaded_parts(&self) -> Result<BTreeMap<u16, actions::Part>> {
-        Ok(self
-            .db_uploaded()?
+        self.db_uploaded()?
             .into_iter()
             .values()
             .flat_map(|part| {
@@ -138,6 +137,6 @@ impl Db {
                         .map_err(|e| e.into())
                 })
             })
-            .collect::<Result<BTreeMap<u16, actions::Part>>>()?)
+            .collect::<Result<BTreeMap<u16, actions::Part>>>()
     }
 }
