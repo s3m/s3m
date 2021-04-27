@@ -49,43 +49,50 @@ impl ArgParser {
         App::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
         .setting(AppSettings::SubcommandsNegateReqs)
-                .after_help(format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/streams] use the option (-r) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", self.s3m_dir.display()).as_ref())
+                .after_help(format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/streams] use the option (--clean) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", self.s3m_dir.display()).as_ref())
         .arg(
-            Arg::with_name("remove").short("r").long("remove")
+            Arg::with_name("clean").long("clean")
            .help(format!("remove {}/streams directory", self.s3m_dir.display()).as_ref()),
         )
         .arg(
+            Arg::with_name("attr")
+                .takes_value(true)
+                .help("Add custom metadata for the object (format: KeyName1=string;KeyName2=string)")
+                .long("attributes")
+                .short("a"),
+        )
+        .arg(
             Arg::with_name("buffer")
+                .default_value("10485760")
                 .help("Buffer size in bytes, max value: 5 GB (5,368,709,120 bytes)")
                 .long("buffer")
-                .default_value("10485760")
-                .short("b")
                 .required(true)
+                .short("b")
                 .validator(is_num),
         )
         .arg(
             Arg::with_name("threads")
+                .default_value(&self.default_threads)
                 .help("Number of threads to use")
                 .long("threads")
-                .short("t")
-                .default_value(&self.default_threads)
                 .required(true)
+                .short("t")
                 .validator(is_num),
         )
         .arg(
             Arg::with_name("config")
+                .default_value_os(&self.default_config)
                 .help("config.yml")
                 .long("config")
-                .short("c")
-                .default_value_os(&self.default_config)
                 .required(true)
-                .value_name("config.yml")
-                .validator(is_file),
+                .short("c")
+                .validator(is_file)
+                .value_name("config.yml"),
         )
         .arg(
             Arg::with_name("arguments")
                 .help("/path/to/file <s3 provider>/<bucket>/<file>")
-                .required_unless_one(&["rm", "ls", "remove", "get", "share"])
+                .required_unless_one(&["rm", "ls", "clean", "get", "share"])
                 .min_values(1)
                 .max_values(2),
         )

@@ -1,6 +1,8 @@
 ## 0.5.0 [Unreleased]
 * removed ending `/` when listing buckets
 * fixed sub-command `get` to download file in the current path
+* Added option `--clean` instead of `-r/--remove`
+* Added option `-a/--attributes` to add custom metadata for the object
 
 ## 0.4.0 ⛸
 * New sub-command `get` with option `-h` to return HeadObject.

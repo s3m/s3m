@@ -69,8 +69,8 @@ pub fn start() -> Result<(S3, Action)> {
         Ok(yml) => yml,
     };
 
-    // clean up ~/.streams options: -r / --remove
-    if matches.is_present("remove") {
+    // clean up ~/.streams options: --clean
+    if matches.is_present("clean") {
         let streams = s3m_dir.join("streams");
         fs::remove_dir_all(&streams)?;
         exit(0);
