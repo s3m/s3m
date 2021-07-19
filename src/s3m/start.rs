@@ -17,8 +17,9 @@ pub enum Action {
     PutObject {
         buf_size: usize,
         file: String,
-        s3m_dir: PathBuf,
         key: String,
+        quiet: bool,
+        s3m_dir: PathBuf,
         stdin: bool,
         threads: usize,
     },
@@ -72,7 +73,7 @@ pub fn start() -> Result<(S3, Action)> {
     // clean up ~/.streams options: --clean
     if matches.is_present("clean") {
         let streams = s3m_dir.join("streams");
-        fs::remove_dir_all(&streams)?;
+        fs::remove_dir_all(&streams).unwrap_or_else(|_| ());
         exit(0);
     }
 
@@ -223,6 +224,7 @@ pub fn start() -> Result<(S3, Action)> {
                     file: input_file.unwrap(),
                     s3m_dir,
                     key,
+                    quiet: matches.is_present("quiet"),
                     stdin: input_stdin,
                     threads,
                 },

@@ -132,6 +132,7 @@ async fn main() -> Result<()> {
             file,
             s3m_dir,
             key,
+            quiet,
             stdin,
             threads,
         } => {
@@ -207,7 +208,7 @@ async fn main() -> Result<()> {
                     .context("multipart upload failed")?;
                     println!("{}", rs);
                 } else {
-                    let rs = upload(&s3, &key, &file, file_size, &db).await?;
+                    let rs = upload(&s3, &key, &file, file_size, &db, quiet).await?;
                     println!("{}", rs);
                 }
             }

@@ -55,6 +55,12 @@ impl ArgParser {
            .help(format!("remove {}/streams directory", self.s3m_dir.display()).as_ref()),
         )
         .arg(
+            Arg::with_name("quiet")
+            .long("quiet")
+            .short("q")
+            .help("Don't show progress bar when uploading")
+        )
+        .arg(
             Arg::with_name("attr")
                 .takes_value(true)
                 .help("Add custom metadata for the object (format: KeyName1=string;KeyName2=string)")

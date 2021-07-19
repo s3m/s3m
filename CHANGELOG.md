@@ -3,6 +3,7 @@
 * fixed sub-command `get` to download file in the current path
 * Added option `--clean` instead of `-r/--remove`
 * Added option `-a/--attributes` to add custom metadata for the object
+* Added option `-q/--quiet` to silent output
 
 ## 0.4.0 ⛸
 * New sub-command `get` with option `-h` to return HeadObject.

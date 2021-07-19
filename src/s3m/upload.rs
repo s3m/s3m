@@ -35,7 +35,14 @@ async fn progress_bar_bytes(file_size: u64, mut receiver: UnboundedReceiver<usiz
     Ok(())
 }
 
-pub async fn upload(s3: &S3, key: &str, file: &str, file_size: u64, sdb: &Db) -> Result<String> {
+pub async fn upload(
+    s3: &S3,
+    key: &str,
+    file: &str,
+    file_size: u64,
+    sdb: &Db,
+    quiet: bool,
+) -> Result<String> {
     let (sender, receiver) = unbounded_channel();
     let action = actions::PutObject::new(key, file, Some(sender));
     let response = tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(s3))?.1;

@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "command line tool for storing streams of data in s3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -29,8 +29,8 @@ colored = "2"
 dirs = "3.0"
 futures = "0.3"
 http = "0.2"
-indicatif = "0.15"
-md5 = "0.7.0"
+indicatif = "0.16"
+md5 = "0.7"
 num_cpus = "1.13"
 percent-encoding = "2.1"
 reqwest = { version = "0.11", features = ["stream"] }
