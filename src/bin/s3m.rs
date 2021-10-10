@@ -128,19 +128,20 @@ async fn main() -> Result<()> {
 
         // Upload
         Action::PutObject {
+            attr,
             mut buf_size,
             file,
             s3m_dir,
             key,
+            pipe,
             quiet,
-            stdin,
             threads,
         } => {
-            // upload from stdin
-            if stdin {
+            if pipe {
                 let etag = stream(&s3, &key, buf_size).await?;
                 println!("{}", etag);
-            } else {
+            } else if let Some(file) = file {
+                println!("{}<--", file);
                 // Get file size and last modified time
                 let (file_size, file_mtime) = metadata(&file)
                     .map(|m| {

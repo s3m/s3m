@@ -18,15 +18,15 @@ travis-ci = { repository = "s3m/s3m", branch = "master" }
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
-atty = "0.2"
+same-file = "1"
 base64 = "0.13"
-blake3 = "0.3"
+blake3 = "1"
 bytes = "1"
 bytesize = "1"
 chrono = "0.4"
 clap = "2.33"
 colored = "2"
-dirs = "3.0"
+dirs = "4"
 futures = "0.3"
 http = "0.2"
 indicatif = "0.16"
@@ -36,12 +36,12 @@ percent-encoding = "2.1"
 reqwest = { version = "0.11", features = ["stream"] }
 ring = "0.16"
 serde = { version = "1.0", features = ["derive"] }
-serde-xml-rs = "0.4.1"
+serde-xml-rs = "0.5"
 serde_cbor = "0.11"
 serde_yaml = "0.8"
 sled = { version = "0.34", features = ["compression"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1.6"
+tokio-stream = "0.1"
 tokio-util = { version = "0.6", features = ["codec"] }
 url = "2.2"

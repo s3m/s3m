@@ -28,6 +28,8 @@ enum StreamWriter<'a> {
     },
 }
 
+// S3 requires a minimum chunk size of 5MB, and supports at most 10,000 chunks
+// per multipart upload.
 pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key);
@@ -80,7 +82,7 @@ pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<Str
             );
 
             let action = actions::StreamPart::new(key, buffer.freeze(), part_number, upload_id);
-            let etag = action.request(s3).await.unwrap();
+            let etag = action.request(s3).await?;
             etags.push(etag);
 
             // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html

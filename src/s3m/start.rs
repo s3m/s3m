@@ -15,12 +15,13 @@ pub enum Action {
         list_multipart_uploads: bool,
     },
     PutObject {
+        attr: String,
         buf_size: usize,
-        file: String,
+        file: Option<String>,
         key: String,
+        pipe: bool,
         quiet: bool,
         s3m_dir: PathBuf,
-        stdin: bool,
         threads: usize,
     },
     DeleteObject {
@@ -84,12 +85,11 @@ pub fn start() -> Result<(S3, Action)> {
 
     // Host, Bucket, Path
     let mut hbp: Vec<&str>;
-    let input_stdin = !atty::is(atty::Stream::Stdin); // isatty returns false if there's something in stdin.
     let mut input_file: Option<String> = None;
     let mut dest: Option<String> = None;
 
     // If stdin use 512M (probably input is close to 5TB) if buffer is not defined
-    let buf_size = if input_stdin && matches.occurrences_of("buffer") == 0 {
+    let buf_size = if matches.is_present("pipe") && matches.occurrences_of("buffer") == 0 {
         STDIN_BUFF_SIZE
     } else {
         matches
@@ -123,11 +123,11 @@ pub fn start() -> Result<(S3, Action)> {
         if args.len() == 2 {
             hbp = args[1].split('/').filter(|s| !s.is_empty()).collect();
             input_file = Some(args[0].to_string());
-        } else if input_stdin {
+        } else if matches.is_present("pipe") {
             hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
         } else {
             return Err(anyhow!(
-                "missing argument or standar input. For more information try: --help"
+                "missing argument or use --pipe for standar input. For more information try: --help"
             ));
         }
     }
@@ -220,12 +220,13 @@ pub fn start() -> Result<(S3, Action)> {
             Ok((
                 s3,
                 Action::PutObject {
+                    attr: matches.value_of("attr").unwrap_or_default().to_string(),
                     buf_size,
-                    file: input_file.unwrap(),
+                    file: input_file,
                     s3m_dir,
                     key,
+                    pipe: matches.is_present("pipe"),
                     quiet: matches.is_present("quiet"),
-                    stdin: input_stdin,
                     threads,
                 },
             ))

@@ -77,6 +77,12 @@ impl ArgParser {
                 .validator(is_num),
         )
         .arg(
+            Arg::with_name("pipe")
+            .long("pipe")
+            .short("p")
+            .help("Read from STDIN")
+        )
+        .arg(
             Arg::with_name("threads")
                 .default_value(&self.default_threads)
                 .help("Number of threads to use")
