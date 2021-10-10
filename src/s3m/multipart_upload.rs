@@ -117,6 +117,10 @@ pub async fn multipart_upload(
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
+// TODO
+// Metadata cannot be specified in this context.
+// x-amz-acl=public
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/acl-overview.html#canned-acl
 async fn upload_part(
     s3: &S3,
     key: &str,

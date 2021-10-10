@@ -44,7 +44,9 @@ pub async fn upload(
     quiet: bool,
 ) -> Result<String> {
     let (sender, receiver) = unbounded_channel();
-    let action = actions::PutObject::new(key, file, Some(sender));
+    let mut action = actions::PutObject::new(key, file, Some(sender));
+    // TODO
+    action.x_amz_acl = Some(String::from("public-read"));
     let response = tokio::try_join!(progress_bar_bytes(file_size, receiver), action.request(s3))?.1;
     let etag = &response.get("ETag").ok_or_else(|| anyhow!("no etag"))?;
     sdb.save_etag(etag)?;

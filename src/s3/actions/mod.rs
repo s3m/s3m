@@ -102,7 +102,7 @@ pub trait Action {
         }
 
         let mut signature = Signature::new(s3, "s3", self.http_method())?;
-        let headers = signature.sign(&url, hash_payload, md5, content_length);
+        let headers = signature.sign(&url, hash_payload, md5, content_length, self.headers());
         Ok((url, headers))
     }
 }

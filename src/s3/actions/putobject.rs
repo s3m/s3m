@@ -55,6 +55,8 @@ impl<'a> PutObject<'a> {
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
         let (sha, md5, length) = tools::sha256_md5_digest(self.file).await?;
+        // TODO
+        // pass headers
         let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
         let response = request::request(
             url.clone(),
@@ -96,7 +98,11 @@ impl<'a> Action for PutObject<'a> {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        None
+        let mut map: BTreeMap<&str, &str> = BTreeMap::new();
+        if let Some(acl) = &self.x_amz_acl {
+            map.insert("x-amz-acl", acl);
+        }
+        Some(map)
     }
 
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {

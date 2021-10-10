@@ -75,7 +75,10 @@ impl<'a> Action for CreateMultipartUpload<'a> {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        None
+        // TODO cleanup
+        let mut map: BTreeMap<&str, &str> = BTreeMap::new();
+        map.insert("x-amz-acl", "public-read");
+        Some(map)
     }
 
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {

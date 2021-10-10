@@ -53,6 +53,7 @@ impl<'a> Signature<'a> {
         digest: &str,
         digest_b64_md5: Option<&str>,
         length: Option<usize>,
+        custom_headers: Option<BTreeMap<&str, &str>>,
     ) -> BTreeMap<String, String> {
         let current_date = self.datetime.format("%Y%m%d").to_string();
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ").to_string();
@@ -61,13 +62,19 @@ impl<'a> Signature<'a> {
         self.add_header("x-amz-date", &current_datetime);
         self.add_header("User-Agent", &APP_USER_AGENT.to_string());
         self.add_header("x-amz-content-sha256", digest);
-        self.add_header("Content-Type", "text/plain");
-        self.add_header("x-amz-meta-sopas", "foo");
+
         if let Some(length) = length {
             self.add_header("content-length", format!("{}", length).as_ref());
         }
+
         if let Some(md5) = digest_b64_md5 {
             self.add_header("Content-MD5", md5);
+        }
+
+        if let Some(headers) = custom_headers {
+            for (k, v) in &headers {
+                self.add_header(k, v)
+            }
         }
 
         // let canonical_headers = canonical_headers(&self.headers);

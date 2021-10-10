@@ -141,7 +141,6 @@ async fn main() -> Result<()> {
                 let etag = stream(&s3, &key, buf_size).await?;
                 println!("{}", etag);
             } else if let Some(file) = file {
-                println!("{}<--", file);
                 // Get file size and last modified time
                 let (file_size, file_mtime) = metadata(&file)
                     .map(|m| {
