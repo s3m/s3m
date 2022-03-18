@@ -32,7 +32,6 @@ pub async fn multipart_upload(
     file: &str,
     file_size: u64,
     chunk_size: u64,
-    threads: usize,
     sdb: &Db,
 ) -> Result<String> {
     // trees for keeping track of parts to upload
@@ -81,7 +80,7 @@ pub async fn multipart_upload(
         }
 
         // limit to N threads
-        if tasks.len() == threads {
+        if tasks.len() == 2 {
             if let Some(r) = tasks.next().await {
                 // TODO better error handling
                 if r.is_ok() {

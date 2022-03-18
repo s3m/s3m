@@ -6,8 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
-const STDIN_BUFF_SIZE: usize = 536_870_912;
-
 #[derive(Debug)]
 pub enum Action {
     ListObjects {
@@ -16,13 +14,11 @@ pub enum Action {
     },
     PutObject {
         attr: String,
-        buf_size: usize,
         file: Option<String>,
         key: String,
         pipe: bool,
         quiet: bool,
         s3m_dir: PathBuf,
-        threads: usize,
     },
     DeleteObject {
         key: String,
@@ -78,25 +74,10 @@ pub fn start() -> Result<(S3, Action)> {
         exit(0);
     }
 
-    let threads = matches
-        .value_of("threads")
-        .context("could not get threads")?
-        .parse::<usize>()?;
-
     // Host, Bucket, Path
     let mut hbp: Vec<&str>;
     let mut input_file: Option<String> = None;
     let mut dest: Option<String> = None;
-
-    // If stdin use 512M (probably input is close to 5TB) if buffer is not defined
-    let buf_size = if matches.is_present("pipe") && matches.occurrences_of("buffer") == 0 {
-        STDIN_BUFF_SIZE
-    } else {
-        matches
-            .value_of("buffer")
-            .context("could not get buffer size")?
-            .parse::<usize>()?
-    };
 
     // ListObjects
     if let Some(ls) = matches.subcommand_matches("ls") {
@@ -221,13 +202,11 @@ pub fn start() -> Result<(S3, Action)> {
                 s3,
                 Action::PutObject {
                     attr: matches.value_of("attr").unwrap_or_default().to_string(),
-                    buf_size,
                     file: input_file,
                     s3m_dir,
                     key,
                     pipe: matches.is_present("pipe"),
                     quiet: matches.is_present("quiet"),
-                    threads,
                 },
             ))
         }

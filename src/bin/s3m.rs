@@ -17,6 +17,7 @@ use tokio::io::AsyncWriteExt;
 const MAX_PART_SIZE: usize = 5_368_709_120;
 const MAX_FILE_SIZE: usize = 5_497_558_138_880;
 const MAX_PARTS_PER_UPLOAD: usize = 10_000;
+const BUFF_SIZE: usize = 536_870_912;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -129,14 +130,13 @@ async fn main() -> Result<()> {
         // Upload
         Action::PutObject {
             attr,
-            mut buf_size,
             file,
             s3m_dir,
             key,
             pipe,
             quiet,
-            threads,
         } => {
+            let mut buf_size = BUFF_SIZE;
             if pipe {
                 let etag = stream(&s3, &key, buf_size).await?;
                 println!("{}", etag);
@@ -195,17 +195,9 @@ async fn main() -> Result<()> {
 
                 // upload in multipart
                 if file_size > buf_size as u64 {
-                    let rs = multipart_upload(
-                        &s3,
-                        &key,
-                        &file,
-                        file_size,
-                        buf_size as u64,
-                        threads,
-                        &db,
-                    )
-                    .await
-                    .context("multipart upload failed")?;
+                    let rs = multipart_upload(&s3, &key, &file, file_size, buf_size as u64, &db)
+                        .await
+                        .context("multipart upload failed")?;
                     println!("{}", rs);
                 } else {
                     let rs = upload(&s3, &key, &file, file_size, &db, quiet).await?;

@@ -12,9 +12,6 @@ categories = ["command-line-utilities", "command-line-interface"]
 license-file = "LICENSE"
 edition = "2018"
 
-[badges]
-travis-ci = { repository = "s3m/s3m", branch = "master" }
-
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
@@ -24,7 +21,7 @@ blake3 = "1"
 bytes = "1"
 bytesize = "1"
 chrono = "0.4"
-clap = "2.33"
+clap = "3"
 colored = "2"
 dirs = "4"
 futures = "0.3"
@@ -43,5 +40,5 @@ sled = { version = "0.34", features = ["compression"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-tokio-util = { version = "0.6", features = ["codec"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 url = "2.2"
