@@ -31,9 +31,9 @@ async fn main() -> Result<()> {
             dest,
         } => {
             if get_head {
-                options::get::get_head(s3, key).await?;
+                options::get_head(s3, key).await?;
             } else {
-                options::get::get(s3, key, dest).await?;
+                options::get(s3, key, dest).await?;
             }
         }
 
@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
 
         // Upload
         Action::PutObject {
-            attr,
+            attr: _,
             file,
             s3m_dir,
             key,

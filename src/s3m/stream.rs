@@ -136,11 +136,11 @@ async fn fold_fn<'a>(
             s3,
             upload_id,
         } => {
+            count += bytes.len();
+            pb.set_message(bytesize::to_string(count as u64, true));
+
             // if buffer size > buf_size create another buffer and upload the previous one
             if buffer.len() + bytes.len() >= buf_size {
-                count += bytes.len();
-                pb.set_message(bytesize::to_string(count as u64, true));
-
                 let mut new_buf = BytesMut::with_capacity(buf_size);
                 new_buf.put(bytes);
 
@@ -163,8 +163,6 @@ async fn fold_fn<'a>(
                     upload_id,
                 })
             } else {
-                count += bytes.len();
-                pb.set_message(bytesize::to_string(count as u64, true));
                 buffer.put(bytes);
                 Ok(StreamWriter::Uploading {
                     buf_size,

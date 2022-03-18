@@ -41,7 +41,7 @@ pub async fn upload(
     file: &str,
     file_size: u64,
     sdb: &Db,
-    quiet: bool,
+    _quiet: bool,
 ) -> Result<String> {
     let (sender, receiver) = unbounded_channel();
     let mut action = actions::PutObject::new(key, file, Some(sender));
