@@ -1,0 +1,49 @@
+name: tests
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        required: true
+        type: string
+        default: develop
+  push:
+    branches:
+      - '*'
+      - '!master'
+      - '!main'
+  pull_request:
+    branches:
+      - '*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ inputs.branch }}
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: cargo version
+        run: cargo -V
+
+      - name: check
+        run: cargo check
+
+      - name: test
+        run: cargo test
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy -- -D clippy::all -D clippy::nursery -D warnings
