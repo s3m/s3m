@@ -1,5 +1,5 @@
-use crate::s3::{Credentials, Region, S3};
-use crate::s3m::{args::ArgParser, Config};
+use crate::s3::{Credentials, S3};
+use crate::s3m::{args::ArgParser, matches, Config};
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use std::fs;
@@ -74,11 +74,7 @@ pub fn start() -> Result<(S3, Action, bool)> {
         exit(0);
     }
 
-    // Host, Bucket, Path
-    let mut hbp: Vec<&str>;
-    let mut input_file: Option<String> = None;
-    let mut dest: Option<String> = None;
-
+    // define chunk size
     let mut buf_size = matches
         .value_of("buffer")
         .unwrap()
@@ -89,39 +85,7 @@ pub fn start() -> Result<(S3, Action, bool)> {
         buf_size = 5_242_880;
     }
 
-    // ListObjects
-    if let Some(ls) = matches.subcommand_matches("ls") {
-        let args: Vec<&str> = ls.values_of("arguments").unwrap_or_default().collect();
-        hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
-    // ShareObject
-    } else if let Some(share) = matches.subcommand_matches("share") {
-        let args: Vec<&str> = share.values_of("arguments").unwrap_or_default().collect();
-        hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
-    // GetObject
-    } else if let Some(get) = matches.subcommand_matches("get") {
-        let args: Vec<&str> = get.values_of("arguments").unwrap_or_default().collect();
-        hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
-        if args.len() == 2 {
-            dest = Some(args[1].to_string());
-        }
-    // DeleteObject
-    } else if let Some(rm) = matches.subcommand_matches("rm") {
-        let args: Vec<&str> = rm.values_of("arguments").unwrap_or_default().collect();
-        hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
-    } else {
-        // PutObject
-        let args: Vec<&str> = matches.values_of("arguments").unwrap_or_default().collect();
-        if args.len() == 2 {
-            hbp = args[1].split('/').filter(|s| !s.is_empty()).collect();
-            input_file = Some(args[0].to_string());
-        } else if matches.is_present("pipe") {
-            hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
-        } else {
-            return Err(anyhow!(
-                "missing argument or use --pipe for standar input. For more information try: --help"
-            ));
-        }
-    }
+    let (mut hbp, src, dest) = matches::hbp_src_dest(&matches)?;
 
     // HOST
     let host = if config.hosts.contains_key(hbp[0]) {
@@ -132,23 +96,7 @@ pub fn start() -> Result<(S3, Action, bool)> {
     };
 
     // REGION
-    let region = match &host.region {
-        Some(h) => match h.parse::<Region>() {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(anyhow!(e));
-            }
-        },
-        None => match &host.endpoint {
-            Some(r) => Region::Custom {
-                name: "".to_string(),
-                endpoint: r.to_string(),
-            },
-            None => {
-                return Err(anyhow!("could not parse host need an endpoint or region"));
-            }
-        },
-    };
+    let region = matches::get_region(host)?;
 
     // BUCKET
     let bucket = if !hbp.is_empty() {
@@ -223,7 +171,7 @@ pub fn start() -> Result<(S3, Action, bool)> {
                 Action::PutObject {
                     attr: matches.value_of("attr").unwrap_or_default().to_string(),
                     buf_size,
-                    file: input_file,
+                    file: src,
                     s3m_dir,
                     key,
                     pipe: matches.is_present("pipe"),
