@@ -20,4 +20,5 @@ mod start;
 pub use self::start::{start, Action};
 
 mod args;
+mod dispatch;
 mod matches;
