@@ -26,7 +26,7 @@ impl Part {
 
     #[must_use]
     pub fn get_etag(&self) -> String {
-        self.etag.to_owned()
+        self.etag.clone()
     }
 
     #[must_use]

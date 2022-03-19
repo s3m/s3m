@@ -74,14 +74,10 @@ pub fn start() -> Result<(S3, Action, bool)> {
     }
 
     // define chunk size
-    let mut buf_size = matches
-        .value_of("buffer")
-        .unwrap()
-        .parse::<usize>()
-        .unwrap_or(10_485_760);
+    let mut buf_size: usize = matches.value_of_t_or_exit("buffer");
 
     if buf_size < 5_242_880 {
-        buf_size = 5_242_880;
+        buf_size = 10_485_760;
     }
 
     // returns [host,bucket,path]
@@ -118,6 +114,7 @@ pub fn start() -> Result<(S3, Action, bool)> {
     // S3
     let s3 = S3::new(&credentials, &region, bucket.clone());
 
+    // create the action
     let action = dispatch::dispatch(hbp, bucket, buf_size, s3m_dir, &matches)?;
 
     Ok((s3, action, matches.is_present("quiet")))
