@@ -1,7 +1,7 @@
-use crate::s3::actions::{response_error, Action};
-use crate::s3::request;
-use crate::s3::tools;
-use crate::s3::S3;
+use crate::{
+    s3::actions::{response_error, Action},
+    s3::{request, tools, S3},
+};
 use anyhow::{anyhow, Result};
 use http::method::Method;
 use std::collections::BTreeMap;
@@ -40,7 +40,7 @@ impl<'a> UploadPart<'a> {
             upload_id,
             seek,
             chunk,
-            ..Default::default()
+            ..Self::default()
         }
     }
 

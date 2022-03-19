@@ -73,7 +73,7 @@ impl<'a> Signature<'a> {
 
         if let Some(headers) = custom_headers {
             for (k, v) in &headers {
-                self.add_header(k, v)
+                self.add_header(k, v);
             }
         }
 
@@ -137,7 +137,7 @@ impl<'a> Signature<'a> {
             write_hex_bytes(signature.as_ref())
         );
         self.add_header("Authorization", &authorization_header);
-        self.headers.to_owned()
+        self.headers.clone()
     }
 
     pub fn presigned_url(&mut self, key: &'a str, expire: usize) -> Result<String> {
@@ -297,12 +297,12 @@ pub fn string_to_sign(timestamp: &str, scope: &str, hashed_canonical_request: &s
 
 fn signed_headers(headers: &BTreeMap<String, String>) -> String {
     let mut signed = String::new();
-    headers.iter().for_each(|(key, _)| {
+    for (key, _) in headers.iter() {
         if !signed.is_empty() {
             signed.push(';');
         }
         signed.push_str(key);
-    });
+    }
     signed
 }
 

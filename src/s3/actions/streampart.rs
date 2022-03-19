@@ -1,7 +1,7 @@
-use crate::s3::actions::{response_error, Action};
-use crate::s3::request;
-use crate::s3::tools;
-use crate::s3::S3;
+use crate::{
+    s3::actions::{response_error, Action},
+    s3::{request, tools, S3},
+};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use http::method::Method;
@@ -30,7 +30,7 @@ impl<'a> StreamPart<'a> {
             stream,
             part_number: pn,
             upload_id,
-            ..Default::default()
+            ..Self::default()
         }
     }
 
@@ -46,7 +46,7 @@ impl<'a> StreamPart<'a> {
             url.clone(),
             self.http_method(),
             headers,
-            self.stream.to_owned(),
+            self.stream.clone(),
         )
         .await?;
         if response.status().is_success() {

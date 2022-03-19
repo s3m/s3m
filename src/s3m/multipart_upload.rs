@@ -84,7 +84,7 @@ pub async fn multipart_upload(
             if let Some(r) = tasks.next().await {
                 // TODO better error handling
                 if r.is_ok() {
-                    pb.inc(chunk_size)
+                    pb.inc(chunk_size);
                 }
             }
         }

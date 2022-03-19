@@ -180,7 +180,7 @@ pub struct ParseRegionError {
 }
 
 impl ParseRegionError {
-    /// Parses a region given as a string literal into a type `Region'
+    /// Parses a region given as a string literal into a type `Region`
     #[must_use]
     pub fn new(input: &str) -> Self {
         Self {

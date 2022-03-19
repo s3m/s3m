@@ -57,7 +57,7 @@ impl ArgParser {
         .arg(
             Arg::new("attr")
                 .takes_value(true)
-                .help("Add custom metadata for the object (format: KeyName1=string;KeyName2=string)")
+                .help("Add custom metadata for the object (format: KeyName1=string;KeyName2=string), example: -a ACL=private")
                 .long("attributes")
                 .short('a'),
         )
@@ -66,6 +66,15 @@ impl ArgParser {
             .long("pipe")
             .short('p')
             .help("Read from STDIN")
+        )
+        .arg(
+            Arg::new("buffer")
+                .default_value("10485760")
+                .help("Buffer \"part size\" in bytes, doesn't apply when reading from STDIN (--pipe option)")
+                .long("buffer")
+                .short('b')
+                .takes_value(true)
+                .validator(is_num)
         )
         .arg(
             Arg::new("config")

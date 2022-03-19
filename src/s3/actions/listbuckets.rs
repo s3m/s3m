@@ -1,7 +1,8 @@
-use crate::s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256};
-use crate::s3::request;
-use crate::s3::responses::ListAllMyBucketsResult;
-use crate::s3::S3;
+use crate::{
+    s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256},
+    s3::responses::ListAllMyBucketsResult,
+    s3::{request, S3},
+};
 use anyhow::{anyhow, Result};
 use http::method::Method;
 use serde_xml_rs::from_str;
@@ -13,7 +14,7 @@ pub struct ListBuckets {}
 impl ListBuckets {
     #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
     /// # Errors

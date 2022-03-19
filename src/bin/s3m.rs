@@ -13,15 +13,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MAX_PART_SIZE: usize = 5_368_709_120;
 const MAX_FILE_SIZE: usize = 5_497_558_138_880;
 const MAX_PARTS_PER_UPLOAD: usize = 10_000;
-const BUFF_SIZE: usize = 536_870_912;
+const BUFFER_SIZE: usize = 536_870_912;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (s3, action) = start()?;
+    let (s3, action, quiet) = start()?;
 
     match action {
         Action::ShareObject { key, expire } => {
-            let url = options::share(s3, key, expire)?;
+            let url = options::share(&s3, &key, expire)?;
             println!("{}", url);
         }
 
@@ -91,15 +91,14 @@ async fn main() -> Result<()> {
         // Upload
         Action::PutObject {
             attr: _,
+            mut buf_size,
             file,
             s3m_dir,
             key,
             pipe,
-            quiet,
         } => {
-            let mut buf_size = BUFF_SIZE;
             if pipe {
-                let etag = stream(&s3, &key, buf_size).await?;
+                let etag = stream(&s3, &key, BUFFER_SIZE).await?;
                 println!("{}", etag);
             } else if let Some(file) = file {
                 // Get file size and last modified time

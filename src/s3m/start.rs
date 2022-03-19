@@ -14,10 +14,10 @@ pub enum Action {
     },
     PutObject {
         attr: String,
+        buf_size: usize,
         file: Option<String>,
         key: String,
         pipe: bool,
-        quiet: bool,
         s3m_dir: PathBuf,
     },
     DeleteObject {
@@ -44,7 +44,7 @@ fn me() -> Option<String> {
         .into()
 }
 
-pub fn start() -> Result<(S3, Action)> {
+pub fn start() -> Result<(S3, Action, bool)> {
     let home_dir = match dirs::home_dir() {
         Some(h) => h,
         None => PathBuf::from("/tmp"),
@@ -78,6 +78,16 @@ pub fn start() -> Result<(S3, Action)> {
     let mut hbp: Vec<&str>;
     let mut input_file: Option<String> = None;
     let mut dest: Option<String> = None;
+
+    let mut buf_size = matches
+        .value_of("buffer")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap_or(10_485_760);
+
+    if buf_size < 5_242_880 {
+        buf_size = 5_242_880;
+    }
 
     // ListObjects
     if let Some(ls) = matches.subcommand_matches("ls") {
@@ -166,6 +176,7 @@ pub fn start() -> Result<(S3, Action)> {
                 bucket,
                 list_multipart_uploads,
             },
+            matches.is_present("quiet"),
         ))
     } else {
         if hbp.is_empty() {
@@ -187,27 +198,37 @@ pub fn start() -> Result<(S3, Action)> {
                     get_head,
                     dest,
                 },
+                matches.is_present("quiet"),
             ))
         // ShareObject
         } else if let Some(sub_m) = matches.subcommand_matches("share") {
             let expire = sub_m.value_of("expire").unwrap().parse::<usize>()?;
-            Ok((s3, Action::ShareObject { key, expire }))
+            Ok((
+                s3,
+                Action::ShareObject { key, expire },
+                matches.is_present("quiet"),
+            ))
         // DeleteObject
         } else if let Some(sub_m) = matches.subcommand_matches("rm") {
             let upload_id = sub_m.value_of("UploadId").unwrap_or_default().to_string();
-            Ok((s3, Action::DeleteObject { key, upload_id }))
+            Ok((
+                s3,
+                Action::DeleteObject { key, upload_id },
+                matches.is_present("quiet"),
+            ))
         // PutObject
         } else {
             Ok((
                 s3,
                 Action::PutObject {
                     attr: matches.value_of("attr").unwrap_or_default().to_string(),
+                    buf_size,
                     file: input_file,
                     s3m_dir,
                     key,
                     pipe: matches.is_present("pipe"),
-                    quiet: matches.is_present("quiet"),
                 },
+                matches.is_present("quiet"),
             ))
         }
     }

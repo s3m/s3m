@@ -3,11 +3,11 @@
 //! Maximum number of parts per upload  10,000
 //! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>
 
-use crate::s3::actions::{response_error, Action};
-use crate::s3::request;
-use crate::s3::responses::CompleteMultipartUploadResult;
-use crate::s3::tools;
-use crate::s3::S3;
+use crate::{
+    s3::actions::{response_error, Action},
+    s3::responses::CompleteMultipartUploadResult,
+    s3::{request, tools, S3},
+};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use http::method::Method;
@@ -62,7 +62,7 @@ impl<'a> CompleteMultipartUpload<'a> {
             key,
             upload_id,
             parts,
-            ..Default::default()
+            ..Self::default()
         }
     }
 
@@ -72,7 +72,7 @@ impl<'a> CompleteMultipartUpload<'a> {
     pub async fn request(&self, s3: &S3) -> Result<CompleteMultipartUploadResult> {
         let parts = CompleteMultipartUpload {
             parts: self.parts.clone(),
-            ..Default::default()
+            ..Self::default()
         };
         let body = to_string(&parts)?;
         let digest = tools::sha256_digest(&body);

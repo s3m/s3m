@@ -3,9 +3,10 @@
 //! Maximum number of parts per upload  10,000
 //! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>
 
-use crate::s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256};
-use crate::s3::request;
-use crate::s3::S3;
+use crate::{
+    s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256},
+    s3::{request, S3},
+};
 use anyhow::{anyhow, Result};
 use http::method::Method;
 use std::collections::BTreeMap;
@@ -21,7 +22,7 @@ impl<'a> DeleteObject<'a> {
     pub fn new(key: &'a str) -> Self {
         Self {
             key,
-            ..Default::default()
+            ..Self::default()
         }
     }
 

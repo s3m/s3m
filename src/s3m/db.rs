@@ -25,7 +25,7 @@ impl Db {
             .use_compression(true)
             .mode(sled::Mode::LowSpace)
             .open()?;
-        Ok(Self { key, db })
+        Ok(Self { db, key })
     }
 
     #[must_use]
@@ -42,7 +42,7 @@ impl Db {
             .get(format!("etag {}", &self.key).as_bytes())?
             .map(|s| String::from_utf8(s.to_vec()).map(|s| format!("ETag: {}", s)))
             .transpose()?;
-        Ok(etag.to_owned())
+        Ok(etag.clone())
     }
 
     /// # Errors
@@ -112,7 +112,7 @@ impl Db {
             .get(number.to_be_bytes())?
             .map(|part| from_reader(&part[..]))
             .transpose()?;
-        Ok(part.to_owned())
+        Ok(part.clone())
     }
 
     /// # Errors
