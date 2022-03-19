@@ -1,5 +1,5 @@
 use crate::s3::{Credentials, Region, S3};
-use crate::s3m::{ArgParser, Config};
+use crate::s3m::{args::ArgParser, Config};
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use std::fs;

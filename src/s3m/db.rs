@@ -54,7 +54,7 @@ impl Db {
             .get(&self.key)?
             .map(|s| String::from_utf8(s.to_vec()))
             .transpose()?;
-        Ok(uid.to_owned())
+        Ok(uid.clone())
     }
 
     /// # Errors
@@ -134,7 +134,7 @@ impl Db {
                                 },
                             )
                         })
-                        .map_err(|e| e.into())
+                        .map_err(std::convert::Into::into)
                 })
             })
             .collect::<Result<BTreeMap<u16, actions::Part>>>()

@@ -93,7 +93,7 @@ pub async fn multipart_upload(
     // consume remaining tasks
     while let Some(r) = tasks.next().await {
         if r.is_ok() {
-            pb.inc(chunk_size)
+            pb.inc(chunk_size);
         }
     }
     pb.finish();

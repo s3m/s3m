@@ -20,4 +20,3 @@ mod start;
 pub use self::start::{start, Action};
 
 mod args;
-pub use self::args::ArgParser;
