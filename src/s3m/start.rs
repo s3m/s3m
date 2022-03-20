@@ -18,6 +18,7 @@ pub enum Action {
         key: String,
         pipe: bool,
         s3m_dir: PathBuf,
+        quiet: bool,
     },
     DeleteObject {
         key: String,
@@ -27,6 +28,7 @@ pub enum Action {
         key: String,
         get_head: bool,
         dest: Option<String>,
+        quiet: bool,
     },
     ShareObject {
         key: String,
@@ -43,7 +45,7 @@ fn me() -> Option<String> {
         .into()
 }
 
-pub fn start() -> Result<(S3, Action, bool)> {
+pub fn start() -> Result<(S3, Action)> {
     let home_dir = match dirs::home_dir() {
         Some(h) => h,
         None => PathBuf::from("/tmp"),
@@ -117,5 +119,5 @@ pub fn start() -> Result<(S3, Action, bool)> {
     // create the action
     let action = dispatch::dispatch(hbp, bucket, buf_size, s3m_dir, &matches)?;
 
-    Ok((s3, action, matches.is_present("quiet")))
+    Ok((s3, action))
 }

@@ -17,7 +17,7 @@ const BUFFER_SIZE: usize = 536_870_912;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (s3, action, quiet) = start()?;
+    let (s3, action) = start()?;
 
     match action {
         Action::ShareObject { key, expire } => {
@@ -29,11 +29,12 @@ async fn main() -> Result<()> {
             key,
             get_head,
             dest,
+            quiet,
         } => {
             if get_head {
                 options::get_head(s3, key).await?;
             } else {
-                options::get(s3, key, dest).await?;
+                options::get(s3, key, dest, quiet).await?;
             }
         }
 
@@ -96,6 +97,7 @@ async fn main() -> Result<()> {
             s3m_dir,
             key,
             pipe,
+            quiet,
         } => {
             if pipe {
                 let etag = stream(&s3, &key, BUFFER_SIZE).await?;

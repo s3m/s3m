@@ -46,6 +46,7 @@ pub fn dispatch(
                 key,
                 get_head,
                 dest,
+                quiet: sub_m.is_present("quiet"),
             })
         }
 
@@ -90,6 +91,7 @@ pub fn dispatch(
                 s3m_dir,
                 key,
                 pipe: matches.is_present("pipe"),
+                quiet: matches.is_present("quiet"),
             })
         }
     }

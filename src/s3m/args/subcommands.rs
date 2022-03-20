@@ -51,6 +51,12 @@ pub fn subcommand_get<'a>() -> clap::Command<'a> {
                 .long("head")
                 .short('H'),
         )
+        .arg(
+            Arg::new("quiet")
+                .long("quiet")
+                .short('q')
+                .help("Don't show progress bar"),
+        )
 }
 
 pub fn subcommand_share<'a>() -> clap::Command<'a> {

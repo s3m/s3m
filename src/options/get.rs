@@ -1,12 +1,12 @@
 use crate::s3::{actions, S3};
+use crate::s3m::progressbar::Bar;
 use anyhow::{anyhow, Context, Result};
-use indicatif::{ProgressBar, ProgressStyle};
 use std::cmp::min;
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
-pub async fn get(s3: S3, key: String, dest: Option<String>) -> Result<()> {
+pub async fn get(s3: S3, key: String, dest: Option<String>, quiet: bool) -> Result<()> {
     // crate a new destination
     let file_name = Path::new(&key)
         .file_name()
@@ -32,27 +32,26 @@ pub async fn get(s3: S3, key: String, dest: Option<String>) -> Result<()> {
         .content_length()
         .context("could not get content_length")?;
 
-    let pb = ProgressBar::new(file_size);
-
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})")
-            // "█▉▊▋▌▍▎▏  ·"
-            .progress_chars(
-                "\u{2588}\u{2589}\u{258a}\u{258b}\u{258c}\u{258d}\u{258e}\u{258f}  \u{b7}",
-            ),
-    );
+    let pb = if !quiet {
+        Bar::new(file_size)
+    } else {
+        Default::default()
+    };
 
     let mut downloaded = 0;
 
     while let Some(bytes) = res.chunk().await? {
         let new = min(downloaded + bytes.len() as u64, file_size);
         downloaded = new;
-        pb.set_position(new);
+        if let Some(pb) = pb.progress.as_ref() {
+            pb.set_position(new);
+        }
         file.write_all(&bytes).await?;
     }
 
-    pb.finish();
+    if let Some(pb) = pb.progress.as_ref() {
+        pb.finish();
+    }
 
     while let Some(bytes) = res.chunk().await? {
         file.write_all(&bytes).await?;

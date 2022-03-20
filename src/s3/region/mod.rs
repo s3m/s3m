@@ -11,10 +11,10 @@ pub enum Region {
     // Asia Pacific (Hong Kong)	    ap-east-1
     ApEast1,
 
-    // Asia Pacific (Tokyo)	    ap-northeast-1
+    // Asia Pacific (Tokyo)	        ap-northeast-1
     ApNortheast1,
 
-    // Asia Pacific (Seoul)	    ap-northeast-2
+    // Asia Pacific (Seoul)	        ap-northeast-2
     ApNortheast2,
 
     // Asia Pacific (Osaka-Local)   ap-northeast-3
@@ -38,10 +38,10 @@ pub enum Region {
     // China (Ningxia)	            cn-northwest-1
     CnNorthwest1,
 
-    // Europe (Frankfurt)	    eu-central-1
+    // Europe (Frankfurt)	        eu-central-1
     EuCentral1,
 
-    // Europe (Stockholm)	    eu-north-1
+    // Europe (Stockholm)	        eu-north-1
     EuNorth1,
 
     // Europe (Milan)	            eu-south-1
