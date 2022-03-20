@@ -1,12 +1,11 @@
 use crate::s3::{actions, S3};
 use crate::s3m::{progressbar::Bar, Db, Part};
 use anyhow::{anyhow, Result};
-use futures::stream::FuturesUnordered;
+use futures::stream::{FuturesUnordered, StreamExt};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
 use std::time::Duration;
 use tokio::time;
-use tokio_stream::StreamExt;
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
@@ -74,7 +73,7 @@ pub async fn multipart_upload(
         }
 
         // limit to N threads
-        if tasks.len() == 2 {
+        if tasks.len() == num_cpus::get_physical() {
             if let Some(r) = tasks.next().await {
                 // TODO better error handling
                 if r.is_ok() {

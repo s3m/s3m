@@ -4,6 +4,7 @@
 // https://stackoverflow.com/a/63374116/1135424
 use anyhow::Result;
 use bytes::Bytes;
+use futures::stream::StreamExt;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Response,
@@ -13,7 +14,6 @@ use std::io::SeekFrom;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::mpsc::UnboundedSender;
-use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 

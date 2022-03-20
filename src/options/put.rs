@@ -66,7 +66,9 @@ pub async fn put_object(
         .check()?
         .context("could not query db, try option \"-r\", to clean it");
     if let Ok(etag) = etag {
-        println!("{}", etag);
+        if !quiet {
+            println!("{}", etag);
+        }
         return Ok(());
     };
 
