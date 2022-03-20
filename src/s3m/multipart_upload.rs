@@ -66,6 +66,12 @@ pub async fn multipart_upload(
 
     let mut tasks = FuturesUnordered::new();
 
+    let threads = if num_cpus::get_physical() - 1 <= 0 {
+        1
+    } else {
+        num_cpus::get_physical() - 1
+    };
+
     for part in db_parts.iter().values() {
         if let Ok(p) = part {
             let part: Part = from_reader(&p[..])?;
@@ -73,7 +79,7 @@ pub async fn multipart_upload(
         }
 
         // limit to N threads
-        if tasks.len() == num_cpus::get_physical() {
+        if tasks.len() == threads {
             if let Some(r) = tasks.next().await {
                 // TODO better error handling
                 if r.is_ok() {
