@@ -3,6 +3,7 @@ use crate::s3m::Part;
 use anyhow::Result;
 use serde_cbor::{de::from_reader, to_vec};
 use std::collections::BTreeMap;
+use std::convert::Into;
 use std::path::Path;
 
 pub const DB_PARTS: &str = "parts";
@@ -134,7 +135,7 @@ impl Db {
                                 },
                             )
                         })
-                        .map_err(std::convert::Into::into)
+                        .map_err(Into::into)
                 })
             })
             .collect::<Result<BTreeMap<u16, actions::Part>>>()
