@@ -39,7 +39,6 @@ pub async fn get(s3: S3, key: String, dest: Option<String>, quiet: bool) -> Resu
     };
 
     let mut downloaded = 0;
-
     while let Some(bytes) = res.chunk().await? {
         let new = min(downloaded + bytes.len() as u64, file_size);
         downloaded = new;

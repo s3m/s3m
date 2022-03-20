@@ -1,7 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
-use colored::Colorize;
-// use http::method::Method;
 use indicatif::{ProgressBar, ProgressStyle};
 use s3m::options;
 use s3m::s3::{actions, tools};
@@ -44,48 +41,12 @@ async fn main() -> Result<()> {
         } => {
             if bucket.is_some() {
                 if list_multipart_uploads {
-                    let action = actions::ListMultipartUploads::new();
-                    let rs = action.request(&s3).await?;
-                    if let Some(uploads) = rs.upload {
-                        for upload in uploads {
-                            let dt = DateTime::parse_from_rfc3339(&upload.initiated)?;
-                            let initiated: DateTime<Utc> = DateTime::from(dt);
-                            println!(
-                                "{} {} {}",
-                                format!("[{}]", initiated.format("%F %T %Z")).green(),
-                                upload.upload_id.yellow(),
-                                upload.key
-                            );
-                        }
-                    }
+                    options::list_multipart_uploads(&s3).await?;
                 } else {
-                    let mut action = actions::ListObjectsV2::new();
-                    action.prefix = Some(String::from(""));
-                    let rs = action.request(&s3).await?;
-                    for object in rs.contents {
-                        let dt = DateTime::parse_from_rfc3339(&object.last_modified)?;
-                        let last_modified: DateTime<Utc> = DateTime::from(dt);
-                        println!(
-                            "{} {:>10} {:<}",
-                            format!("[{}]", last_modified.format("%F %T %Z")).green(),
-                            bytesize::to_string(object.size, true).yellow(),
-                            object.key
-                        );
-                    }
+                    options::list_objects(&s3).await?;
                 }
             } else {
-                // LIST BUCKETS
-                let action = actions::ListBuckets::new();
-                let rs = action.request(&s3).await?;
-                for bucket in rs.buckets.bucket {
-                    let dt = DateTime::parse_from_rfc3339(&bucket.creation_date)?;
-                    let creation_date: DateTime<Utc> = DateTime::from(dt);
-                    println!(
-                        "{} {}",
-                        format!("[{}]", creation_date.format("%F %T %Z")).green(),
-                        bucket.name.yellow()
-                    );
-                }
+                options::list_buckets(&s3).await?;
             }
         }
 
