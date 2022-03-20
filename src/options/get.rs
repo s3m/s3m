@@ -32,10 +32,10 @@ pub async fn get(s3: S3, key: String, dest: Option<String>, quiet: bool) -> Resu
         .content_length()
         .context("could not get content_length")?;
 
-    let pb = if !quiet {
-        Bar::new(file_size)
+    let pb = if quiet {
+        Bar::default()
     } else {
-        Default::default()
+        Bar::new(file_size)
     };
 
     let mut downloaded = 0;

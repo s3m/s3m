@@ -13,8 +13,8 @@ const MAX_PARTS_PER_UPLOAD: usize = 10_000;
 pub async fn put_object(
     s3: &S3,
     mut buf_size: usize,
-    file: String,
-    key: String,
+    file: &str,
+    key: &str,
     s3m_dir: PathBuf,
     quiet: bool,
 ) -> Result<()> {
@@ -56,9 +56,9 @@ pub async fn put_object(
         return Err(anyhow!("max part size 5 GB"));
     }
 
-    let checksum = checksum(&file, quiet)?;
+    let checksum = checksum(file, quiet)?;
 
-    let db = Db::new(s3, &key, &checksum, file_mtime, &s3m_dir)
+    let db = Db::new(s3, key, &checksum, file_mtime, &s3m_dir)
         .context("could not create stream tree, try option \"-r\"")?;
 
     // check if file has been uploded already
@@ -72,23 +72,27 @@ pub async fn put_object(
 
     // upload in multipart
     if file_size > buf_size as u64 {
-        let rs = multipart_upload(s3, &key, &file, file_size, buf_size as u64, &db)
+        let rs = multipart_upload(s3, key, file, file_size, buf_size as u64, &db, quiet)
             .await
             .context("multipart upload failed")?;
-        println!("{}", rs);
+        if !quiet {
+            println!("{}", rs);
+        }
     } else {
-        let rs = upload(s3, &key, &file, file_size, &db, quiet).await?;
-        println!("{}", rs);
+        let rs = upload(s3, key, file, file_size, &db, quiet).await?;
+        if !quiet {
+            println!("{}", rs);
+        }
     }
 
     Ok(())
 }
 
 fn checksum(file: &str, quiet: bool) -> Result<String> {
-    let pb = if !quiet {
-        Bar::new_spinner()
+    let pb = if quiet {
+        Bar::default()
     } else {
-        Default::default()
+        Bar::new_spinner()
     };
     // CHECKSUM BLAKE3
     let checksum = tools::blake3(file).context("could not calculate the checksum")?;

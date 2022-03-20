@@ -27,6 +27,7 @@ impl Bar {
         Self { progress: Some(pb) }
     }
 
+    #[must_use]
     pub fn new_spinner() -> Self {
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(200);

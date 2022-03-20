@@ -1,26 +1,12 @@
 use crate::s3::{actions, S3};
-use crate::s3m::{Db, Part};
+use crate::s3m::{progressbar::Bar, Db, Part};
 use anyhow::{anyhow, Result};
 use futures::stream::FuturesUnordered;
-use indicatif::{ProgressBar, ProgressStyle};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
 use std::time::Duration;
 use tokio::time;
 use tokio_stream::StreamExt;
-
-fn progress_bar_parts(file_size: u64) -> ProgressBar {
-    let pb = ProgressBar::new(file_size);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})")
-            // "█▉▊▋▌▍▎▏  ·"
-            .progress_chars(
-                "\u{2588}\u{2589}\u{258a}\u{258b}\u{258c}\u{258d}\u{258e}\u{258f}  \u{b7}",
-            ),
-    );
-    pb
-}
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
@@ -33,6 +19,7 @@ pub async fn multipart_upload(
     file_size: u64,
     chunk_size: u64,
     sdb: &Db,
+    quiet: bool,
 ) -> Result<String> {
     // trees for keeping track of parts to upload
     let db_parts = sdb.db_parts()?;
@@ -68,8 +55,15 @@ pub async fn multipart_upload(
     }
 
     // Upload parts progress bar
-    let pb = progress_bar_parts(file_size);
-    pb.inc(db_uploaded.len() as u64 * chunk_size);
+    let pb = if quiet {
+        Bar::default()
+    } else {
+        Bar::new(file_size)
+    };
+
+    if let Some(pb) = pb.progress.as_ref() {
+        pb.inc(db_uploaded.len() as u64 * chunk_size);
+    }
 
     let mut tasks = FuturesUnordered::new();
 
@@ -84,7 +78,9 @@ pub async fn multipart_upload(
             if let Some(r) = tasks.next().await {
                 // TODO better error handling
                 if r.is_ok() {
-                    pb.inc(chunk_size);
+                    if let Some(pb) = pb.progress.as_ref() {
+                        pb.inc(chunk_size);
+                    }
                 }
             }
         }
@@ -93,10 +89,14 @@ pub async fn multipart_upload(
     // consume remaining tasks
     while let Some(r) = tasks.next().await {
         if r.is_ok() {
-            pb.inc(chunk_size);
+            if let Some(pb) = pb.progress.as_ref() {
+                pb.inc(chunk_size);
+            }
         }
     }
-    pb.finish();
+    if let Some(pb) = pb.progress.as_ref() {
+        pb.finish();
+    }
 
     if !db_parts.is_empty() {
         return Err(anyhow!("could not upload all parts"));

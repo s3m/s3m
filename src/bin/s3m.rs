@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
                 let etag = stream(&s3, &key, BUFFER_SIZE).await?;
                 println!("{}", etag);
             } else if let Some(file) = file {
-                options::put_object(&s3, buf_size, file, key, s3m_dir, quiet).await?;
+                options::put_object(&s3, buf_size, &file, &key, s3m_dir, quiet).await?;
             }
         }
 
