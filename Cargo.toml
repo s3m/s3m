@@ -15,7 +15,6 @@ edition = "2018"
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
-same-file = "1"
 base64 = "0.13"
 blake3 = "1"
 bytes = "1"

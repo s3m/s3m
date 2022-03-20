@@ -66,7 +66,7 @@ pub async fn multipart_upload(
 
     let mut tasks = FuturesUnordered::new();
 
-    let threads = if num_cpus::get_physical() - 1 <= 0 {
+    let threads = if num_cpus::get_physical() - 1 == 0 {
         1
     } else {
         num_cpus::get_physical() - 1

@@ -1,5 +1,5 @@
 use crate::s3::{actions, S3};
-use crate::s3m::Db;
+use crate::s3m::{progressbar::Bar, Db};
 use anyhow::{anyhow, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};

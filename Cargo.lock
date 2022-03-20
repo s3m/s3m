@@ -1063,7 +1063,6 @@ dependencies = [
  "percent-encoding",
  "reqwest",
  "ring",
- "same-file",
  "serde",
  "serde-xml-rs",
  "serde_cbor",
@@ -1073,15 +1072,6 @@ dependencies = [
  "tokio",
  "tokio-util 0.7.0",
  "url",
-]
-
-[[package]]
-name = "same-file"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
-dependencies = [
- "winapi-util",
 ]
 
 [[package]]
