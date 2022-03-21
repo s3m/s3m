@@ -4,7 +4,7 @@
 // https://stackoverflow.com/a/63374116/1135424
 use anyhow::Result;
 use bytes::Bytes;
-use futures::stream::StreamExt;
+use futures::stream::TryStreamExt;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Response,
@@ -36,25 +36,15 @@ pub async fn request(
 
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
-        let mut stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 128);
-
-        let stream = async_stream::stream! {
-            if let Some(tx) = sender {
-                while let Some(bytes) = stream.next().await {
-                    if let Ok(bytes) = &bytes {
-                        if let Err(e) = tx.send(bytes.len()){
-                            eprintln!("{} - {}", e, bytes.len());
-                        }
+        let stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 128).inspect_ok(
+            move |chunk| {
+                if let Some(tx) = &sender {
+                    if let Err(e) = tx.send(chunk.len()) {
+                        eprintln!("{} - {}", e, chunk.len());
                     }
-                    yield bytes;
                 }
-            } else {
-                while let Some(bytes) = stream.next().await {
-                    yield bytes;
-                }
-            }
-        };
-
+            },
+        );
         let body = Body::wrap_stream(stream);
         client.request(method, url).headers(headers).body(body)
     } else {
