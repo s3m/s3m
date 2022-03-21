@@ -51,8 +51,8 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
     // try_fold will pass writer to fold_fn until there are no more bytes to read.
     // FrameRead return a stream of Result<BytesMut, Error>.
     let stream = FramedRead::new(stdin(), BytesCodec::new())
-        .inspect_ok(move |chunk| {
-            if let Some(pb) = pb.progress.as_ref() {
+        .inspect_ok(|chunk| {
+            if let Some(pb) = &pb.progress {
                 count += chunk.len();
                 pb.set_message(bytesize::to_string(count as u64, true));
             }
@@ -70,6 +70,9 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
             s3,
             upload_id,
         } => {
+            if let Some(pb) = &pb.progress {
+                pb.set_message(bytesize::to_string(count as u64, true));
+            }
             let stream = buffer.freeze();
             let action = actions::StreamPart::new(key, stream, part_number, upload_id);
             let etag = action.request(s3).await?;
