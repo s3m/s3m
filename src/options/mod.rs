@@ -12,3 +12,6 @@ pub use self::list::{list_buckets, list_multipart_uploads, list_objects};
 
 mod put;
 pub use self::put::put_object;
+
+mod stream;
+pub use self::stream::stream;

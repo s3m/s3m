@@ -10,9 +10,6 @@ pub use self::multipart_upload::multipart_upload;
 mod db;
 pub use self::db::Db;
 
-mod stream;
-pub use self::stream::stream;
-
 mod part;
 pub use self::part::Part;
 

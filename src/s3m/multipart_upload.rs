@@ -4,8 +4,7 @@ use anyhow::{anyhow, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
-use std::time::Duration;
-use tokio::time;
+use tokio::time::{sleep, Duration};
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
@@ -155,7 +154,7 @@ async fn upload_part(
                 if retries < 3 {
                     retries += 1;
                     // TODO backoff strategy
-                    time::sleep(Duration::from_secs(retries)).await;
+                    sleep(Duration::from_secs(retries)).await;
                 } else {
                     return Err(e);
                 }

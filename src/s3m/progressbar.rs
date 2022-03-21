@@ -9,7 +9,7 @@ const PROGRES_CHARS_SPINNER: &[&str] = &[
     "",
 ];
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Bar {
     pub progress: Option<ProgressBar>,
 }
@@ -35,6 +35,18 @@ impl Bar {
             ProgressStyle::default_spinner()
                 .tick_strings(PROGRES_CHARS_SPINNER)
                 .template("checksum: {spinner:.green}"),
+        );
+        Self { progress: Some(pb) }
+    }
+
+    #[must_use]
+    pub fn new_spinner_stream() -> Self {
+        let pb = ProgressBar::new_spinner();
+        pb.enable_steady_tick(200);
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .tick_strings(PROGRES_CHARS_SPINNER)
+                .template("[{elapsed_precise}] {msg} {spinner:.green}"),
         );
         Self { progress: Some(pb) }
     }

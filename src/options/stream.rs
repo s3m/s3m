@@ -1,87 +1,77 @@
 use crate::s3::{actions, S3};
+use crate::s3m::progressbar::Bar;
 use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use futures::stream::TryStreamExt;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::BTreeMap;
 use tokio::io::stdin;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+// 512MB
+const BUFFER_SIZE: usize = 1024 * 1024 * 512;
+
 enum StreamWriter<'a> {
     Init {
-        buf_size: usize,
         key: &'a str,
-        pb: &'a ProgressBar,
         s3: &'a S3,
         upload_id: &'a str,
     },
     Uploading {
-        buf_size: usize,
         buffer: BytesMut,
-        count: usize,
         etags: Vec<String>,
         key: &'a str,
         part_number: u16,
-        pb: &'a ProgressBar,
         s3: &'a S3,
         upload_id: &'a str,
     },
 }
 
-// S3 requires a minimum chunk size of 5MB, and supports at most 10,000 chunks
-// per multipart upload.
-pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<String> {
+/// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the
+/// max supported file object of 5TB
+pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key);
     let response = action.request(s3).await?;
 
-    let pb = ProgressBar::new_spinner();
-    pb.enable_steady_tick(200);
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .tick_strings(&[
-                "\u{2801}", "\u{2802}", "\u{2804}", "\u{2840}", "\u{2880}", "\u{2820}", "\u{2810}",
-                "\u{2808}", "",
-            ])
-            .template("{spinner:.green}  {msg}"),
-    );
+    // Upload parts progress bar
+    let pb = if quiet {
+        Bar::default()
+    } else {
+        Bar::new_spinner_stream()
+    };
 
     // initialize writer
-    // TODO use references instead of copy the values
     let writer = StreamWriter::Init {
-        buf_size,
         key,
         s3,
         upload_id: &response.upload_id,
-        pb: &pb,
     };
 
-    // try_fold will pass writer to fold_fn until there are no more bytes to
-    // read. FrameRead return a stream of Result<BytesMut, Error>.
-    let result = FramedRead::new(stdin(), BytesCodec::new())
+    let mut count = 0;
+    // try_fold will pass writer to fold_fn until there are no more bytes to read.
+    // FrameRead return a stream of Result<BytesMut, Error>.
+    let stream = FramedRead::new(stdin(), BytesCodec::new())
+        .inspect_ok(move |chunk| {
+            if let Some(pb) = pb.progress.as_ref() {
+                count += chunk.len();
+                pb.set_message(bytesize::to_string(count as u64, true));
+            }
+        })
         .try_fold(writer, fold_fn)
         .await?;
 
-    // compleat the multipart upload
-    match result {
+    // complete the multipart upload
+    match stream {
         StreamWriter::Uploading {
-            buf_size: _,
             buffer,
-            count,
             key,
             mut etags,
             part_number,
-            pb,
             s3,
             upload_id,
         } => {
-            pb.finish_and_clear();
-            println!(
-                "Uploaded Bytes: {}",
-                bytesize::to_string(count as u64, true)
-            );
-
-            let action = actions::StreamPart::new(key, buffer.freeze(), part_number, upload_id);
+            let stream = buffer.freeze();
+            let action = actions::StreamPart::new(key, stream, part_number, upload_id);
             let etag = action.request(s3).await?;
             etags.push(etag);
 
@@ -94,54 +84,41 @@ pub async fn stream<'a>(s3: &'a S3, key: &'a str, buf_size: usize) -> Result<Str
 
             let action = actions::CompleteMultipartUpload::new(key, upload_id, uploaded);
             let rs = action.request(s3).await?;
-            Ok(format!("ETag: {}", rs.e_tag))
+            Ok(rs.e_tag)
         }
-        _ => todo!(),
+        _ => panic!(),
     }
 }
-
 async fn fold_fn<'a>(
     writer: StreamWriter<'_>,
     bytes: BytesMut,
 ) -> Result<StreamWriter<'_>, std::io::Error> {
+    // in the first interaction Init will only match and initialize the StreamWriter
+    // then Uploading will only match until it consumes all data from STDIN
     let writer = match writer {
-        StreamWriter::Init {
-            buf_size,
-            key,
-            pb,
-            s3,
-            upload_id,
-        } => StreamWriter::Uploading {
-            buf_size,
-            buffer: BytesMut::with_capacity(buf_size),
-            count: 0,
+        StreamWriter::Init { key, s3, upload_id } => StreamWriter::Uploading {
+            buffer: BytesMut::with_capacity(BUFFER_SIZE),
             etags: Vec::new(),
             key,
             part_number: 1,
-            pb,
             s3,
             upload_id,
         },
         _ => writer,
     };
+
     match writer {
         StreamWriter::Uploading {
-            buf_size,
             key,
             mut buffer,
-            mut count,
             mut etags,
             part_number,
-            pb,
             s3,
             upload_id,
         } => {
-            count += bytes.len();
-            pb.set_message(bytesize::to_string(count as u64, true));
-
             // if buffer size > buf_size create another buffer and upload the previous one
-            if buffer.len() + bytes.len() >= buf_size {
-                let mut new_buf = BytesMut::with_capacity(buf_size);
+            if buffer.len() + bytes.len() >= BUFFER_SIZE {
+                let mut new_buf = BytesMut::with_capacity(BUFFER_SIZE);
                 new_buf.put(bytes);
 
                 // upload the old buffer
@@ -152,31 +129,25 @@ async fn fold_fn<'a>(
 
                 // loop again until buffer is full
                 Ok(StreamWriter::Uploading {
-                    buf_size,
                     buffer: new_buf,
-                    count,
                     etags,
                     key,
                     part_number: part_number + 1,
-                    pb,
                     s3,
                     upload_id,
                 })
             } else {
                 buffer.put(bytes);
                 Ok(StreamWriter::Uploading {
-                    buf_size,
                     buffer,
-                    count,
                     etags,
                     key,
                     part_number,
-                    pb,
                     s3,
                     upload_id,
                 })
             }
         }
-        _ => todo!(), // this should never happen
+        _ => panic!(),
     }
 }

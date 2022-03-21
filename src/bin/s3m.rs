@@ -1,10 +1,7 @@
 use anyhow::Result;
 use s3m::options;
 use s3m::s3::actions;
-use s3m::s3m::stream;
 use s3m::s3m::{start, Action};
-
-const BUFFER_SIZE: usize = 536_870_912;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,8 +51,10 @@ async fn main() -> Result<()> {
             quiet,
         } => {
             if pipe {
-                let etag = stream(&s3, &key, BUFFER_SIZE).await?;
-                println!("{}", etag);
+                let etag = options::stream(&s3, &key, quiet).await?;
+                if !quiet {
+                    println!("ETag: {}", etag);
+                }
             } else if let Some(file) = file {
                 options::put_object(&s3, buf_size, &file, &key, s3m_dir, quiet).await?;
             }
