@@ -13,7 +13,8 @@ pub async fn upload(
     quiet: bool,
 ) -> Result<String> {
     let (sender, mut receiver) = unbounded_channel();
-    let mut action = actions::PutObject::new(key, file, Some(sender));
+    let channel = if quiet { None } else { Some(sender) };
+    let mut action = actions::PutObject::new(key, file, channel);
     // TODO
     action.x_amz_acl = Some(String::from("public-read"));
 
