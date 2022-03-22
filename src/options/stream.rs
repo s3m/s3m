@@ -1,9 +1,11 @@
 use crate::s3::{actions, S3};
 use crate::s3m::progressbar::Bar;
 use anyhow::Result;
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use futures::stream::TryStreamExt;
 use std::collections::BTreeMap;
+use std::io::Write;
+use tempfile::{Builder, NamedTempFile};
 use tokio::io::stdin;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
@@ -16,8 +18,9 @@ enum StreamWriter<'a> {
         s3: &'a S3,
         upload_id: &'a str,
     },
-    Uploading {
-        buffer: BytesMut,
+    Streaming {
+        tmp_file: NamedTempFile,
+        count: usize,
         etags: Vec<String>,
         key: &'a str,
         part_number: u16,
@@ -62,8 +65,9 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
 
     // complete the multipart upload
     match stream {
-        StreamWriter::Uploading {
-            buffer,
+        StreamWriter::Streaming {
+            tmp_file,
+            count,
             key,
             mut etags,
             part_number,
@@ -73,10 +77,9 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
             if let Some(pb) = &pb.progress {
                 pb.set_message(bytesize::to_string(count as u64, true));
             }
-            let stream = buffer.freeze();
-            let action = actions::StreamPart::new(key, stream, part_number, upload_id);
-            let etag = action.request(s3).await?;
-            etags.push(etag);
+            //let action = actions::StreamPart::new(key, stream, part_number, upload_id);
+            //let etag = action.request(s3).await?;
+            //etags.push(etag);
 
             // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html
             let uploaded: BTreeMap<u16, actions::Part> = etags
@@ -93,46 +96,54 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
     }
 }
 async fn fold_fn<'a>(
-    writer: StreamWriter<'_>,
+    writer: StreamWriter<'a>,
     bytes: BytesMut,
-) -> Result<StreamWriter<'_>, std::io::Error> {
+) -> Result<StreamWriter<'a>, std::io::Error> {
     // in the first interaction Init will only match and initialize the StreamWriter
-    // then Uploading will only match until it consumes all data from STDIN
+    // then Streaming will only match until it consumes all data from STDIN
     let writer = match writer {
-        StreamWriter::Init { key, s3, upload_id } => StreamWriter::Uploading {
-            buffer: BytesMut::with_capacity(BUFFER_SIZE),
-            etags: Vec::new(),
-            key,
-            part_number: 1,
-            s3,
-            upload_id,
-        },
+        StreamWriter::Init { key, s3, upload_id } => {
+            let named_tempfile = Builder::new().prefix(upload_id).suffix(".s3m").tempfile()?;
+            StreamWriter::Streaming {
+                tmp_file: named_tempfile,
+                count: 0,
+                etags: Vec::new(),
+                key,
+                part_number: 1,
+                s3,
+                upload_id,
+            }
+        }
         _ => writer,
     };
 
     match writer {
-        StreamWriter::Uploading {
+        StreamWriter::Streaming {
+            mut tmp_file,
             key,
-            mut buffer,
+            mut count,
             mut etags,
             part_number,
             s3,
             upload_id,
         } => {
-            // if buffer size > buf_size create another buffer and upload the previous one
-            if buffer.len() + bytes.len() >= BUFFER_SIZE {
-                let mut new_buf = BytesMut::with_capacity(BUFFER_SIZE);
-                new_buf.put(bytes);
+            count += bytes.len();
 
+            // if buffer size > buf_size create another buffer and upload the previous one
+            if count + bytes.len() >= BUFFER_SIZE {
                 // upload the old buffer
-                let action = actions::StreamPart::new(key, buffer.freeze(), part_number, upload_id);
+                //                let action = actions::StreamPart::new(key, file, part_number, upload_id);
                 // TODO remove unwrap
-                let etag = action.request(s3).await.unwrap();
-                etags.push(etag);
+                //               let etag = action.request(s3).await.unwrap();
+                //              etags.push(etag);
 
                 // loop again until buffer is full
-                Ok(StreamWriter::Uploading {
-                    buffer: new_buf,
+
+                println!("flush: {:#?}", tmp_file);
+                tmp_file.close()?;
+                Ok(StreamWriter::Streaming {
+                    tmp_file: Builder::new().prefix(upload_id).suffix(".s3m").tempfile()?,
+                    count: 0,
                     etags,
                     key,
                     part_number: part_number + 1,
@@ -140,9 +151,10 @@ async fn fold_fn<'a>(
                     upload_id,
                 })
             } else {
-                buffer.put(bytes);
-                Ok(StreamWriter::Uploading {
-                    buffer,
+                tmp_file.write_all(&bytes)?;
+                Ok(StreamWriter::Streaming {
+                    tmp_file,
+                    count,
                     etags,
                     key,
                     part_number,
