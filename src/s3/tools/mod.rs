@@ -8,6 +8,7 @@ use ring::{
 use std::fmt::Write;
 use std::io::prelude::*;
 use std::io::SeekFrom;
+use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
@@ -15,7 +16,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 /// # Errors
 ///
 /// Will return `Err` if can not open the file
-pub async fn sha256_md5_digest(file_path: &str) -> Result<(String, String, usize)> {
+pub async fn sha256_md5_digest(file_path: &Path) -> Result<(String, String, usize)> {
     let file = File::open(file_path).await?;
     let mut stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 256);
     let mut context_sha = Context::new(&SHA256);

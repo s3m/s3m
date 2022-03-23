@@ -46,7 +46,7 @@ impl Bar {
         pb.set_style(
             ProgressStyle::default_spinner()
                 .tick_strings(PROGRES_CHARS_SPINNER)
-                .template("[{elapsed_precise}] {msg} {spinner:.green}"),
+                .template("[{elapsed_precise}] {msg} {spinner:.green} {post:>7}"),
         );
         Self { progress: Some(pb) }
     }

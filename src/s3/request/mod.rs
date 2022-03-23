@@ -11,6 +11,7 @@ use reqwest::{
 };
 use std::collections::BTreeMap;
 use std::io::SeekFrom;
+use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::mpsc::UnboundedSender;
@@ -24,7 +25,7 @@ pub async fn request(
     url: Url,
     method: http::method::Method,
     headers: &BTreeMap<String, String>,
-    file: Option<String>,
+    file: Option<&Path>,
     sender: Option<UnboundedSender<usize>>,
 ) -> Result<Response> {
     let headers = headers

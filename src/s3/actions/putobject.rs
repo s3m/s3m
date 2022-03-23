@@ -5,6 +5,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use http::method::Method;
 use std::collections::BTreeMap;
+use std::path::Path;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Default)]
@@ -54,7 +55,7 @@ impl<'a> PutObject<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
-        let (sha, md5, length) = tools::sha256_md5_digest(self.file).await?;
+        let (sha, md5, length) = tools::sha256_md5_digest(Path::new(self.file)).await?;
         // TODO
         // pass headers
         let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
@@ -62,7 +63,7 @@ impl<'a> PutObject<'a> {
             url.clone(),
             self.http_method(),
             headers,
-            Some(self.file.to_string()),
+            Some(Path::new(self.file)),
             self.sender,
         )
         .await?;

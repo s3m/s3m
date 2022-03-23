@@ -3,50 +3,51 @@ use crate::{
     s3::{request, tools, S3},
 };
 use anyhow::{anyhow, Result};
-use bytes::Bytes;
 use http::method::Method;
 use std::collections::BTreeMap;
+use std::path::Path;
+use tokio::sync::mpsc::UnboundedSender;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct StreamPart<'a> {
     key: &'a str,
-    stream: Bytes,
+    path: &'a Path,
     part_number: String,
     upload_id: &'a str,
-    pub content_length: Option<String>,
-    pub content_type: Option<String>,
-    pub x_amz_server_side_encryption_customer_algorithm: Option<String>,
-    pub x_amz_server_side_encryption_customer_key: Option<String>,
-    pub x_amz_server_side_encryption_customer_key_md5: Option<String>,
-    pub x_amz_request_payer: Option<String>,
+    sender: Option<UnboundedSender<usize>>,
 }
 
 impl<'a> StreamPart<'a> {
     #[must_use]
-    pub fn new(key: &'a str, stream: Bytes, part_number: u16, upload_id: &'a str) -> Self {
+    pub fn new(
+        key: &'a str,
+        path: &'a Path,
+        part_number: u16,
+        upload_id: &'a str,
+        sender: Option<UnboundedSender<usize>>,
+    ) -> Self {
         let pn = part_number.to_string();
         Self {
             key,
-            stream,
+            path,
             part_number: pn,
             upload_id,
-            ..Self::default()
+            sender,
         }
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(&self, s3: &S3) -> Result<String> {
-        let sha256 = tools::sha256_digest(&self.stream);
-        let md5 = tools::base64_md5(&self.stream);
-
-        let (url, headers) = &self.sign(s3, &sha256, Some(&md5), None)?;
-        let response = request::upload(
+    pub async fn request(self, s3: &S3) -> Result<String> {
+        let (sha, md5, length) = tools::sha256_md5_digest(self.path).await?;
+        let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
+        let response = request::request(
             url.clone(),
             self.http_method(),
             headers,
-            self.stream.clone(),
+            Some(self.path),
+            self.sender,
         )
         .await?;
         if response.status().is_success() {
@@ -92,10 +93,11 @@ impl<'a> Action for StreamPart<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
 
     #[test]
     fn test_method() {
-        let action = StreamPart::new("key", Bytes::from("Hello world"), 1, "uid");
+        let action = StreamPart::new("key", Bytes::from("Hello world"), 1, "uid", None);
         assert_eq!(Method::PUT, action.http_method());
     }
 }
