@@ -3,10 +3,10 @@ use crate::{
     s3::{request, tools, S3},
 };
 use anyhow::{anyhow, Result};
+use crossbeam::channel::Sender;
 use http::method::Method;
 use std::collections::BTreeMap;
 use std::path::Path;
-use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Clone)]
 pub struct StreamPart<'a> {
@@ -14,7 +14,7 @@ pub struct StreamPart<'a> {
     path: &'a Path,
     part_number: String,
     upload_id: &'a str,
-    sender: Option<UnboundedSender<usize>>,
+    sender: Option<Sender<usize>>,
 }
 
 impl<'a> StreamPart<'a> {
@@ -24,7 +24,7 @@ impl<'a> StreamPart<'a> {
         path: &'a Path,
         part_number: u16,
         upload_id: &'a str,
-        sender: Option<UnboundedSender<usize>>,
+        sender: Option<Sender<usize>>,
     ) -> Self {
         let pn = part_number.to_string();
         Self {

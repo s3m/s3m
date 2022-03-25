@@ -1,8 +1,8 @@
 use crate::s3::{actions, S3};
 use crate::s3m::{progressbar::Bar, Db};
 use anyhow::{anyhow, Result};
+use crossbeam::channel::unbounded;
 use std::cmp::min;
-use tokio::sync::mpsc::unbounded_channel;
 
 pub async fn upload(
     s3: &S3,
@@ -12,7 +12,7 @@ pub async fn upload(
     sdb: &Db,
     quiet: bool,
 ) -> Result<String> {
-    let (sender, mut receiver) = unbounded_channel();
+    let (sender, receiver) = unbounded::<usize>();
     let channel = if quiet { None } else { Some(sender) };
     let mut action = actions::PutObject::new(key, file, channel);
     // TODO
@@ -22,7 +22,7 @@ pub async fn upload(
         if let Some(pb) = Bar::new(file_size).progress {
             tokio::spawn(async move {
                 let mut uploaded = 0;
-                while let Some(i) = receiver.recv().await {
+                while let Ok(i) = receiver.recv() {
                     let new = min(uploaded + i as u64, file_size);
                     uploaded = new;
                     pb.set_position(new);

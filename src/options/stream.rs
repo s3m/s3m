@@ -2,13 +2,12 @@ use crate::s3::{actions, S3};
 use crate::s3m::progressbar::Bar;
 use anyhow::Result;
 use bytes::BytesMut;
+use crossbeam::channel::{unbounded, Sender};
 use futures::stream::TryStreamExt;
-use std::cmp::min;
 use std::collections::BTreeMap;
 use std::io::Write;
 use tempfile::{Builder, NamedTempFile};
 use tokio::io::stdin;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 // 512MB
@@ -23,23 +22,39 @@ struct Stream<'a> {
     part_number: u16,
     s3: &'a S3,
     upload_id: &'a str,
+    channel: Option<Sender<usize>>,
 }
 
-/// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the
-/// max supported file object of 5TB
+/// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
 pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key);
     let response = action.request(s3).await?;
     let upload_id = response.upload_id;
-    //let (sender, mut receiver) = unbounded_channel();
-    // let channel = if quiet { None } else { Some(sender) };
+    let (sender, receiver) = unbounded::<usize>();
+    let channel = if quiet { None } else { Some(sender) };
 
     // Upload parts progress bar
     let pb = if quiet {
         Bar::default()
     } else {
         Bar::new_spinner_stream()
+    };
+
+    if !quiet {
+        if let Some(pb) = pb.progress.clone() {
+            tokio::spawn(async move {
+                let mut count = 0;
+                while let Ok(i) = receiver.recv() {
+                    count += i;
+                    pb.set_message(bytesize::to_string(count as u64, true));
+                    //                 if (count % BUFFER_SIZE) == 0 {
+                    //                    pb.disable_steady_tick();
+                    //               }
+                }
+                pb.finish();
+            });
+        }
     };
 
     let first_stream = Stream {
@@ -53,11 +68,13 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
         part_number: 1,
         s3,
         upload_id: &upload_id,
+        channel,
     };
 
     let mut count = 0;
     // try_fold will pass writer to fold_fn until there are no more bytes to read.
     // FrameRead return a stream of Result<BytesMut, Error>.
+    // TODO get the sha256_md5_digest here to prevent reading twice
     let mut last_stream = FramedRead::new(stdin(), BytesCodec::new())
         .inspect_ok(|chunk| {
             if let Some(pb) = &pb.progress {
@@ -67,7 +84,6 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
         })
         .try_fold(first_stream, fold_fn)
         .await?;
-
     let action = actions::StreamPart::new(
         key,
         last_stream.tmp_file.path(),
@@ -100,7 +116,7 @@ async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'a>
             part.tmp_file.path(),
             part.part_number,
             part.upload_id,
-            None,
+            part.channel.clone(),
         );
         // TODO handle unwrap
         let etag = action.request(part.s3).await.unwrap();
