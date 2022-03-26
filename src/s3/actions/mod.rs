@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use url::Url;
 
 const EMPTY_PAYLOAD_SHA256: &[u8] =
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".as_bytes();
+    b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html>
 mod listbuckets;

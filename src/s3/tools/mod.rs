@@ -39,7 +39,7 @@ pub async fn sha256_md5_digest_multipart(
     file_path: &str,
     seek: u64,
     chunk: u64,
-) -> Result<(String, String, usize)> {
+) -> Result<(digest::Digest, md5::Digest, usize)> {
     let mut file = File::open(file_path).await?;
     file.seek(SeekFrom::Start(seek)).await?;
     let file = file.take(chunk);
@@ -54,11 +54,7 @@ pub async fn sha256_md5_digest_multipart(
     }
     let digest_sha = context_sha.finish();
     let digest_md5 = context_md5.compute();
-    Ok((
-        write_hex_bytes(digest_sha.as_ref()),
-        base64::encode(digest_md5.as_ref()),
-        length,
-    ))
+    Ok((digest_sha, digest_md5, length))
 }
 
 #[must_use]

@@ -107,15 +107,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = StreamPart::new(
-            "key",
-            Path::new("/"),
-            1,
-            "uid",
-            0,
-            "sha".as_bytes(),
-            "md5".as_bytes(),
-        );
+        let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, b"sha", b"md5");
         assert_eq!(Method::PUT, action.http_method());
     }
 }

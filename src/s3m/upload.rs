@@ -3,6 +3,7 @@ use crate::s3m::{progressbar::Bar, Db};
 use anyhow::{anyhow, Result};
 use crossbeam::channel::unbounded;
 use std::cmp::min;
+use std::path::Path;
 
 pub async fn upload(
     s3: &S3,
@@ -14,9 +15,9 @@ pub async fn upload(
 ) -> Result<String> {
     let (sender, receiver) = unbounded::<usize>();
     let channel = if quiet { None } else { Some(sender) };
-    let mut action = actions::PutObject::new(key, file, channel);
+    let action = actions::PutObject::new(key, Path::new(file), channel);
     // TODO
-    action.x_amz_acl = Some(String::from("public-read"));
+    //    action.x_amz_acl = Some(String::from("public-read"));
 
     if !quiet {
         if let Some(pb) = Bar::new(file_size).progress {

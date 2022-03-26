@@ -92,12 +92,16 @@ pub async fn multipart_upload(
 
     // consume remaining tasks
     while let Some(r) = tasks.next().await {
-        if r.is_ok() {
-            if let Some(pb) = pb.progress.as_ref() {
-                pb.inc(chunk_size);
+        match r {
+            Ok(_) => {
+                if let Some(pb) = pb.progress.as_ref() {
+                    pb.inc(chunk_size);
+                }
             }
+            Err(e) => return Err(anyhow!("{}", e)),
         }
     }
+
     if let Some(pb) = pb.progress.as_ref() {
         pb.finish();
     }
@@ -153,7 +157,6 @@ async fn upload_part(
             Err(e) => {
                 if retries < 3 {
                     retries += 1;
-                    // TODO backoff strategy
                     sleep(Duration::from_secs(retries)).await;
                 } else {
                     return Err(e);

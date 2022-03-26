@@ -96,7 +96,7 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
 // length, this should speed up things and consume less resources
 // TODO crossbeam channel to get progress bar but for now pv could be used, for example:
 // cat file | pv | s3m
-async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'a>, std::io::Error> {
+async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'_>, std::io::Error> {
     if part.count >= BUFFER_SIZE {
         let digest_sha = part.sha.finish();
         let digest_md5 = part.md5.compute();

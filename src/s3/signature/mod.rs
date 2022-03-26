@@ -68,7 +68,7 @@ impl<'a> Signature<'a> {
         }
 
         if let Some(md5) = digest_md5 {
-            self.add_header("Content-MD5", &base64::encode(md5))
+            self.add_header("Content-MD5", &base64::encode(md5));
         }
 
         if let Some(headers) = custom_headers {

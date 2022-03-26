@@ -8,54 +8,25 @@ use http::method::Method;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PutObject<'a> {
     key: &'a str,
-    file: &'a str,
+    file: &'a Path,
     sender: Option<Sender<usize>>,
-    pub x_amz_acl: Option<String>,
-    pub cache_control: Option<String>,
-    pub content_disposition: Option<String>,
-    pub content_encoding: Option<String>,
-    pub content_language: Option<String>,
-    pub content_length: Option<String>,
-    pub content_type: Option<String>,
-    pub expires: Option<String>,
-    pub x_amz_grant_full_control: Option<String>,
-    pub x_amz_grant_read: Option<String>,
-    pub x_amz_grant_read_acp: Option<String>,
-    pub x_amz_grant_write_acp: Option<String>,
-    pub x_amz_server_side_encryption: Option<String>,
-    pub x_amz_storage_class: Option<String>,
-    pub x_amz_website_redirect_location: Option<String>,
-    pub x_amz_server_side_encryption_customer_algorithm: Option<String>,
-    pub x_amz_server_side_encryption_customer_key: Option<String>,
-    pub x_amz_server_side_encryption_customer_key_md5: Option<String>,
-    pub x_amz_server_side_encryption_aws_kms_key_id: Option<String>,
-    pub x_amz_server_side_encryption_context: Option<String>,
-    pub x_amz_request_payer: Option<String>,
-    pub x_amz_tagging: Option<String>,
-    pub x_amz_object_lock_mode: Option<String>,
-    pub x_amz_object_lock_retain_until_date: Option<String>,
-    pub x_amz_object_lock_legal_hold: Option<String>,
+    //    pub x_amz_acl: Option<String>,
 }
 
 impl<'a> PutObject<'a> {
     #[must_use]
-    pub fn new(key: &'a str, file: &'a str, sender: Option<Sender<usize>>) -> Self {
-        Self {
-            key,
-            file,
-            sender,
-            ..Self::default()
-        }
+    pub fn new(key: &'a str, file: &'a Path, sender: Option<Sender<usize>>) -> Self {
+        Self { key, file, sender }
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
-        let (sha, md5, length) = tools::sha256_md5_digest(Path::new(self.file)).await?;
+        let (sha, md5, length) = tools::sha256_md5_digest(self.file).await?;
         // TODO
         // pass headers
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
@@ -99,10 +70,11 @@ impl<'a> Action for PutObject<'a> {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        let mut map: BTreeMap<&str, &str> = BTreeMap::new();
-        if let Some(acl) = &self.x_amz_acl {
-            map.insert("x-amz-acl", acl);
-        }
+        let map: BTreeMap<&str, &str> = BTreeMap::new();
+        // TODO
+        //if let Some(acl) = &self.x_amz_acl {
+        //map.insert("x-amz-acl", acl);
+        //}
         Some(map)
     }
 
