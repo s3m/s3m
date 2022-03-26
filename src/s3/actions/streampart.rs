@@ -14,7 +14,9 @@ pub struct StreamPart<'a> {
     path: &'a Path,
     part_number: String,
     upload_id: &'a str,
-    sender: Option<Sender<usize>>,
+    length: usize,
+    sha256: String,
+    md5: String,
 }
 
 impl<'a> StreamPart<'a> {
@@ -24,7 +26,9 @@ impl<'a> StreamPart<'a> {
         path: &'a Path,
         part_number: u16,
         upload_id: &'a str,
-        sender: Option<Sender<usize>>,
+        length: usize,
+        sha256: String,
+        md5: String,
     ) -> Self {
         let pn = part_number.to_string();
         Self {
@@ -32,7 +36,9 @@ impl<'a> StreamPart<'a> {
             path,
             part_number: pn,
             upload_id,
-            sender,
+            length,
+            sha256,
+            md5,
         }
     }
 
@@ -40,14 +46,13 @@ impl<'a> StreamPart<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<String> {
-        let (sha, md5, length) = tools::sha256_md5_digest(self.path).await?;
-        let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
+        let (url, headers) = &self.sign(s3, &self.sha256, Some(&self.md5), Some(self.length))?;
         let response = request::request(
             url.clone(),
             self.http_method(),
             headers,
             Some(self.path),
-            self.sender,
+            None,
         )
         .await?;
         if response.status().is_success() {

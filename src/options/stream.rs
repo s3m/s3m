@@ -1,9 +1,10 @@
-use crate::s3::{actions, S3};
+use crate::s3::{actions, tools::write_hex_bytes, S3};
 use crate::s3m::progressbar::Bar;
 use anyhow::Result;
 use bytes::BytesMut;
 use crossbeam::channel::{unbounded, Sender};
 use futures::stream::TryStreamExt;
+use ring::digest::{Context, SHA256};
 use std::collections::BTreeMap;
 use std::io::Write;
 use tempfile::{Builder, NamedTempFile};
@@ -13,7 +14,6 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 // 512MB
 const BUFFER_SIZE: usize = 1024 * 1024 * 512;
 
-#[derive(Debug)]
 struct Stream<'a> {
     tmp_file: NamedTempFile,
     count: usize,
@@ -22,7 +22,8 @@ struct Stream<'a> {
     part_number: u16,
     s3: &'a S3,
     upload_id: &'a str,
-    channel: Option<Sender<usize>>,
+    sha: ring::digest::Context,
+    md5: md5::Context,
 }
 
 /// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
@@ -41,22 +42,6 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
         Bar::new_spinner_stream()
     };
 
-    if !quiet {
-        if let Some(pb) = pb.progress.clone() {
-            tokio::spawn(async move {
-                let mut count = 0;
-                while let Ok(i) = receiver.recv() {
-                    count += i;
-                    pb.set_message(bytesize::to_string(count as u64, true));
-                    //                 if (count % BUFFER_SIZE) == 0 {
-                    //                    pb.disable_steady_tick();
-                    //               }
-                }
-                pb.finish();
-            });
-        }
-    };
-
     let first_stream = Stream {
         tmp_file: Builder::new()
             .prefix(&upload_id)
@@ -68,28 +53,28 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
         part_number: 1,
         s3,
         upload_id: &upload_id,
-        channel,
+        sha: Context::new(&SHA256),
+        md5: md5::Context::new(),
     };
 
-    let mut count = 0;
     // try_fold will pass writer to fold_fn until there are no more bytes to read.
     // FrameRead return a stream of Result<BytesMut, Error>.
     // TODO get the sha256_md5_digest here to prevent reading twice
     let mut last_stream = FramedRead::new(stdin(), BytesCodec::new())
-        .inspect_ok(|chunk| {
-            if let Some(pb) = &pb.progress {
-                count += chunk.len();
-                pb.set_message(bytesize::to_string(count as u64, true));
-            }
-        })
         .try_fold(first_stream, fold_fn)
         .await?;
+
+    let digest_sha = last_stream.sha.finish();
+    let digest_md5 = last_stream.md5.compute();
+
     let action = actions::StreamPart::new(
         key,
         last_stream.tmp_file.path(),
         last_stream.part_number,
         &upload_id,
-        None,
+        last_stream.count,
+        write_hex_bytes(digest_sha.as_ref()),
+        base64::encode(digest_md5.as_ref()),
     );
     let etag = action.request(s3).await?;
     last_stream.etags.push(etag);
@@ -107,17 +92,27 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
     Ok(rs.e_tag)
 }
 
+// try to read/parse only once on the same, so in the loop calculate the sha256, md5 and get the
+// length, this should speed up things and consume less resources
+// TODO crossbeam channel to get progress bar but for now pv could be used, for example:
+// cat file | pv | s3m
 async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'a>, std::io::Error> {
     part.count += bytes.len();
     // chunk size 512MB
     if part.count + bytes.len() >= BUFFER_SIZE {
+        let digest_sha = part.sha.finish();
+        let digest_md5 = part.md5.compute();
+
         let action = actions::StreamPart::new(
             part.key,
             part.tmp_file.path(),
             part.part_number,
             part.upload_id,
-            part.channel.clone(),
+            part.count,
+            write_hex_bytes(digest_sha.as_ref()),
+            base64::encode(digest_md5.as_ref()),
         );
+        dbg!(part.count);
         // TODO handle unwrap
         let etag = action.request(part.s3).await.unwrap();
         // delete and create new file
@@ -129,8 +124,12 @@ async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'a>
             .tempfile()?;
         part.count = 0;
         part.part_number += 1;
+        part.sha = Context::new(&SHA256);
+        part.md5 = md5::Context::new();
     } else {
         part.tmp_file.write_all(&bytes)?;
+        part.sha.update(&bytes);
+        part.md5.consume(&bytes);
     }
     Ok(part)
 }

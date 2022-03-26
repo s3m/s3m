@@ -36,6 +36,7 @@ pub async fn request(
     let client = Client::new();
 
     let request = if let Some(file_path) = file {
+        println!("path: {:#?}", file_path);
         let file = File::open(file_path).await?;
         let stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 128).inspect_ok(
             move |chunk| {
