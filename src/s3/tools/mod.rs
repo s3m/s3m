@@ -16,7 +16,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 /// # Errors
 ///
 /// Will return `Err` if can not open the file
-pub async fn sha256_md5_digest(file_path: &Path) -> Result<(String, String, usize)> {
+pub async fn sha256_md5_digest(file_path: &Path) -> Result<(digest::Digest, md5::Digest, usize)> {
     let file = File::open(file_path).await?;
     let mut stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 256);
     let mut context_sha = Context::new(&SHA256);
@@ -29,11 +29,7 @@ pub async fn sha256_md5_digest(file_path: &Path) -> Result<(String, String, usiz
     }
     let digest_sha = context_sha.finish();
     let digest_md5 = context_md5.compute();
-    Ok((
-        write_hex_bytes(digest_sha.as_ref()),
-        base64::encode(digest_md5.as_ref()),
-        length,
-    ))
+    Ok((digest_sha, digest_md5, length))
 }
 
 /// # Errors
@@ -66,8 +62,8 @@ pub async fn sha256_md5_digest_multipart(
 }
 
 #[must_use]
-pub fn sha256_digest(input: impl AsRef<[u8]>) -> String {
-    write_hex_bytes(digest::digest(&digest::SHA256, input.as_ref()).as_ref())
+pub fn sha256_digest(input: impl AsRef<[u8]>) -> digest::Digest {
+    digest::digest(&digest::SHA256, input.as_ref())
 }
 
 pub fn base64_md5(input: impl AsRef<[u8]>) -> String {

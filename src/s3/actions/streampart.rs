@@ -1,6 +1,6 @@
 use crate::{
     s3::actions::{response_error, Action},
-    s3::{request, tools, S3},
+    s3::{request, S3},
 };
 use anyhow::{anyhow, Result};
 use crossbeam::channel::Sender;
@@ -15,8 +15,8 @@ pub struct StreamPart<'a> {
     part_number: String,
     upload_id: &'a str,
     length: usize,
-    sha256: String,
-    md5: String,
+    digest_sha256: &'a [u8],
+    digest_md5: &'a [u8],
 }
 
 impl<'a> StreamPart<'a> {
@@ -27,8 +27,8 @@ impl<'a> StreamPart<'a> {
         part_number: u16,
         upload_id: &'a str,
         length: usize,
-        sha256: String,
-        md5: String,
+        digest_sha256: &'a [u8],
+        digest_md5: &'a [u8],
     ) -> Self {
         let pn = part_number.to_string();
         Self {
@@ -37,8 +37,8 @@ impl<'a> StreamPart<'a> {
             part_number: pn,
             upload_id,
             length,
-            sha256,
-            md5,
+            digest_sha256,
+            digest_md5,
         }
     }
 
@@ -46,7 +46,12 @@ impl<'a> StreamPart<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<String> {
-        let (url, headers) = &self.sign(s3, &self.sha256, Some(&self.md5), Some(self.length))?;
+        let (url, headers) = &self.sign(
+            s3,
+            self.digest_sha256,
+            Some(self.digest_md5),
+            Some(self.length),
+        )?;
         let response = request::request(
             url.clone(),
             self.http_method(),
@@ -102,7 +107,15 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = StreamPart::new("key", Bytes::from("Hello world"), 1, "uid", None);
+        let action = StreamPart::new(
+            "key",
+            Path::new("/"),
+            1,
+            "uid",
+            0,
+            "sha".as_bytes(),
+            "md5".as_bytes(),
+        );
         assert_eq!(Method::PUT, action.http_method());
     }
 }

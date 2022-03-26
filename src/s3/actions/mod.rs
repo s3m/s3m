@@ -10,8 +10,8 @@ use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 use url::Url;
 
-const EMPTY_PAYLOAD_SHA256: &str =
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const EMPTY_PAYLOAD_SHA256: &[u8] =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".as_bytes();
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html>
 mod listbuckets;
@@ -79,8 +79,8 @@ pub trait Action {
     fn sign(
         &self,
         s3: &S3,
-        hash_payload: &str,
-        md5: Option<&str>,
+        hash_payload: &[u8],
+        md5: Option<&[u8]>,
         content_length: Option<usize>,
     ) -> Result<(Url, BTreeMap<String, String>)> {
         let mut url = s3.endpoint()?;

@@ -50,8 +50,8 @@ impl<'a> Signature<'a> {
     pub fn sign(
         &mut self,
         url: &Url,
-        digest: &str,
-        digest_b64_md5: Option<&str>,
+        digest_sha256: &[u8],
+        digest_md5: Option<&[u8]>,
         length: Option<usize>,
         custom_headers: Option<BTreeMap<&str, &str>>,
     ) -> BTreeMap<String, String> {
@@ -61,14 +61,14 @@ impl<'a> Signature<'a> {
         self.add_header("host", self.auth.region.endpoint());
         self.add_header("x-amz-date", &current_datetime);
         self.add_header("User-Agent", APP_USER_AGENT);
-        self.add_header("x-amz-content-sha256", digest);
+        self.add_header("x-amz-content-sha256", &write_hex_bytes(digest_sha256));
 
         if let Some(length) = length {
             self.add_header("content-length", format!("{}", length).as_ref());
         }
 
-        if let Some(md5) = digest_b64_md5 {
-            self.add_header("Content-MD5", md5);
+        if let Some(md5) = digest_md5 {
+            self.add_header("Content-MD5", &base64::encode(md5))
         }
 
         if let Some(headers) = custom_headers {
@@ -97,7 +97,7 @@ impl<'a> Signature<'a> {
             canonical_query_string(url),
             canonical_headers(&self.headers),
             signed_headers,
-            digest
+            write_hex_bytes(digest_sha256)
         );
 
         // println!("canonical request: \n---\n{}\n---\n", canonical_request);
@@ -117,7 +117,8 @@ impl<'a> Signature<'a> {
             self.aws_service
         );
         let canonical_request_hash = sha256_digest(&canonical_request);
-        let string_to_sign = string_to_sign(&current_datetime, &scope, &canonical_request_hash);
+        let string_to_sign =
+            string_to_sign(&current_datetime, &scope, canonical_request_hash.as_ref());
 
         // 3. Calculate the signature for AWS Signature Version 4
         let signing_key = signature_key(
@@ -209,7 +210,8 @@ impl<'a> Signature<'a> {
         //         HashedCanonicalRequest
         //
         let canonical_request_hash = sha256_digest(&canonical_request);
-        let string_to_sign = string_to_sign(&current_datetime, &scope, &canonical_request_hash);
+        let string_to_sign =
+            string_to_sign(&current_datetime, &scope, canonical_request_hash.as_ref());
 
         // 3. Calculate the signature for AWS Signature Version 4
         let signing_key = signature_key(
@@ -288,10 +290,12 @@ fn canonical_headers(headers: &BTreeMap<String, String>) -> String {
 // Create a string to sign for Signature Version 4
 // https://docs.aws.amazon.com/general/latest/gr/sigv4-create-string-to-sign.html
 #[must_use]
-pub fn string_to_sign(timestamp: &str, scope: &str, hashed_canonical_request: &str) -> String {
+pub fn string_to_sign(timestamp: &str, scope: &str, hashed_canonical_request: &[u8]) -> String {
     format!(
         "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-        timestamp, scope, hashed_canonical_request
+        timestamp,
+        scope,
+        write_hex_bytes(hashed_canonical_request)
     )
 }
 

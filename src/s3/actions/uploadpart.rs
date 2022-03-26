@@ -50,7 +50,7 @@ impl<'a> UploadPart<'a> {
     pub async fn request(&self, s3: &S3) -> Result<String> {
         let (sha256, md5, length) =
             tools::sha256_md5_digest_multipart(self.file, self.seek, self.chunk).await?;
-        let (url, headers) = &self.sign(s3, &sha256, Some(&md5), Some(length))?;
+        let (url, headers) = &self.sign(s3, sha256.as_ref(), Some(md5.as_ref()), Some(length))?;
         let response = request::multipart_upload(
             url.clone(),
             self.http_method(),

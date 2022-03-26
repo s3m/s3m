@@ -6,7 +6,7 @@ pub mod responses;
 pub mod signature;
 pub mod tools;
 pub use self::{credentials::Credentials, region::Region, signature::Signature};
-use crate::s3::tools::sha256_digest;
+use crate::s3::tools::{sha256_digest, write_hex_bytes};
 use anyhow::Result;
 use url::Url;
 
@@ -43,7 +43,7 @@ impl S3 {
         if let Some(bucket) = &self.bucket {
             hash.push_str(bucket);
         }
-        sha256_digest(&hash)
+        write_hex_bytes(sha256_digest(&hash).as_ref())
     }
 
     pub fn endpoint(&self) -> Result<Url> {

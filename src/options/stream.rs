@@ -1,4 +1,4 @@
-use crate::s3::{actions, tools::write_hex_bytes, S3};
+use crate::s3::{actions, S3};
 use crate::s3m::progressbar::Bar;
 use anyhow::Result;
 use bytes::BytesMut;
@@ -73,8 +73,8 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
         last_stream.part_number,
         &upload_id,
         last_stream.count,
-        write_hex_bytes(digest_sha.as_ref()),
-        base64::encode(digest_md5.as_ref()),
+        digest_sha.as_ref(),
+        digest_md5.as_ref(),
     );
     let etag = action.request(s3).await?;
     last_stream.etags.push(etag);
@@ -97,9 +97,7 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
 // TODO crossbeam channel to get progress bar but for now pv could be used, for example:
 // cat file | pv | s3m
 async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'a>, std::io::Error> {
-    part.count += bytes.len();
-    // chunk size 512MB
-    if part.count + bytes.len() >= BUFFER_SIZE {
+    if part.count >= BUFFER_SIZE {
         let digest_sha = part.sha.finish();
         let digest_md5 = part.md5.compute();
 
@@ -109,13 +107,12 @@ async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'a>
             part.part_number,
             part.upload_id,
             part.count,
-            write_hex_bytes(digest_sha.as_ref()),
-            base64::encode(digest_md5.as_ref()),
+            digest_sha.as_ref(),
+            digest_md5.as_ref(),
         );
-        dbg!(part.count);
         // TODO handle unwrap
         let etag = action.request(part.s3).await.unwrap();
-        // delete and create new file
+        // delete and create new tmp file
         part.etags.push(etag);
         part.tmp_file.close()?;
         part.tmp_file = Builder::new()
@@ -127,6 +124,7 @@ async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'a>
         part.sha = Context::new(&SHA256);
         part.md5 = md5::Context::new();
     } else {
+        part.count += bytes.len();
         part.tmp_file.write_all(&bytes)?;
         part.sha.update(&bytes);
         part.md5.consume(&bytes);

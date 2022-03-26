@@ -58,7 +58,7 @@ impl<'a> PutObject<'a> {
         let (sha, md5, length) = tools::sha256_md5_digest(Path::new(self.file)).await?;
         // TODO
         // pass headers
-        let (url, headers) = &self.sign(s3, &sha, Some(&md5), Some(length))?;
+        let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
         let response = request::request(
             url.clone(),
             self.http_method(),
