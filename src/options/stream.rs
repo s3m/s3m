@@ -24,6 +24,7 @@ struct Stream<'a> {
     upload_id: &'a str,
     sha: ring::digest::Context,
     md5: md5::Context,
+    channel: Option<Sender<usize>>,
 }
 
 /// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
@@ -42,6 +43,19 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
         Bar::new_spinner_stream()
     };
 
+    if !quiet {
+        if let Some(pb) = pb.progress.clone() {
+            tokio::spawn(async move {
+                let mut uploaded = 0;
+                while let Ok(i) = receiver.recv() {
+                    uploaded += i;
+                    pb.set_message(bytesize::to_string(uploaded as u64, true));
+                }
+                pb.finish();
+            });
+        }
+    };
+
     let first_stream = Stream {
         tmp_file: Builder::new()
             .prefix(&upload_id)
@@ -55,11 +69,11 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
         upload_id: &upload_id,
         sha: Context::new(&SHA256),
         md5: md5::Context::new(),
+        channel,
     };
 
     // try_fold will pass writer to fold_fn until there are no more bytes to read.
     // FrameRead return a stream of Result<BytesMut, Error>.
-    // TODO get the sha256_md5_digest here to prevent reading twice
     let mut last_stream = FramedRead::new(stdin(), BytesCodec::new())
         .try_fold(first_stream, fold_fn)
         .await?;
@@ -73,8 +87,8 @@ pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
         last_stream.part_number,
         &upload_id,
         last_stream.count,
-        digest_sha.as_ref(),
-        digest_md5.as_ref(),
+        (digest_sha.as_ref(), digest_md5.as_ref()),
+        last_stream.channel,
     );
     let etag = action.request(s3).await?;
     last_stream.etags.push(etag);
@@ -100,15 +114,15 @@ async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'_>
     if part.count >= BUFFER_SIZE {
         let digest_sha = part.sha.finish();
         let digest_md5 = part.md5.compute();
-
+        // upload a part
         let action = actions::StreamPart::new(
             part.key,
             part.tmp_file.path(),
             part.part_number,
             part.upload_id,
             part.count,
-            digest_sha.as_ref(),
-            digest_md5.as_ref(),
+            (digest_sha.as_ref(), digest_md5.as_ref()),
+            part.channel.clone(),
         );
         // TODO handle unwrap
         let etag = action.request(part.s3).await.unwrap();

@@ -18,7 +18,7 @@ pub struct PutObject<'a> {
 
 impl<'a> PutObject<'a> {
     #[must_use]
-    pub fn new(key: &'a str, file: &'a Path, sender: Option<Sender<usize>>) -> Self {
+    pub const fn new(key: &'a str, file: &'a Path, sender: Option<Sender<usize>>) -> Self {
         Self { key, file, sender }
     }
 
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = PutObject::new("key", "file", None);
+        let action = PutObject::new("key", Path::new("/"), None);
         assert_eq!(Method::PUT, action.http_method());
     }
 }

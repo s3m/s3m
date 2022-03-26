@@ -15,8 +15,8 @@ pub struct StreamPart<'a> {
     part_number: String,
     upload_id: &'a str,
     length: usize,
-    digest_sha256: &'a [u8],
-    digest_md5: &'a [u8],
+    digest: (&'a [u8], &'a [u8]),
+    sender: Option<Sender<usize>>,
 }
 
 impl<'a> StreamPart<'a> {
@@ -27,8 +27,8 @@ impl<'a> StreamPart<'a> {
         part_number: u16,
         upload_id: &'a str,
         length: usize,
-        digest_sha256: &'a [u8],
-        digest_md5: &'a [u8],
+        digest: (&'a [u8], &'a [u8]),
+        sender: Option<Sender<usize>>,
     ) -> Self {
         let pn = part_number.to_string();
         Self {
@@ -37,8 +37,8 @@ impl<'a> StreamPart<'a> {
             part_number: pn,
             upload_id,
             length,
-            digest_sha256,
-            digest_md5,
+            digest,
+            sender,
         }
     }
 
@@ -46,18 +46,14 @@ impl<'a> StreamPart<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<String> {
-        let (url, headers) = &self.sign(
-            s3,
-            self.digest_sha256,
-            Some(self.digest_md5),
-            Some(self.length),
-        )?;
+        let (url, headers) =
+            &self.sign(s3, self.digest.0, Some(self.digest.1), Some(self.length))?;
         let response = request::request(
             url.clone(),
             self.http_method(),
             headers,
             Some(self.path),
-            None,
+            self.sender,
         )
         .await?;
         if response.status().is_success() {
@@ -103,11 +99,10 @@ impl<'a> Action for StreamPart<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
 
     #[test]
     fn test_method() {
-        let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, b"sha", b"md5");
+        let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);
         assert_eq!(Method::PUT, action.http_method());
     }
 }
