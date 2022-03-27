@@ -7,6 +7,7 @@
 * Added option `-p/--pipe` to read from STDIN
 * STDIN pipe/stream will be uploaded in chunks to prevent keeping the chunk in RAM it uses a temp file (512MB) and from there streams
 * `ls` now supports options  `-p/--prefix` and `-a/--start-after` to list only files starting with a prefix or start listing from a specified key
+* new sub-command `acl` to get and set ACL's
 
 ## 0.4.0 ⛸
 * New sub-command `get` with option `-h` to return HeadObject.

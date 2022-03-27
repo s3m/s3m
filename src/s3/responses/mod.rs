@@ -237,7 +237,7 @@ pub struct AccessControlPolicy {
 #[derive(Deserialize, Debug, Clone)]
 pub struct AccessControlList {
     #[serde(rename = "Grant")]
-    pub grant: Grant,
+    pub grant: Vec<Grant>,
 }
 
 /// `Grant`
@@ -253,11 +253,11 @@ pub struct Grant {
 #[derive(Deserialize, Debug, Clone)]
 pub struct Grantee {
     #[serde(rename = "DisplayName")]
-    pub display_name: String,
+    pub display_name: Option<String>,
     #[serde(rename = "EmailAddress")]
     pub email_address: Option<String>,
     #[serde(rename = "ID")]
-    pub id: String,
+    pub id: Option<String>,
     #[serde(rename = "type")]
     pub xsi_type: Option<String>,
     #[serde(rename = "URI")]
