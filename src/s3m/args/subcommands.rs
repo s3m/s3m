@@ -57,6 +57,7 @@ pub fn subcommand_get<'a>() -> clap::Command<'a> {
             Arg::new("arguments")
                 .help("<s3 provider>/<bucket>/<file>")
                 .required(true)
+                .value_names(&["S3M"])
                 .min_values(1),
         )
         .arg(

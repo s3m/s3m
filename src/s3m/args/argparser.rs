@@ -38,10 +38,11 @@ impl ArgParser {
         )
         .arg(
             Arg::new("acl")
-                .takes_value(true)
-                .help("The canned ACL to apply to the object example: -a private, or to make object public: -a public-read")
+                .help("The canned ACL to apply to the object example")
                 .long("acl")
-                .short('a'),
+                .possible_values(["private" , "public-read", "public-read-write", "authenticated-read", "aws-exec-read", "bucket-owner-read","bucket-owner-full-control"])
+                .short('a')
+                .takes_value(true)
         )
         .arg(
             Arg::new("pipe")
@@ -72,6 +73,7 @@ impl ArgParser {
             Arg::new("arguments")
                 .help("/path/to/file <s3 provider>/<bucket>/<file>")
                 .required_unless_present("clean")
+                .value_names(&["FILE", "S3M"])
                 .min_values(1)
                 .max_values(2),
         )
