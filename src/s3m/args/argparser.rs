@@ -81,7 +81,6 @@ impl ArgParser {
             Arg::new("arguments")
                 .help("/path/to/file <s3 provider>/<bucket>/<file>")
                 .required_unless_present("clean")
-                .value_names(&["FILE", "S3M"])
                 .min_values(1)
                 .max_values(2),
         )
