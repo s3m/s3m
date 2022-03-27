@@ -95,7 +95,10 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = ListObjectsV2::new(None, None);
+        let action = ListObjectsV2::new(
+            Some(String::from("prefix")),
+            Some(String::from("start-after")),
+        );
         assert_eq!(Method::GET, action.http_method());
     }
 }
