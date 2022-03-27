@@ -224,7 +224,7 @@ pub struct Upload {
     pub upload_id: String,
 }
 
-/// AccessControlPolicy
+/// `AccessControlPolicy`
 #[derive(Deserialize, Debug)]
 pub struct AccessControlPolicy {
     #[serde(rename = "Owner")]
@@ -233,14 +233,14 @@ pub struct AccessControlPolicy {
     pub acl: AccessControlList,
 }
 
-/// AccessControlList
+/// `AccessControlList`
 #[derive(Deserialize, Debug, Clone)]
 pub struct AccessControlList {
     #[serde(rename = "Grant")]
     pub grant: Grant,
 }
 
-/// Grant
+/// `Grant`
 #[derive(Deserialize, Debug, Clone)]
 pub struct Grant {
     #[serde(rename = "Grantee")]
@@ -249,7 +249,7 @@ pub struct Grant {
     pub permission: String,
 }
 
-/// Grantee
+/// `Grantee`
 #[derive(Deserialize, Debug, Clone)]
 pub struct Grantee {
     #[serde(rename = "DisplayName")]

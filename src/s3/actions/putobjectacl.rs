@@ -1,6 +1,6 @@
 use crate::{
-    s3::actions::{response_error, Action, EMPTY_PAYLOAD_SHA256},
-    s3::{request, S3},
+    s3::actions::{response_error, Action},
+    s3::{request, tools, S3},
 };
 use anyhow::{anyhow, Result};
 use http::method::Method;
@@ -22,7 +22,7 @@ impl<'a> PutObjectAcl<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
-        let (url, headers) = &self.sign(s3, EMPTY_PAYLOAD_SHA256, None, None)?;
+        let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
         let response =
             request::request(url.clone(), self.http_method(), headers, None, None).await?;
 
