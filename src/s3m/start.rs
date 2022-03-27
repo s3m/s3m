@@ -10,6 +10,8 @@ pub enum Action {
     ListObjects {
         bucket: Option<String>,
         list_multipart_uploads: bool,
+        prefix: Option<String>,
+        start_after: Option<String>,
     },
     PutObject {
         attr: String,

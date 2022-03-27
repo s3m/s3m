@@ -29,12 +29,14 @@ async fn main() -> Result<()> {
         Action::ListObjects {
             bucket,
             list_multipart_uploads,
+            prefix,
+            start_after,
         } => {
             if bucket.is_some() {
                 if list_multipart_uploads {
                     options::list_multipart_uploads(&s3).await?;
                 } else {
-                    options::list_objects(&s3).await?;
+                    options::list_objects(&s3, prefix, start_after).await?;
                 }
             } else {
                 options::list_buckets(&s3).await?;

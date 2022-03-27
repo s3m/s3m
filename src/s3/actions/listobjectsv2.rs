@@ -19,8 +19,12 @@ pub struct ListObjectsV2 {
 
 impl ListObjectsV2 {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(prefix: Option<String>, start_after: Option<String>) -> Self {
+        Self {
+            prefix,
+            start_after,
+            ..Self::default()
+        }
     }
 
     /// # Errors
@@ -91,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = ListObjectsV2::new();
+        let action = ListObjectsV2::new(None, None);
         assert_eq!(Method::GET, action.http_method());
     }
 }

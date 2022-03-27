@@ -4,6 +4,9 @@
 * Added option `--clean` instead of `-r/--remove`
 * Added option `-a/--attributes` to add custom metadata for the object
 * Added option `-q/--quiet` to silent output
+* Added option `-p/--pipe` to read from STDIN
+* STDIN pipe/stream will be uploaded in chunks to prevent keeping the chunk in RAM it uses a temp file (512MB) and from there streams
+* `ls` now supports options  `-p/--prefix` and `-a/--start-after` to list only files starting with a prefix or start listing from a specified key
 
 ## 0.4.0 ⛸
 * New sub-command `get` with option `-h` to return HeadObject.

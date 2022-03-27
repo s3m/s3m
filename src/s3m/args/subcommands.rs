@@ -16,6 +16,20 @@ pub fn subcommand_ls<'a>() -> clap::Command<'a> {
                 .long("multipart")
                 .short('m'),
         )
+        .arg(
+            Arg::new("prefix")
+                .help("Limits the response to keys that begin with the specified prefix")
+                .long("prefix")
+                .short('p')
+                .takes_value(true),
+        )
+        .arg(
+            Arg::new("start-after")
+                .help("Starts listing after this specified key")
+                .long("start-after")
+                .short('a')
+                .takes_value(true),
+        )
 }
 
 pub fn subcommand_rm<'a>() -> clap::Command<'a> {

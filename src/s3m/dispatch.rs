@@ -53,10 +53,26 @@ pub fn dispatch(
         // ListObjects
         Some("ls") => {
             let sub_m = sub_m("ls")?;
-            let list_multipart_uploads = sub_m.is_present("ListMultipartUploads");
+            let prefix = if sub_m.is_present("prefix") {
+                Some(sub_m.value_of("prefix").unwrap_or_default().to_string())
+            } else {
+                None
+            };
+            let start_after = if sub_m.is_present("start-after") {
+                Some(
+                    sub_m
+                        .value_of("start-after")
+                        .unwrap_or_default()
+                        .to_string(),
+                )
+            } else {
+                None
+            };
             Ok(Action::ListObjects {
                 bucket,
-                list_multipart_uploads,
+                list_multipart_uploads: sub_m.is_present("ListMultipartUploads"),
+                prefix,
+                start_after,
             })
         }
 

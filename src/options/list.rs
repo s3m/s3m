@@ -21,9 +21,12 @@ pub async fn list_multipart_uploads(s3: &S3) -> Result<()> {
     Ok(())
 }
 
-pub async fn list_objects(s3: &S3) -> Result<()> {
-    let mut action = actions::ListObjectsV2::new();
-    action.prefix = Some(String::from(""));
+pub async fn list_objects(
+    s3: &S3,
+    prefix: Option<String>,
+    start_after: Option<String>,
+) -> Result<()> {
+    let action = actions::ListObjectsV2::new(prefix, start_after);
     let rs = action.request(s3).await?;
     for object in rs.contents {
         let dt = DateTime::parse_from_rfc3339(&object.last_modified)?;
