@@ -70,6 +70,6 @@ mod tests {
     #[test]
     fn test_method() {
         let action = GetObjectAcl::new("key");
-        assert_eq!(Method::PUT, action.http_method());
+        assert_eq!(Method::GET, action.http_method());
     }
 }
