@@ -100,8 +100,13 @@ pub fn dispatch(
             if args.len() == 2 {
                 src = Some(args[0].to_string());
             }
+            let acl = if matches.is_present("acl") {
+                Some(matches.value_of("acl").unwrap_or_default().to_string())
+            } else {
+                None
+            };
             Ok(Action::PutObject {
-                attr: matches.value_of("attr").unwrap_or_default().to_string(),
+                acl,
                 buf_size,
                 file: src,
                 s3m_dir,

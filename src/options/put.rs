@@ -16,6 +16,7 @@ pub async fn put_object(
     file: &str,
     key: &str,
     s3m_dir: PathBuf,
+    acl: Option<String>,
     quiet: bool,
 ) -> Result<()> {
     // Get file size and last modified time
@@ -74,14 +75,14 @@ pub async fn put_object(
 
     // upload in multipart
     if file_size > buf_size as u64 {
-        let rs = multipart_upload(s3, key, file, file_size, buf_size as u64, &db, quiet)
+        let rs = multipart_upload(s3, key, file, file_size, buf_size as u64, &db, acl, quiet)
             .await
             .context("multipart upload failed")?;
         if !quiet {
             println!("{}", rs);
         }
     } else {
-        let rs = upload(s3, key, file, file_size, &db, quiet).await?;
+        let rs = upload(s3, key, file, file_size, &db, acl, quiet).await?;
         if !quiet {
             println!("{}", rs);
         }

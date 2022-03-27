@@ -12,14 +12,24 @@ use std::path::Path;
 pub struct PutObject<'a> {
     key: &'a str,
     file: &'a Path,
+    acl: Option<String>,
     sender: Option<Sender<usize>>,
-    //    pub x_amz_acl: Option<String>,
 }
 
 impl<'a> PutObject<'a> {
     #[must_use]
-    pub const fn new(key: &'a str, file: &'a Path, sender: Option<Sender<usize>>) -> Self {
-        Self { key, file, sender }
+    pub const fn new(
+        key: &'a str,
+        file: &'a Path,
+        acl: Option<String>,
+        sender: Option<Sender<usize>>,
+    ) -> Self {
+        Self {
+            key,
+            file,
+            acl,
+            sender,
+        }
     }
 
     /// # Errors
@@ -70,11 +80,13 @@ impl<'a> Action for PutObject<'a> {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        let map: BTreeMap<&str, &str> = BTreeMap::new();
-        // TODO
-        //if let Some(acl) = &self.x_amz_acl {
-        //map.insert("x-amz-acl", acl);
-        //}
+        let mut map: BTreeMap<&str, &str> = BTreeMap::new();
+
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectAcl.html
+        if let Some(acl) = &self.acl {
+            map.insert("x-amz-acl", acl);
+        }
+
         Some(map)
     }
 
@@ -99,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = PutObject::new("key", Path::new("/"), None);
+        let action = PutObject::new("key", Path::new("/"), None, None);
         assert_eq!(Method::PUT, action.http_method());
     }
 }

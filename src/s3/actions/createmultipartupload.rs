@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Default)]
 pub struct CreateMultipartUpload<'a> {
     key: &'a str,
+    acl: Option<String>,
     pub x_amz_acl: Option<String>,
     pub cache_control: Option<String>,
     pub content_disposition: Option<String>,
@@ -45,9 +46,10 @@ pub struct CreateMultipartUpload<'a> {
 
 impl<'a> CreateMultipartUpload<'a> {
     #[must_use]
-    pub fn new(key: &'a str) -> Self {
+    pub fn new(key: &'a str, acl: Option<String>) -> Self {
         Self {
             key,
+            acl,
             ..Self::default()
         }
     }
@@ -76,9 +78,12 @@ impl<'a> Action for CreateMultipartUpload<'a> {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        // TODO cleanup
         let mut map: BTreeMap<&str, &str> = BTreeMap::new();
-        map.insert("x-amz-acl", "public-read");
+
+        if let Some(acl) = &self.acl {
+            map.insert("x-amz-acl", acl);
+        }
+
         Some(map)
     }
 
@@ -109,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = CreateMultipartUpload::new("key");
+        let action = CreateMultipartUpload::new("key", None);
         assert_eq!(Method::POST, action.http_method());
     }
 }

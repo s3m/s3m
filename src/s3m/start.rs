@@ -14,7 +14,7 @@ pub enum Action {
         start_after: Option<String>,
     },
     PutObject {
-        attr: String,
+        acl: Option<String>,
         buf_size: usize,
         file: Option<String>,
         key: String,

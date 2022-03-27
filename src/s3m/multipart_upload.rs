@@ -10,6 +10,7 @@ use tokio::time::{sleep, Duration};
 // * Initiate Multipart Upload
 // * Upload Part
 // * Complete Multipart Upload
+#[allow(clippy::too_many_arguments)]
 pub async fn multipart_upload(
     s3: &S3,
     key: &str,
@@ -17,6 +18,7 @@ pub async fn multipart_upload(
     file_size: u64,
     chunk_size: u64,
     sdb: &Db,
+    acl: Option<String>,
     quiet: bool,
 ) -> Result<String> {
     // trees for keeping track of parts to upload
@@ -27,7 +29,7 @@ pub async fn multipart_upload(
         uid
     } else {
         // Initiate Multipart Upload - request an Upload ID
-        let action = actions::CreateMultipartUpload::new(key);
+        let action = actions::CreateMultipartUpload::new(key, acl);
         let response = action.request(s3).await?;
         db_parts.clear()?;
         // save the upload_id to resume if required

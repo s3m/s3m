@@ -11,11 +11,12 @@ pub async fn upload(
     file: &str,
     file_size: u64,
     sdb: &Db,
+    acl: Option<String>,
     quiet: bool,
 ) -> Result<String> {
     let (sender, receiver) = unbounded::<usize>();
     let channel = if quiet { None } else { Some(sender) };
-    let action = actions::PutObject::new(key, Path::new(file), channel);
+    let action = actions::PutObject::new(key, Path::new(file), acl, channel);
     // TODO
     //    action.x_amz_acl = Some(String::from("public-read"));
 

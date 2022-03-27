@@ -37,10 +37,10 @@ impl ArgParser {
             .help("Don't show progress bar when uploading")
         )
         .arg(
-            Arg::new("attr")
+            Arg::new("acl")
                 .takes_value(true)
-                .help("Add custom metadata for the object (format: KeyName1=string;KeyName2=string), example: -a ACL=private")
-                .long("attributes")
+                .help("The canned ACL to apply to the object example: -a private, or to make object public: -a public-read")
+                .long("acl")
                 .short('a'),
         )
         .arg(

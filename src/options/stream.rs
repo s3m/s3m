@@ -28,9 +28,9 @@ struct Stream<'a> {
 }
 
 /// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
-pub async fn stream(s3: &S3, key: &str, quiet: bool) -> Result<String> {
+pub async fn stream(s3: &S3, key: &str, acl: Option<String>, quiet: bool) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
-    let action = actions::CreateMultipartUpload::new(key);
+    let action = actions::CreateMultipartUpload::new(key, acl);
     let response = action.request(s3).await?;
     let upload_id = response.upload_id;
     let (sender, receiver) = unbounded::<usize>();
