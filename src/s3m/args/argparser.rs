@@ -40,7 +40,15 @@ impl ArgParser {
             Arg::new("acl")
                 .help("The canned ACL to apply to the object example")
                 .long("acl")
-                .possible_values(["private" , "public-read", "public-read-write", "authenticated-read", "aws-exec-read", "bucket-owner-read","bucket-owner-full-control"])
+                .possible_values([
+                    "private",
+                    "public-read",
+                    "public-read-write",
+                    "authenticated-read",
+                    "aws-exec-read",
+                    "bucket-owner-read",
+                    "bucket-owner-full-control",
+                ])
                 .short('a')
                 .takes_value(true)
         )
@@ -77,9 +85,10 @@ impl ArgParser {
                 .min_values(1)
                 .max_values(2),
         )
+        .subcommand(subcommands::subcommand_acl())
+        .subcommand(subcommands::subcommand_get())
         .subcommand(subcommands::subcommand_ls())
         .subcommand(subcommands::subcommand_rm())
-        .subcommand(subcommands::subcommand_get())
         .subcommand(subcommands::subcommand_share())
         .get_matches()
     }

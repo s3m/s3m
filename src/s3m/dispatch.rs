@@ -31,6 +31,18 @@ pub fn dispatch(
     };
 
     match matches.subcommand_name() {
+        // ACL
+        Some("acl") => {
+            let key = hbp_empty(hbp)?;
+            let sub_m = sub_m("acl")?;
+            let acl = if sub_m.is_present("acl") {
+                Some(sub_m.value_of("acl").unwrap_or_default().to_string())
+            } else {
+                None
+            };
+            Ok(Action::ACL { key, acl })
+        }
+
         // GetObject
         Some("get") => {
             let key = hbp_empty(hbp)?;

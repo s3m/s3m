@@ -74,6 +74,34 @@ pub fn subcommand_get<'a>() -> clap::Command<'a> {
         )
 }
 
+pub fn subcommand_acl<'a>() -> clap::Command<'a> {
+    Command::new("acl")
+        .about("PUT or GET object ACL")
+        .arg(
+            Arg::new("arguments")
+                .help("<s3 provider>/<bucket>/<file>")
+                .required(true)
+                .value_names(&["S3M"])
+                .min_values(1),
+        )
+        .arg(
+            Arg::new("acl")
+                .help("The canned ACL to apply to the object example")
+                .long("acl")
+                .possible_values([
+                    "private",
+                    "public-read",
+                    "public-read-write",
+                    "authenticated-read",
+                    "aws-exec-read",
+                    "bucket-owner-read",
+                    "bucket-owner-full-control",
+                ])
+                .short('a')
+                .takes_value(true),
+        )
+}
+
 pub fn subcommand_share<'a>() -> clap::Command<'a> {
     Command::new("share")
         .about("Share object using a presigned URL")

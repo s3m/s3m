@@ -18,6 +18,11 @@ pub fn host_bucket_path(matches: &clap::ArgMatches) -> Result<Vec<&str>> {
     };
 
     match matches.subcommand_name() {
+        // ACL
+        Some("acl") => {
+            hbp = parse_args("acl")?;
+        }
+
         // GetObject
         Some("get") => {
             hbp = parse_args("get")?;

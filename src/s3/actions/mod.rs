@@ -29,9 +29,17 @@ pub use self::headobject::HeadObject;
 mod getobject;
 pub use self::getobject::GetObject;
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectAcl.html>
+mod getobjectacl;
+pub use self::getobjectacl::GetObjectAcl;
+
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
 mod putobject;
 pub use self::putobject::PutObject;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectAcl.html>
+mod putobjectacl;
+pub use self::putobjectacl::PutObjectAcl;
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
 mod createmultipartupload;

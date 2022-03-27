@@ -223,3 +223,43 @@ pub struct Upload {
     #[serde(rename = "UploadId")]
     pub upload_id: String,
 }
+
+/// AccessControlPolicy
+#[derive(Deserialize, Debug)]
+pub struct AccessControlPolicy {
+    #[serde(rename = "Owner")]
+    pub owner: Owner,
+    #[serde(rename = "AccessControlList")]
+    pub acl: AccessControlList,
+}
+
+/// AccessControlList
+#[derive(Deserialize, Debug, Clone)]
+pub struct AccessControlList {
+    #[serde(rename = "Grant")]
+    pub grant: Grant,
+}
+
+/// Grant
+#[derive(Deserialize, Debug, Clone)]
+pub struct Grant {
+    #[serde(rename = "Grantee")]
+    pub grantee: Grantee,
+    #[serde(rename = "Permission")]
+    pub permission: String,
+}
+
+/// Grantee
+#[derive(Deserialize, Debug, Clone)]
+pub struct Grantee {
+    #[serde(rename = "DisplayName")]
+    pub display_name: String,
+    #[serde(rename = "EmailAddress")]
+    pub email_address: Option<String>,
+    #[serde(rename = "ID")]
+    pub id: String,
+    #[serde(rename = "type")]
+    pub xsi_type: Option<String>,
+    #[serde(rename = "URI")]
+    pub uri: Option<String>,
+}

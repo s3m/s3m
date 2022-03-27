@@ -7,6 +7,10 @@ use std::process::exit;
 
 #[derive(Debug)]
 pub enum Action {
+    ACL {
+        key: String,
+        acl: Option<String>,
+    },
     ListObjects {
         bucket: Option<String>,
         list_multipart_uploads: bool,

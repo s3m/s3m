@@ -8,6 +8,10 @@ async fn main() -> Result<()> {
     let (s3, action) = start()?;
 
     match action {
+        Action::ACL { key, acl } => {
+            options::acl(&s3, &key, acl).await?;
+        }
+
         Action::ShareObject { key, expire } => {
             let url = options::share(&s3, &key, expire)?;
             println!("{}", url);
