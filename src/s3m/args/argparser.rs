@@ -92,3 +92,33 @@ impl ArgParser {
         .get_matches()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::Builder;
+
+    const CONF: &str = r#"---
+hosts:
+  s3:
+    region: xx-region-y
+    access_key: XXX
+    secret_key: YYY"#;
+
+    #[test]
+    fn test_foo() -> Result<()> {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir()?;
+        let config_path = tmp_dir.path().join("config.yml");
+        let mut config = File::create(config_path)?;
+        config.write_all(CONF.as_bytes())?;
+
+        //let arg_vec = vec!["my_prog", "some", "args", "to", "parse"];
+        //let a = ArgParser::new(tmp_dir.path()).get_matches();
+        //        let config = matches.value_of("config").context("config file missing")?;
+
+        Ok(())
+    }
+}
