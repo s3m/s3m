@@ -1,5 +1,5 @@
 use crate::s3::{Credentials, S3};
-use crate::s3m::{args::ArgParser, dispatch, matches, Config};
+use crate::s3m::{args::command, dispatch, matches, Config};
 use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -61,8 +61,13 @@ pub fn start() -> Result<(S3, Action)> {
     let s3m_dir = Path::new(&home_dir).join(".s3m");
     fs::create_dir_all(&s3m_dir).context("unable to create home dir ~/.s3m")?;
 
-    let arg_parser = ArgParser::new(&s3m_dir);
-    let matches = arg_parser.get_matches();
+    let s3m_config = s3m_dir.join("config.yml");
+    let s3m_config = s3m_config.as_os_str();
+    let after_help = format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/streams] use the option (--clean) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", s3m_dir.display());
+    //    let help_clean = String::from(format!("remove {}/streams directory", s3m_dir.display()));
+    let help_clean = format!("remove {}/streams directory", s3m_dir.display());
+    let cmd = command::new(s3m_config, &after_help, &help_clean);
+    let matches = cmd.get_matches();
 
     // parse config file
     let config = matches.value_of("config").context("config file missing")?;
