@@ -62,11 +62,9 @@ pub fn start() -> Result<(S3, Action)> {
     fs::create_dir_all(&s3m_dir).context("unable to create home dir ~/.s3m")?;
 
     let s3m_config = s3m_dir.join("config.yml");
-    let s3m_config = s3m_config.as_os_str();
     let after_help = format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/streams] use the option (--clean) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", s3m_dir.display());
-    //    let help_clean = String::from(format!("remove {}/streams directory", s3m_dir.display()));
     let help_clean = format!("remove {}/streams directory", s3m_dir.display());
-    let cmd = command::new(s3m_config, &after_help, &help_clean);
+    let cmd = command::new(s3m_config.as_os_str(), &after_help, &help_clean);
     let matches = cmd.get_matches();
 
     // parse config file

@@ -78,7 +78,7 @@ pub fn new<'a>(config_path: &'a OsStr, after_help: &'a str, help_clean: &'a str)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::{Context, Result};
+    use anyhow::Result;
     use std::fs::File;
     use std::io::Write;
     use tempfile::Builder;
@@ -90,19 +90,20 @@ hosts:
     access_key: XXX
     secret_key: YYY"#;
 
-    #[test]
-    fn test_foo() -> Result<()> {
+    fn get_matches(args: Vec<&str>) -> Result<clap::ArgMatches> {
         let tmp_dir = Builder::new().prefix("test-s3m-").tempdir()?;
         let config_path = tmp_dir.path().join("config.yml");
         let mut config = File::create(&config_path)?;
         config.write_all(CONF.as_bytes())?;
-
-        let arg_vec = vec!["s3m", "ls", "-h"];
         let cmd = new(config_path.as_os_str(), "a", "b");
-        let matches = cmd.get_matches_from(arg_vec);
-        println!("{:#?}", matches);
-        //        let config = matches.value_of("config").context("config file missing")?;
+        Ok(cmd.get_matches_from(args))
+    }
 
+    #[test]
+    fn test_put_check_defaults() -> Result<()> {
+        let m = get_matches(vec!["s3m", "test"])?;
+        assert_eq!(m.value_of("arguments"), Some("test"));
+        assert_eq!(m.value_of("buffer"), Some("10485760"));
         Ok(())
     }
 }
