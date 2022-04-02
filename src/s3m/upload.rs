@@ -6,6 +6,7 @@ use std::cmp::min;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn upload(
     s3: &S3,
     key: &str,

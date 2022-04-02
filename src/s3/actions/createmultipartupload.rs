@@ -88,8 +88,7 @@ impl<'a> Action for CreateMultipartUpload<'a> {
 
         if let Some(meta) = &self.meta {
             for (k, v) in meta {
-                //                let k = format!("x-amz-meta-{}", k);
-                map.insert(&k, &v);
+                map.insert(k, v);
             }
         }
 
@@ -123,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = CreateMultipartUpload::new("key", None);
+        let action = CreateMultipartUpload::new("key", None, None);
         assert_eq!(Method::POST, action.http_method());
     }
 }

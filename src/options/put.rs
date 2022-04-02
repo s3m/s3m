@@ -11,6 +11,7 @@ const MAX_PART_SIZE: usize = 5_368_709_120;
 const MAX_FILE_SIZE: usize = 5_497_558_138_880;
 const MAX_PARTS_PER_UPLOAD: usize = 10_000;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn put_object(
     s3: &S3,
     mut buf_size: usize,

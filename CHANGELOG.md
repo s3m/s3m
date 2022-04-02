@@ -2,6 +2,7 @@
 * removed ending `/` when listing buckets
 * fixed sub-command `get` to download file in the current path
 * Added option `--clean` instead of `-r/--remove`
+* Added option `-a/--acl` to set `x-amz-acl` for the object
 * Added option `-m/--meta` to add custom metadata for the object
 * Added option `-q/--quiet` to silent output
 * Added option `-p/--pipe` to read from STDIN

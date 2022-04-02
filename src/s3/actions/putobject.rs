@@ -90,6 +90,12 @@ impl<'a> Action for PutObject<'a> {
             map.insert("x-amz-acl", acl);
         }
 
+        if let Some(meta) = &self.meta {
+            for (k, v) in meta {
+                map.insert(k, v);
+            }
+        }
+
         Some(map)
     }
 
@@ -114,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = PutObject::new("key", Path::new("/"), None, None);
+        let action = PutObject::new("key", Path::new("/"), None, None, None);
         assert_eq!(Method::PUT, action.http_method());
     }
 }

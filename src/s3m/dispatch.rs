@@ -126,7 +126,9 @@ pub fn dispatch(
                         .to_string()
                         .split(';')
                         .map(|s| s.split_once('=').unwrap())
-                        .map(|(key, val)| (key.to_owned(), val.to_owned()))
+                        .map(|(key, val)| {
+                            (format!("x-amz-meta-{}", key.to_owned()), val.to_owned())
+                        })
                         .collect::<BTreeMap<String, String>>(),
                 )
             } else {
