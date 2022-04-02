@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 pub struct CreateMultipartUpload<'a> {
     key: &'a str,
     acl: Option<String>,
+    meta: Option<BTreeMap<String, String>>,
     pub x_amz_acl: Option<String>,
     pub cache_control: Option<String>,
     pub content_disposition: Option<String>,
@@ -46,10 +47,11 @@ pub struct CreateMultipartUpload<'a> {
 
 impl<'a> CreateMultipartUpload<'a> {
     #[must_use]
-    pub fn new(key: &'a str, acl: Option<String>) -> Self {
+    pub fn new(key: &'a str, acl: Option<String>, meta: Option<BTreeMap<String, String>>) -> Self {
         Self {
             key,
             acl,
+            meta,
             ..Self::default()
         }
     }
@@ -82,6 +84,13 @@ impl<'a> Action for CreateMultipartUpload<'a> {
 
         if let Some(acl) = &self.acl {
             map.insert("x-amz-acl", acl);
+        }
+
+        if let Some(meta) = &self.meta {
+            for (k, v) in meta {
+                //                let k = format!("x-amz-meta-{}", k);
+                map.insert(&k, &v);
+            }
         }
 
         Some(map)

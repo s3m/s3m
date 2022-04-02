@@ -13,6 +13,7 @@ pub struct PutObject<'a> {
     key: &'a str,
     file: &'a Path,
     acl: Option<String>,
+    meta: Option<BTreeMap<String, String>>,
     sender: Option<Sender<usize>>,
 }
 
@@ -22,12 +23,14 @@ impl<'a> PutObject<'a> {
         key: &'a str,
         file: &'a Path,
         acl: Option<String>,
+        meta: Option<BTreeMap<String, String>>,
         sender: Option<Sender<usize>>,
     ) -> Self {
         Self {
             key,
             file,
             acl,
+            meta,
             sender,
         }
     }

@@ -17,3 +17,15 @@ pub fn is_file(s: &str) -> Result<(), String> {
         ))
     }
 }
+
+pub fn key_val(s: &str) -> Result<(), String> {
+    if s.split(';')
+        .map(|s| s.split_once('=').unwrap())
+        .map(|(key, val)| (key, val))
+        .next()
+        .is_none()
+    {
+        return Err(String::from("metadata format is key1=value1;key2=value2"));
+    }
+    Ok(())
+}

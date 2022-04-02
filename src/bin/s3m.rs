@@ -49,6 +49,7 @@ async fn main() -> Result<()> {
 
         Action::PutObject {
             acl,
+            meta,
             buf_size,
             file,
             s3m_dir,
@@ -57,12 +58,12 @@ async fn main() -> Result<()> {
             quiet,
         } => {
             if pipe {
-                let etag = options::stream(&s3, &key, acl, quiet).await?;
+                let etag = options::stream(&s3, &key, acl, meta, quiet).await?;
                 if !quiet {
                     println!("ETag: {}", etag);
                 }
             } else if let Some(file) = file {
-                options::put_object(&s3, buf_size, &file, &key, s3m_dir, acl, quiet).await?;
+                options::put_object(&s3, buf_size, &file, &key, s3m_dir, acl, meta, quiet).await?;
             }
         }
 

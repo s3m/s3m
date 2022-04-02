@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
+use std::collections::BTreeMap;
 use tokio::time::{sleep, Duration};
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
@@ -19,6 +20,7 @@ pub async fn multipart_upload(
     chunk_size: u64,
     sdb: &Db,
     acl: Option<String>,
+    meta: Option<BTreeMap<String, String>>,
     quiet: bool,
 ) -> Result<String> {
     // trees for keeping track of parts to upload
@@ -29,7 +31,7 @@ pub async fn multipart_upload(
         uid
     } else {
         // Initiate Multipart Upload - request an Upload ID
-        let action = actions::CreateMultipartUpload::new(key, acl);
+        let action = actions::CreateMultipartUpload::new(key, acl, meta);
         let response = action.request(s3).await?;
         db_parts.clear()?;
         // save the upload_id to resume if required
@@ -126,10 +128,6 @@ pub async fn multipart_upload(
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
-// TODO
-// Metadata cannot be specified in this context.
-// x-amz-acl=public
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/acl-overview.html#canned-acl
 async fn upload_part(
     s3: &S3,
     key: &str,

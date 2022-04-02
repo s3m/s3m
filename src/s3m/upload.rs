@@ -3,6 +3,7 @@ use crate::s3m::{progressbar::Bar, Db};
 use anyhow::{anyhow, Result};
 use crossbeam::channel::unbounded;
 use std::cmp::min;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub async fn upload(
@@ -12,11 +13,12 @@ pub async fn upload(
     file_size: u64,
     sdb: &Db,
     acl: Option<String>,
+    meta: Option<BTreeMap<String, String>>,
     quiet: bool,
 ) -> Result<String> {
     let (sender, receiver) = unbounded::<usize>();
     let channel = if quiet { None } else { Some(sender) };
-    let action = actions::PutObject::new(key, Path::new(file), acl, channel);
+    let action = actions::PutObject::new(key, Path::new(file), acl, meta, channel);
     // TODO
     //    action.x_amz_acl = Some(String::from("public-read"));
 

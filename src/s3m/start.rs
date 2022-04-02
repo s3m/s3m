@@ -1,6 +1,7 @@
 use crate::s3::{Credentials, S3};
 use crate::s3m::{args::command, dispatch, matches, Config};
 use anyhow::{anyhow, Context, Result};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -19,6 +20,7 @@ pub enum Action {
     },
     PutObject {
         acl: Option<String>,
+        meta: Option<BTreeMap<String, String>>,
         buf_size: usize,
         file: Option<String>,
         key: String,

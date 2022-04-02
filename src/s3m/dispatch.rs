@@ -1,6 +1,7 @@
 use crate::s3m::start::Action;
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 // return Action based on the command or subcommand
@@ -117,8 +118,23 @@ pub fn dispatch(
             } else {
                 None
             };
+            let meta = if matches.is_present("meta") {
+                Some(
+                    matches
+                        .value_of("meta")
+                        .unwrap_or_default()
+                        .to_string()
+                        .split(';')
+                        .map(|s| s.split_once('=').unwrap())
+                        .map(|(key, val)| (key.to_owned(), val.to_owned()))
+                        .collect::<BTreeMap<String, String>>(),
+                )
+            } else {
+                None
+            };
             Ok(Action::PutObject {
                 acl,
+                meta,
                 buf_size,
                 file: src,
                 s3m_dir,

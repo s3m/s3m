@@ -2,6 +2,7 @@ use crate::s3::{tools, S3};
 use crate::s3m::progressbar::Bar;
 use crate::s3m::{multipart_upload, upload, Db};
 use anyhow::{anyhow, Context, Result};
+use std::collections::BTreeMap;
 use std::fs::metadata;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,6 +18,7 @@ pub async fn put_object(
     key: &str,
     s3m_dir: PathBuf,
     acl: Option<String>,
+    meta: Option<BTreeMap<String, String>>,
     quiet: bool,
 ) -> Result<()> {
     // Get file size and last modified time
@@ -75,14 +77,24 @@ pub async fn put_object(
 
     // upload in multipart
     if file_size > buf_size as u64 {
-        let rs = multipart_upload(s3, key, file, file_size, buf_size as u64, &db, acl, quiet)
-            .await
-            .context("multipart upload failed")?;
+        let rs = multipart_upload(
+            s3,
+            key,
+            file,
+            file_size,
+            buf_size as u64,
+            &db,
+            acl,
+            meta,
+            quiet,
+        )
+        .await
+        .context("multipart upload failed")?;
         if !quiet {
             println!("{}", rs);
         }
     } else {
-        let rs = upload(s3, key, file, file_size, &db, acl, quiet).await?;
+        let rs = upload(s3, key, file, file_size, &db, acl, meta, quiet).await?;
         if !quiet {
             println!("{}", rs);
         }

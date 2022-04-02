@@ -1,8 +1,8 @@
-## 0.5.0 [Unreleased]
+## 0.5.0 🛵
 * removed ending `/` when listing buckets
 * fixed sub-command `get` to download file in the current path
 * Added option `--clean` instead of `-r/--remove`
-* Added option `-a/--attributes` to add custom metadata for the object
+* Added option `-m/--meta` to add custom metadata for the object
 * Added option `-q/--quiet` to silent output
 * Added option `-p/--pipe` to read from STDIN
 * STDIN pipe/stream will be uploaded in chunks to prevent keeping the chunk in RAM it uses a temp file (512MB) and from there streams
