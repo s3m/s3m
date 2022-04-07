@@ -178,5 +178,5 @@ async fn upload_part(
         .map_err(|err| match err {
             TransactionError::Abort(err) | TransactionError::Storage(err) => err,
         })?;
-    Ok(db.flush()?)
+    db.flush()
 }
