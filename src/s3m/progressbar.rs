@@ -14,9 +14,7 @@ pub struct Bar {
     pub progress: Option<ProgressBar>,
 }
 
-#[must_use]
 impl Bar {
-    #[must_use]
     pub fn new(file_size: u64) -> Self {
         let pb = ProgressBar::new(file_size);
         pb.set_style(
@@ -27,7 +25,6 @@ impl Bar {
         Self { progress: Some(pb) }
     }
 
-    #[must_use]
     pub fn new_spinner() -> Self {
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(200);
@@ -39,7 +36,6 @@ impl Bar {
         Self { progress: Some(pb) }
     }
 
-    #[must_use]
     pub fn new_spinner_stream() -> Self {
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(200);
