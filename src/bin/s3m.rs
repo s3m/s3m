@@ -47,8 +47,8 @@ async fn main() -> Result<()> {
             }
         }
 
-        Action::MakeBucket { bucket } => {
-            dbg!(bucket);
+        Action::MakeBucket { acl } => {
+            options::make_bucket(&s3, &acl).await?;
         }
 
         Action::PutObject {

@@ -19,7 +19,7 @@ pub enum Action {
         start_after: Option<String>,
     },
     MakeBucket {
-        bucket: String,
+        acl: String,
     },
     PutObject {
         acl: Option<String>,
@@ -113,13 +113,20 @@ pub fn start() -> Result<(S3, Action)> {
     let region = matches::get_region(host)?;
 
     // BUCKET
-    let bucket = if matches.subcommand_matches("mb").is_some() {
-        Some(hbp[0].to_string())
-    } else if !hbp.is_empty() {
-        Some(hbp.remove(0).to_string())
+    let bucket = if !hbp.is_empty() {
+        if matches.subcommand_matches("mb").is_some() {
+            Some(hbp[0].to_string())
+        } else {
+            Some(hbp.remove(0).to_string())
+        }
     } else if matches.subcommand_matches("ls").is_some() {
         None
     } else {
+        if matches.subcommand_matches("mb").is_some() {
+            return Err(anyhow!(
+                "no \"bucket\" found, try: <s3 provider>/<bucket name>",
+            ));
+        }
         return Err(anyhow!(
             "no \"bucket\" found, try: {} /path/to/file <s3 provider>/<bucket name>/file",
             me().unwrap_or_else(|| "s3m".to_string()),

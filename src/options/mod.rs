@@ -1,6 +1,9 @@
 mod acl;
 pub use self::acl::acl;
 
+mod bucket;
+pub use self::bucket::make_bucket;
+
 mod share;
 pub use self::share::share;
 

@@ -33,12 +33,31 @@ pub fn subcommand_ls<'a>() -> clap::Command<'a> {
 }
 
 pub fn subcommand_mb<'a>() -> clap::Command<'a> {
-    Command::new("mb").about("Make a bucket").arg(
-        Arg::new("arguments")
-            .help("<s3 provider>/<bucket name>")
-            .required(true)
-            .min_values(1),
-    )
+    Command::new("mb")
+        .about("Make a bucket")
+        .arg(
+            Arg::new("arguments")
+                .help("<s3 provider>/<bucket name>")
+                .required(true)
+                .min_values(1),
+        )
+        .arg(
+            Arg::new("acl")
+                .help("The canned ACL to apply to the object example")
+                .long("acl")
+                .possible_values([
+                    "private",
+                    "public-read",
+                    "public-read-write",
+                    "authenticated-read",
+                    "aws-exec-read",
+                    "bucket-owner-read",
+                    "bucket-owner-full-control",
+                ])
+                .default_value("private")
+                .short('a')
+                .takes_value(true),
+        )
 }
 
 pub fn subcommand_rm<'a>() -> clap::Command<'a> {

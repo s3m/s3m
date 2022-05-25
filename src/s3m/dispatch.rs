@@ -91,7 +91,15 @@ pub fn dispatch(
 
         // MakeBucket
         Some("mb") => match bucket {
-            Some(b) => Ok(Action::MakeBucket { bucket: b }),
+            Some(_) => {
+                let sub_m = sub_m("mb")?;
+                let acl = if sub_m.is_present("acl") {
+                    sub_m.value_of("acl").unwrap_or_default().to_string()
+                } else {
+                    String::from("private")
+                };
+                Ok(Action::MakeBucket { acl })
+            }
             None => Err(anyhow!("Bucket name missing, <s3 provider>/<bucket>")),
         },
 

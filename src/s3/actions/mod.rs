@@ -61,9 +61,13 @@ pub use self::listmultipartuploads::ListMultipartUploads;
 mod abortmultipartupload;
 pub use self::abortmultipartupload::AbortMultipartUpload;
 
-// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html}
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html>
 mod deleteobject;
 pub use self::deleteobject::DeleteObject;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html>
+mod createbucket;
+pub use self::createbucket::CreateBucket;
 
 pub trait Action {
     // headers to send in the request
