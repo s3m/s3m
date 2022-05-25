@@ -33,6 +33,11 @@ pub fn host_bucket_path(matches: &clap::ArgMatches) -> Result<Vec<&str>> {
             hbp = parse_args("ls")?;
         }
 
+        // MakeBucket
+        Some("mb") => {
+            hbp = parse_args("mb")?;
+        }
+
         // DeleteObject
         Some("rm") => {
             hbp = parse_args("rm")?;

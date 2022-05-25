@@ -32,6 +32,15 @@ pub fn subcommand_ls<'a>() -> clap::Command<'a> {
         )
 }
 
+pub fn subcommand_mb<'a>() -> clap::Command<'a> {
+    Command::new("mb").about("Make a bucket").arg(
+        Arg::new("arguments")
+            .help("<s3 provider>/<bucket name>")
+            .required(true)
+            .min_values(1),
+    )
+}
+
 pub fn subcommand_rm<'a>() -> clap::Command<'a> {
     Command::new("rm")
         .about("Delete objects and aborts a multipart upload")

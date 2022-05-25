@@ -21,7 +21,7 @@ pub fn dispatch(
 
     // Closure to check if hpb is not empty and if not return the file key
     let hbp_empty = |hbp: Vec<&str>| -> Result<String> {
-        if hbp.is_empty() {
+        if hbp.is_empty() && matches.subcommand_matches("mb").is_none() {
             return Err(anyhow!(
                 "file name missing, <s3 provider>/<bucket>/{}, For more information try {}",
                 "<file name>".red(),
@@ -88,6 +88,12 @@ pub fn dispatch(
                 start_after,
             })
         }
+
+        // MakeBucket
+        Some("mb") => match bucket {
+            Some(b) => Ok(Action::MakeBucket { bucket: b }),
+            None => Err(anyhow!("Bucket name missing, <s3 provider>/<bucket>")),
+        },
 
         // DeleteObject
         Some("rm") => {

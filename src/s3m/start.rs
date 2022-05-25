@@ -18,6 +18,9 @@ pub enum Action {
         prefix: Option<String>,
         start_after: Option<String>,
     },
+    MakeBucket {
+        bucket: String,
+    },
     PutObject {
         acl: Option<String>,
         meta: Option<BTreeMap<String, String>>,
@@ -110,7 +113,9 @@ pub fn start() -> Result<(S3, Action)> {
     let region = matches::get_region(host)?;
 
     // BUCKET
-    let bucket = if !hbp.is_empty() {
+    let bucket = if matches.subcommand_matches("mb").is_some() {
+        Some(hbp[0].to_string())
+    } else if !hbp.is_empty() {
         Some(hbp.remove(0).to_string())
     } else if matches.subcommand_matches("ls").is_some() {
         None

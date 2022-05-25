@@ -47,6 +47,10 @@ async fn main() -> Result<()> {
             }
         }
 
+        Action::MakeBucket { bucket } => {
+            dbg!(bucket);
+        }
+
         Action::PutObject {
             acl,
             meta,

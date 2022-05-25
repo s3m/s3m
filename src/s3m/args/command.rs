@@ -79,6 +79,7 @@ pub fn new<'a>(config_path: &'a OsStr, after_help: &'a str, help_clean: &'a str)
         .subcommand(subcommands::subcommand_acl())
         .subcommand(subcommands::subcommand_get())
         .subcommand(subcommands::subcommand_ls())
+        .subcommand(subcommands::subcommand_mb())
         .subcommand(subcommands::subcommand_rm())
         .subcommand(subcommands::subcommand_share())
 }
