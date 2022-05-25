@@ -3,6 +3,7 @@ use crate::{
     s3::{request, tools, S3},
 };
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 use http::method::Method;
 use std::collections::BTreeMap;
 
@@ -21,9 +22,17 @@ impl<'a> CreateBucket<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
-        let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+    <LocationConstraint>{}</LocationConstraint>
+</CreateBucketConfiguration>"#,
+            s3.region.name()
+        );
+
+        let (url, headers) = &self.sign(s3, tools::sha256_digest(&xml).as_ref(), None, None)?;
         let response =
-            request::request(url.clone(), self.http_method(), headers, None, None).await?;
+            request::upload(url.clone(), self.http_method(), headers, Bytes::from(xml)).await?;
 
         if response.status().is_success() {
             let mut h: BTreeMap<&str, String> = BTreeMap::new();
