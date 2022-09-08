@@ -25,14 +25,14 @@ crossbeam = "0.8"
 dirs = "4"
 futures = "0.3"
 http = "0.2"
-indicatif = "0.16"
+indicatif = "0.17"
 md5 = "0.7"
 num_cpus = "1.13"
-percent-encoding = "2.1"
+percent-encoding = "2.2"
 reqwest = { version = "0.11", features = ["stream"] }
 ring = "0.16"
 serde = { version = "1.0", features = ["derive"] }
-serde-xml-rs = "0.5"
+serde-xml-rs = "0.6"
 serde_any = "0.5"
 serde_cbor = "0.11"
 serde_yaml = "0.8"
@@ -40,7 +40,7 @@ sled = { version = "0.34", features = ["compression"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-url = "2.2"
+url = "2.3"
 
 [package.metadata.rpm]
 package = "s3m"

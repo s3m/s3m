@@ -1,4 +1,5 @@
 use indicatif::{ProgressBar, ProgressStyle};
+use std::time::Duration;
 
 // "█▉▊▋▌▍▎▏  ·"
 const PROGRES_CHARS: &str =
@@ -20,7 +21,7 @@ impl Bar {
         let pb = ProgressBar::new(file_size);
         pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})")
+            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})").unwrap()
             .progress_chars(PROGRES_CHARS),
     );
         Self { progress: Some(pb) }
@@ -29,11 +30,12 @@ impl Bar {
     #[must_use]
     pub fn new_spinner() -> Self {
         let pb = ProgressBar::new_spinner();
-        pb.enable_steady_tick(200);
+        pb.enable_steady_tick(Duration::from_millis(200));
         pb.set_style(
             ProgressStyle::default_spinner()
                 .tick_strings(PROGRES_CHARS_SPINNER)
-                .template("checksum: {spinner:.green}"),
+                .template("checksum: {spinner:.green}")
+                .unwrap(),
         );
         Self { progress: Some(pb) }
     }
@@ -41,11 +43,12 @@ impl Bar {
     #[must_use]
     pub fn new_spinner_stream() -> Self {
         let pb = ProgressBar::new_spinner();
-        pb.enable_steady_tick(200);
+        pb.enable_steady_tick(Duration::from_millis(200));
         pb.set_style(
             ProgressStyle::default_spinner()
                 .tick_strings(PROGRES_CHARS_SPINNER)
-                .template("[{elapsed_precise}] {msg} {spinner:.green}"),
+                .template("[{elapsed_precise}] {msg} {spinner:.green}")
+                .unwrap(),
         );
         Self { progress: Some(pb) }
     }
