@@ -1,12 +1,12 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 pub struct Config {
     pub hosts: BTreeMap<String, Host>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 pub struct Host {
     pub endpoint: Option<String>,
     pub region: Option<String>,

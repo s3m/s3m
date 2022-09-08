@@ -174,7 +174,7 @@ impl FromStr for Region {
 }
 
 /// An error produced when attempting to convert a `str` into a `Region` fails.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ParseRegionError {
     message: String,
 }
@@ -215,8 +215,7 @@ mod tests {
         assert_eq!(
             "foo"
                 .parse::<Region>()
-                .err()
-                .expect("Parsing foo as a Region was not an error")
+                .expect_err("Parsing foo as a Region was not an error")
                 .to_string(),
             "Not a valid AWS region: foo".to_owned()
         );
