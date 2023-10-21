@@ -7,7 +7,7 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
 pub async fn get(s3: S3, key: String, dest: Option<String>, quiet: bool) -> Result<()> {
-    // crate a new destination
+    // create a new destination
     let file_name = Path::new(&key)
         .file_name()
         .with_context(|| format!("Failed to get file name from: {}", key))?;

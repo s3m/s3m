@@ -65,7 +65,7 @@ pub async fn put_object(
     let db = Db::new(s3, key, &checksum, file_mtime, &s3m_dir)
         .context("could not create stream tree, try option \"-r\"")?;
 
-    // check if file has been uploded already
+    // check if file has been uploaded already
     let etag = &db
         .check()?
         .context("could not query db, try option \"-r\", to clean it");
