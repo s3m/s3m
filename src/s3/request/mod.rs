@@ -23,7 +23,7 @@ use url::Url;
 /// Will return `Err` if can not make the request
 pub async fn request(
     url: Url,
-    method: http::method::Method,
+    method: reqwest::Method,
     headers: &BTreeMap<String, String>,
     file: Option<&Path>,
     sender: Option<Sender<usize>>,
@@ -60,7 +60,7 @@ pub async fn request(
 /// Will return `Err` if can not make the request
 pub async fn multipart_upload(
     url: Url,
-    method: http::method::Method,
+    method: reqwest::Method,
     headers: &BTreeMap<String, String>,
     file: String,
     seek: u64,
@@ -88,7 +88,7 @@ pub async fn multipart_upload(
 /// Will return `Err` if can not make the request
 pub async fn upload(
     url: Url,
-    method: http::method::Method,
+    method: reqwest::Method,
     headers: &BTreeMap<String, String>,
     body: Bytes,
 ) -> Result<Response> {

@@ -4,9 +4,10 @@
 use crate::s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes};
 use crate::s3::S3;
 use anyhow::{anyhow, Result};
+use base64ct::{Base64, Encoding};
 use chrono::prelude::{DateTime, Utc};
-use http::method::Method;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use reqwest::Method;
 use ring::hmac;
 use std::collections::BTreeMap;
 use std::str;
@@ -68,7 +69,7 @@ impl<'a> Signature<'a> {
         }
 
         if let Some(md5) = digest_md5 {
-            self.add_header("Content-MD5", &base64::encode(md5));
+            self.add_header("Content-MD5", &Base64::encode_string(md5));
         }
 
         if let Some(headers) = custom_headers {

@@ -4,7 +4,7 @@ use crate::{
     s3::{request, tools, S3},
 };
 use anyhow::{anyhow, Result};
-use http::method::Method;
+use reqwest::Method;
 use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 

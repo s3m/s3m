@@ -10,7 +10,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use http::method::Method;
+use reqwest::Method;
 use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
 use serde_xml_rs::{from_str, to_string};
 use std::collections::BTreeMap;
@@ -77,8 +77,13 @@ impl<'a> CompleteMultipartUpload<'a> {
         let body = to_string(&parts)?;
         let digest = tools::sha256_digest(&body);
         let (url, headers) = &self.sign(s3, digest.as_ref(), None, Some(body.len()))?;
-        let response =
-            request::upload(url.clone(), self.http_method(), headers, Bytes::from(body)).await?;
+        let response = request::upload(
+            url.clone(),
+            self.http_method().into(),
+            headers,
+            Bytes::from(body),
+        )
+        .await?;
 
         if response.status().is_success() {
             let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;

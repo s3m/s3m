@@ -74,7 +74,7 @@ pub trait Action {
     fn headers(&self) -> Option<BTreeMap<&str, &str>>;
 
     // method to use GET/PUT...
-    fn http_method(&self) -> http::method::Method;
+    fn http_method(&self) -> reqwest::Method;
 
     // URL query pairs
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>>;

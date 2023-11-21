@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use crossbeam::channel::Sender;
-use http::method::Method;
+use reqwest::Method;
 use std::collections::BTreeMap;
 use std::path::Path;
 

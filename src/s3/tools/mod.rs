@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64ct::{Base64, Encoding};
 use futures::stream::TryStreamExt;
 use ring::{
     digest,
@@ -64,7 +65,7 @@ pub fn sha256_digest(input: impl AsRef<[u8]>) -> digest::Digest {
 
 pub fn base64_md5(input: impl AsRef<[u8]>) -> String {
     let md5_digest = md5::compute(input);
-    base64::encode(md5_digest.as_ref())
+    Base64::encode_string(md5_digest.as_ref())
 }
 
 #[must_use]

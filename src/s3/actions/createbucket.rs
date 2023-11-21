@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use http::method::Method;
+use reqwest::Method;
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
