@@ -77,13 +77,8 @@ impl<'a> CompleteMultipartUpload<'a> {
         let body = to_string(&parts)?;
         let digest = tools::sha256_digest(&body);
         let (url, headers) = &self.sign(s3, digest.as_ref(), None, Some(body.len()))?;
-        let response = request::upload(
-            url.clone(),
-            self.http_method().into(),
-            headers,
-            Bytes::from(body),
-        )
-        .await?;
+        let response =
+            request::upload(url.clone(), self.http_method(), headers, Bytes::from(body)).await?;
 
         if response.status().is_success() {
             let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;

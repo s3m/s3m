@@ -78,7 +78,7 @@ pub fn sha256_hmac(key: &[u8], msg: &[u8]) -> hmac::Tag {
 pub fn write_hex_bytes(bytes: &[u8]) -> String {
     let mut s = String::new();
     for byte in bytes {
-        write!(&mut s, "{:02x}", byte).expect("Unable to write");
+        write!(&mut s, "{byte:02x}").expect("Unable to write");
     }
     s
 }

@@ -1,11 +1,15 @@
+use crate::cli::{
+    progressbar::Bar,
+    {multipart_upload, upload, Db},
+};
 use crate::s3::{tools, S3};
-use crate::s3m::progressbar::Bar;
-use crate::s3m::{multipart_upload, upload, Db};
 use anyhow::{anyhow, Context, Result};
-use std::collections::BTreeMap;
-use std::fs::metadata;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::BTreeMap,
+    fs::metadata,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 const MAX_PART_SIZE: usize = 5_368_709_120;
 const MAX_FILE_SIZE: usize = 5_497_558_138_880;
@@ -23,7 +27,7 @@ pub async fn put_object(
     quiet: bool,
 ) -> Result<()> {
     // Get file size and last modified time
-    let (file_size, file_mtime) = metadata(&file)
+    let (file_size, file_mtime) = metadata(file)
         .map(|m| {
             if m.is_file() {
                 Ok(m)
@@ -71,7 +75,7 @@ pub async fn put_object(
         .context("could not query db, try option \"-r\", to clean it");
     if let Ok(etag) = etag {
         if !quiet {
-            println!("{}", etag);
+            println!("{etag}");
         }
         return Ok(());
     };
@@ -92,12 +96,12 @@ pub async fn put_object(
         .await
         .context("multipart upload failed")?;
         if !quiet {
-            println!("{}", rs);
+            println!("{rs}");
         }
     } else {
         let rs = upload(s3, key, file, file_size, &db, acl, meta, quiet).await?;
         if !quiet {
-            println!("{}", rs);
+            println!("{rs}");
         }
     }
 

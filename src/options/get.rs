@@ -1,21 +1,19 @@
+use crate::cli::progressbar::Bar;
 use crate::s3::{actions, S3};
-use crate::s3m::progressbar::Bar;
 use anyhow::{anyhow, Context, Result};
-use std::cmp::min;
-use std::path::Path;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use std::{cmp::min, path::Path};
+use tokio::{fs::File, io::AsyncWriteExt};
 
 pub async fn get(s3: S3, key: String, dest: Option<String>, quiet: bool) -> Result<()> {
     // create a new destination
     let file_name = Path::new(&key)
         .file_name()
-        .with_context(|| format!("Failed to get file name from: {}", key))?;
+        .with_context(|| format!("Failed to get file name from: {key}"))?;
 
-    let path = match dest {
-        Some(d) => Path::new(&d).join(file_name),
-        None => Path::new(".").join(file_name),
-    };
+    let path = dest.map_or_else(
+        || Path::new(".").join(file_name),
+        |d| Path::new(&d).join(file_name),
+    );
 
     // TODO implement  -f --force
     if path.is_file() {

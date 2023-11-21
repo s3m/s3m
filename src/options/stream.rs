@@ -1,12 +1,11 @@
+use crate::cli::progressbar::Bar;
 use crate::s3::{actions, S3};
-use crate::s3m::progressbar::Bar;
 use anyhow::Result;
 use bytes::BytesMut;
 use crossbeam::channel::{unbounded, Sender};
 use futures::stream::TryStreamExt;
 use ring::digest::{Context, SHA256};
-use std::collections::BTreeMap;
-use std::io::Write;
+use std::{collections::BTreeMap, io::Write};
 use tempfile::{Builder, NamedTempFile};
 use tokio::io::stdin;
 use tokio_util::codec::{BytesCodec, FramedRead};
@@ -116,7 +115,7 @@ pub async fn stream(
 // length, this should speed up things and consume less resources
 // TODO crossbeam channel to get progress bar but for now pv could be used, for example:
 // cat file | pv | s3m
-async fn fold_fn<'a>(mut part: Stream<'a>, bytes: BytesMut) -> Result<Stream<'_>, std::io::Error> {
+async fn fold_fn(mut part: Stream<'_>, bytes: BytesMut) -> Result<Stream<'_>, std::io::Error> {
     if part.count >= BUFFER_SIZE {
         let digest_sha = part.sha.finish();
         let digest_md5 = part.md5.compute();

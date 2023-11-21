@@ -65,7 +65,7 @@ impl<'a> Signature<'a> {
         self.add_header("x-amz-content-sha256", &write_hex_bytes(digest_sha256));
 
         if let Some(length) = length {
-            self.add_header("content-length", format!("{}", length).as_ref());
+            self.add_header("content-length", format!("{length}").as_ref());
         }
 
         if let Some(md5) = digest_md5 {
@@ -117,7 +117,7 @@ impl<'a> Signature<'a> {
             self.auth.region.name(),
             self.aws_service
         );
-        let canonical_request_hash = sha256_digest(&canonical_request);
+        let canonical_request_hash = sha256_digest(canonical_request);
         let string_to_sign =
             string_to_sign(&current_datetime, &scope, canonical_request_hash.as_ref());
 
@@ -210,7 +210,7 @@ impl<'a> Signature<'a> {
         //         CredentialScope + \n +
         //         HashedCanonicalRequest
         //
-        let canonical_request_hash = sha256_digest(&canonical_request);
+        let canonical_request_hash = sha256_digest(canonical_request);
         let string_to_sign =
             string_to_sign(&current_datetime, &scope, canonical_request_hash.as_ref());
 
@@ -282,8 +282,8 @@ pub fn canonical_query_string(uri: &Url) -> String {
 
 fn canonical_headers(headers: &BTreeMap<String, String>) -> String {
     let mut canonical = String::new();
-    for (key, value) in headers.iter() {
-        canonical.push_str(format!("{}:{}\n", key, value).as_ref());
+    for (key, value) in headers {
+        canonical.push_str(format!("{key}:{value}\n").as_ref());
     }
     canonical
 }
@@ -313,7 +313,7 @@ fn signed_headers(headers: &BTreeMap<String, String>) -> String {
 
 fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &str) -> hmac::Tag {
     let k_date = sha256_hmac(
-        format!("AWS4{}", secret_access_key).as_bytes(),
+        format!("AWS4{secret_access_key}").as_bytes(),
         date.as_bytes(),
     );
     let k_region = sha256_hmac(k_date.as_ref(), region.as_bytes());
