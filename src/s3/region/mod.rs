@@ -199,10 +199,12 @@ impl Display for ParseRegionError {
 
 impl Default for Region {
     fn default() -> Self {
-        match std::env::var("AWS_DEFAULT_REGION").or_else(|_| std::env::var("AWS_REGION")) {
-            Ok(ref v) => Self::from_str(v).unwrap_or(Self::UsEast1),
-            Err(_) => Self::UsEast1,
-        }
+        std::env::var("AWS_DEFAULT_REGION")
+            .or_else(|_| std::env::var("AWS_REGION"))
+            .as_ref()
+            .map_or(Self::UsEast1, |v| {
+                Self::from_str(v).unwrap_or(Self::UsEast1)
+            })
     }
 }
 

@@ -6,6 +6,7 @@ pub mod responses;
 pub mod signature;
 pub mod tools;
 pub use self::{credentials::Credentials, region::Region, signature::Signature};
+
 use crate::s3::tools::{sha256_digest, write_hex_bytes};
 use anyhow::Result;
 use url::Url;

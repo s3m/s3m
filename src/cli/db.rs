@@ -1,5 +1,5 @@
+use crate::cli::Part;
 use crate::s3::{actions, S3};
-use crate::s3m::Part;
 use anyhow::Result;
 use serde_cbor::{de::from_reader, to_vec};
 use std::collections::BTreeMap;

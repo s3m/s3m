@@ -7,7 +7,7 @@ use crate::s3::S3;
 use anyhow::{anyhow, Result};
 use reqwest::Response;
 use serde_xml_rs::from_str;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Write};
 use url::Url;
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html>
@@ -135,8 +135,9 @@ pub async fn response_error(response: Response) -> Result<String> {
     } else {
         error.insert("Response", body);
     }
-    Ok(error
-        .iter()
-        .map(|(k, v)| format!("{}: {}\n", k, v))
-        .collect::<String>())
+
+    Ok(error.iter().fold(String::new(), |mut output, (k, v)| {
+        let _ = writeln!(output, "{}: {}", k, v);
+        output
+    }))
 }

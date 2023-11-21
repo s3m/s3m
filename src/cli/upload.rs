@@ -1,10 +1,8 @@
+use crate::cli::{progressbar::Bar, Db};
 use crate::s3::{actions, S3};
-use crate::s3m::{progressbar::Bar, Db};
 use anyhow::{anyhow, Result};
 use crossbeam::channel::unbounded;
-use std::cmp::min;
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::{cmp::min, collections::BTreeMap, fmt::Write, path::Path};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn upload(
@@ -40,8 +38,9 @@ pub async fn upload(
     let response = action.request(s3).await?;
     let etag = &response.get("ETag").ok_or_else(|| anyhow!("no etag"))?;
     sdb.save_etag(etag)?;
-    Ok(response
-        .iter()
-        .map(|(k, v)| format!("{}: {}\n", k, v))
-        .collect::<String>())
+
+    Ok(response.iter().fold(String::new(), |mut output, (k, v)| {
+        let _ = writeln!(output, "{}: {}", k, v);
+        output
+    }))
 }

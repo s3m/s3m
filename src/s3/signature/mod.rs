@@ -117,7 +117,7 @@ impl<'a> Signature<'a> {
             self.auth.region.name(),
             self.aws_service
         );
-        let canonical_request_hash = sha256_digest(&canonical_request);
+        let canonical_request_hash = sha256_digest(canonical_request);
         let string_to_sign =
             string_to_sign(&current_datetime, &scope, canonical_request_hash.as_ref());
 
@@ -210,7 +210,7 @@ impl<'a> Signature<'a> {
         //         CredentialScope + \n +
         //         HashedCanonicalRequest
         //
-        let canonical_request_hash = sha256_digest(&canonical_request);
+        let canonical_request_hash = sha256_digest(canonical_request);
         let string_to_sign =
             string_to_sign(&current_datetime, &scope, canonical_request_hash.as_ref());
 

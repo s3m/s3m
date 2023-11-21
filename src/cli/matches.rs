@@ -1,5 +1,5 @@
+use crate::cli::Host;
 use crate::s3::Region;
-use crate::s3m::Host;
 use anyhow::{anyhow, Context, Result};
 
 /// returns the host, bucket and path from the arguments
@@ -11,9 +11,11 @@ pub fn host_bucket_path(matches: &clap::ArgMatches) -> Result<Vec<&str>> {
         let args: Vec<&str> = matches
             .subcommand_matches(subcommand)
             .context("arguments missing")?
-            .values_of("arguments")
+            .get_many::<String>("arguments")
             .unwrap_or_default()
+            .map(|s| s.as_str())
             .collect();
+
         Ok(args[0].split('/').filter(|s| !s.is_empty()).collect())
     };
 
@@ -50,14 +52,19 @@ pub fn host_bucket_path(matches: &clap::ArgMatches) -> Result<Vec<&str>> {
 
         // PutObject
         _ => {
-            let args: Vec<&str> = matches.values_of("arguments").unwrap_or_default().collect();
+            let args: Vec<&str> = matches
+                .get_many::<String>("arguments")
+                .unwrap_or_default()
+                .map(|s| s.as_str())
+                .collect();
+
             if args.len() == 2 {
                 hbp = args[1].split('/').filter(|s| !s.is_empty()).collect();
-            } else if matches.is_present("pipe") {
+            } else if matches.contains_id("pipe") {
                 hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
             } else {
                 return Err(anyhow!(
-                "missing argument or use --pipe for standar input. For more information try: --help"
+                "missing argument or use --pipe for standard input. For more information try: --help"
             ));
             }
         }

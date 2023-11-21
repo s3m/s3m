@@ -14,9 +14,11 @@ mod part;
 pub use self::part::Part;
 
 mod start;
-pub use self::start::{start, Action};
+pub use self::start::start;
 
-mod args;
+pub mod actions;
+
+mod commands;
 mod dispatch;
 mod matches;
 pub mod progressbar;

@@ -1,5 +1,5 @@
+use crate::cli::{progressbar::Bar, Db, Part};
 use crate::s3::{actions, S3};
-use crate::s3m::{progressbar::Bar, Db, Part};
 use anyhow::{anyhow, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use serde_cbor::{de::from_reader, to_vec};

@@ -1,7 +1,9 @@
 use anyhow::Result;
-use s3m::options;
-use s3m::s3::actions;
-use s3m::s3m::{start, Action};
+use s3m::{
+    cli::{actions::Action, start},
+    options,
+    s3::actions,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
