@@ -23,8 +23,7 @@ impl Config {
     pub fn new(config_path: PathBuf) -> Result<Self> {
         let file = File::open(config_path)?;
 
-        let config: Config =
-            serde_yaml::from_reader(file).context("unable to parse config file")?;
+        let config: Self = serde_yaml::from_reader(file).context("unable to parse config file")?;
 
         Ok(config)
     }

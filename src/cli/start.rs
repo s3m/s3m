@@ -80,7 +80,7 @@ pub fn start() -> Result<(S3, Action)> {
     let mut hbp = matches::host_bucket_path(&matches)?;
 
     // HOST: get it from the config file
-    let host: &Host = match config.get_host(&hbp[0]) {
+    let host: &Host = match config.get_host(hbp[0]) {
         Ok(h) => {
             hbp.remove(0);
             h
