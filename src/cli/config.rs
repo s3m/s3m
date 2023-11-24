@@ -32,7 +32,7 @@ impl Config {
     pub fn get_host(&self, name: &str) -> Result<&Host> {
         self.hosts
             .get(name)
-            .with_context(|| format!("could not find host {}", name))
+            .with_context(|| format!("could not find host {name}"))
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::cli::actions::Action;
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
-use std::{collections::BTreeMap, path::PathBuf, string::String};
+use std::{borrow::ToOwned, collections::BTreeMap, path::PathBuf, string::String};
 
 // return Action based on the command or subcommand
 pub fn dispatch(
@@ -20,7 +20,7 @@ pub fn dispatch(
 
     // Closure to check if hpb is not empty and if not return the file key
     let hbp_empty = |hbp: Vec<&str>| -> Result<String> {
-        if hbp.is_empty() && matches.subcommand_matches("cb").is_none() {
+        if hbp.is_empty() {
             return Err(anyhow!(
                 "file name missing, <s3 provider>/<bucket>/{}, For more information try {}",
                 "<file name>".red(),
@@ -86,19 +86,27 @@ pub fn dispatch(
                 let acl = sub_m
                     .get_one("acl")
                     .map_or_else(|| String::from("private"), |s: &String| s.to_string());
-                Ok(Action::MakeBucket { acl })
+                Ok(Action::CreateBucket { acl })
             }
             None => Err(anyhow!("Bucket name missing, <s3 provider>/<bucket>")),
         },
 
-        // DeleteObject
+        // DeleteObject or DeleteBucket
         Some("rm") => {
-            let key = hbp_empty(hbp)?;
+            let mut key = String::new();
             let sub_m = sub_m("rm")?;
             let upload_id = sub_m
                 .get_one("UploadId")
                 .map_or_else(String::new, |s: &String| s.to_string());
-            Ok(Action::DeleteObject { key, upload_id })
+            let bucket = sub_m.get_one("bucket").copied().unwrap_or(false);
+            if !bucket {
+                key = hbp_empty(hbp)?;
+            }
+            Ok(Action::DeleteObject {
+                key,
+                upload_id,
+                bucket,
+            })
         }
 
         // ShareObject
@@ -122,10 +130,12 @@ pub fn dispatch(
                 src = Some(args[0].to_string());
             }
 
+            // get ACL to apply to the object
             let acl = matches.get_one("acl").map(|s: &String| s.to_string());
 
+            // get x-amz-meta- to apply to the object
             let meta = if matches
-                .get_one("meta")
+                .get_one::<String>("meta")
                 .map(|s: &String| s.to_string())
                 .is_some()
             {
@@ -144,6 +154,7 @@ pub fn dispatch(
             } else {
                 None
             };
+
             Ok(Action::PutObject {
                 acl,
                 meta,
@@ -153,7 +164,318 @@ pub fn dispatch(
                 key,
                 pipe: matches.get_one("pipe").copied().unwrap_or(false),
                 quiet: matches.get_one("quiet").copied().unwrap_or(false),
+                tmp_dir: matches.get_one::<PathBuf>("tmp-dir").map_or_else(
+                    || std::env::temp_dir().join(format!("s3m-{}", std::process::id())),
+                    ToOwned::to_owned,
+                ),
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{
+        actions::Action,
+        commands::{cmd_acl, cmd_cb, cmd_get, cmd_ls, cmd_rm, cmd_share, new},
+    };
+    use clap::Command;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::Builder;
+
+    const CONF: &str = r#"---
+hosts:
+  s3:
+    region: xx-region-y
+    access_key: XXX
+    secret_key: YYY
+    bucket: my-bucket"#;
+
+    #[test]
+    fn test_dispatch_acl() {
+        let cmd = Command::new("test").subcommand(cmd_acl::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "acl", "h/b/f"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::ACL { key, acl } => {
+                assert_eq!(key, "h/b/f");
+                assert_eq!(acl, None);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_get() {
+        let cmd = Command::new("test").subcommand(cmd_get::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::GetObject {
+                key,
+                get_head,
+                dest,
+                quiet,
+            } => {
+                assert_eq!(key, "h/b/f");
+                assert_eq!(get_head, false);
+                assert_eq!(dest, None);
+                assert_eq!(quiet, false);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_ls() {
+        let cmd = Command::new("test").subcommand(cmd_ls::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "ls", "h/b/f"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::ListObjects {
+                bucket,
+                list_multipart_uploads,
+                prefix,
+                start_after,
+            } => {
+                assert_eq!(bucket, None);
+                assert_eq!(list_multipart_uploads, false);
+                assert_eq!(prefix, None);
+                assert_eq!(start_after, None);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_cb() {
+        let cmd = Command::new("test").subcommand(cmd_cb::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "cb", "h/b/f"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            Some("bucket-required".to_string()),
+            0,
+            PathBuf::new(),
+            &matches,
+        )
+        .unwrap();
+        match action {
+            Action::CreateBucket { acl } => {
+                assert_eq!(acl, "private");
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_rm() {
+        let cmd = Command::new("test").subcommand(cmd_rm::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "rm", "h/b/f"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::DeleteObject {
+                key,
+                upload_id,
+                bucket,
+            } => {
+                assert_eq!(key, "h/b/f");
+                assert_eq!(upload_id, "");
+                assert_eq!(bucket, false);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_rm_bucket() {
+        let cmd = Command::new("test").subcommand(cmd_rm::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "h/b/f"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::DeleteObject {
+                key,
+                upload_id,
+                bucket,
+            } => {
+                assert_eq!(key, "");
+                assert_eq!(upload_id, "");
+                assert_eq!(bucket, true);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_share() {
+        let cmd = Command::new("test").subcommand(cmd_share::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "share", "h/b/f"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::ShareObject { key, expire } => {
+                assert_eq!(key, "h/b/f");
+                assert_eq!(expire, 43200);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_default_put() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+        let cmd = new(&tmp_dir.into_path());
+        let matches = cmd.try_get_matches_from(vec![
+            "test",
+            "--config",
+            config_path.as_os_str().to_str().unwrap(),
+            "path/to/file",
+            "h/b/f",
+        ]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::PutObject {
+                acl,
+                meta,
+                buf_size,
+                file,
+                s3m_dir,
+                key,
+                pipe,
+                quiet,
+                tmp_dir,
+            } => {
+                assert_eq!(acl, None);
+                assert_eq!(meta, None);
+                assert_eq!(buf_size, 0);
+                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(s3m_dir, PathBuf::new());
+                assert_eq!(key, "h/b/f");
+                assert_eq!(pipe, false);
+                assert_eq!(quiet, false);
+                assert_eq!(tmp_dir, std::env::temp_dir());
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_default_put_acl() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+        let cmd = new(&tmp_dir.into_path());
+        let matches = cmd.try_get_matches_from(vec![
+            "test",
+            "--config",
+            config_path.as_os_str().to_str().unwrap(),
+            "path/to/file",
+            "h/b/f",
+            "--acl",
+            "public-read",
+        ]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::PutObject {
+                acl,
+                meta,
+                buf_size,
+                file,
+                s3m_dir,
+                key,
+                pipe,
+                quiet,
+                tmp_dir,
+            } => {
+                assert_eq!(acl, Some("public-read".to_string()));
+                assert_eq!(meta, None);
+                assert_eq!(buf_size, 0);
+                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(s3m_dir, PathBuf::new());
+                assert_eq!(key, "h/b/f");
+                assert_eq!(pipe, false);
+                assert_eq!(quiet, false);
+                assert_eq!(tmp_dir, std::env::temp_dir());
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_default_put_meta() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+        let cmd = new(&tmp_dir.into_path());
+        let matches = cmd.try_get_matches_from(vec![
+            "test",
+            "--config",
+            config_path.as_os_str().to_str().unwrap(),
+            "path/to/file",
+            "h/b/f",
+            "--meta",
+            "key1=val1;key2=val2",
+        ]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::PutObject {
+                acl,
+                meta,
+                buf_size,
+                file,
+                s3m_dir,
+                key,
+                pipe,
+                quiet,
+                tmp_dir,
+            } => {
+                assert_eq!(acl, None);
+                assert_eq!(
+                    meta,
+                    Some(
+                        [
+                            ("x-amz-meta-key1".to_string(), "val1".to_string()),
+                            ("x-amz-meta-key2".to_string(), "val2".to_string())
+                        ]
+                        .iter()
+                        .cloned()
+                        .collect()
+                    )
+                );
+                assert_eq!(buf_size, 0);
+                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(s3m_dir, PathBuf::new());
+                assert_eq!(key, "h/b/f");
+                assert_eq!(pipe, false);
+                assert_eq!(quiet, false);
+                assert_eq!(tmp_dir, std::env::temp_dir());
+            }
+            _ => panic!("wrong action"),
         }
     }
 }

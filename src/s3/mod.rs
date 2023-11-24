@@ -38,12 +38,15 @@ impl S3 {
     #[must_use]
     pub fn hash(&self) -> String {
         let mut hash = String::new();
+
         hash.push_str(self.credentials.aws_access_key_id());
         hash.push_str(self.credentials.aws_secret_access_key());
         hash.push_str(self.region.endpoint());
+
         if let Some(bucket) = &self.bucket {
             hash.push_str(bucket);
         }
+
         write_hex_bytes(sha256_digest(&hash).as_ref())
     }
 
@@ -53,6 +56,7 @@ impl S3 {
         } else {
             Url::parse(&format!("https://{}", &self.region.endpoint()))?
         };
+
         Ok(url)
     }
 }

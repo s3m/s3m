@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 
-pub fn subcommand_cb() -> Command {
+pub fn command() -> Command {
     Command::new("cb")
         .about("Create a bucket")
         .arg(

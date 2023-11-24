@@ -1,86 +1,37 @@
 use anyhow::Result;
-use s3m::{
-    cli::{actions::Action, start},
-    options,
-    s3::actions,
-};
+use s3m::cli::{actions, actions::Action, start};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let (s3, action) = start()?;
 
     match action {
-        Action::ACL { key, acl } => {
-            options::acl(&s3, &key, acl).await?;
+        Action::ACL { .. } => {
+            actions::acl::handle(&s3, action).await?;
         }
 
-        Action::ShareObject { key, expire } => {
-            let url = options::share(&s3, &key, expire)?;
-            println!("{}", url);
+        Action::CreateBucket { .. } => {
+            actions::bucket::handle(&s3, action).await?;
         }
 
-        Action::GetObject {
-            key,
-            get_head,
-            dest,
-            quiet,
-        } => {
-            if get_head {
-                options::get_head(s3, key).await?;
-            } else {
-                options::get(s3, key, dest, quiet).await?;
-            }
+        Action::ListObjects { .. } => {
+            actions::object_list::handle(&s3, action).await?;
         }
 
-        Action::ListObjects {
-            bucket,
-            list_multipart_uploads,
-            prefix,
-            start_after,
-        } => {
-            if bucket.is_some() {
-                if list_multipart_uploads {
-                    options::list_multipart_uploads(&s3).await?;
-                } else {
-                    options::list_objects(&s3, prefix, start_after).await?;
-                }
-            } else {
-                options::list_buckets(&s3).await?;
-            }
+        Action::DeleteObject { .. } => {
+            actions::object_delete::handle(&s3, action).await?;
         }
 
-        Action::MakeBucket { acl } => {
-            options::make_bucket(&s3, &acl).await?;
+        Action::GetObject { .. } => {
+            actions::object_get::handle(&s3, action).await?;
         }
 
-        Action::PutObject {
-            acl,
-            meta,
-            buf_size,
-            file,
-            s3m_dir,
-            key,
-            pipe,
-            quiet,
-        } => {
-            if pipe {
-                let etag = options::stream(&s3, &key, acl, meta, quiet).await?;
-                if !quiet {
-                    println!("ETag: {}", etag);
-                }
-            } else if let Some(file) = file {
-                options::put_object(&s3, buf_size, &file, &key, s3m_dir, acl, meta, quiet).await?;
-            }
+        Action::ShareObject { .. } => {
+            actions::object_share::handle(&s3, action)?;
         }
 
-        Action::DeleteObject { key, upload_id } => {
-            if upload_id.is_empty() {
-                let action = actions::DeleteObject::new(&key);
-                action.request(&s3).await?;
-            } else {
-                let action = actions::AbortMultipartUpload::new(&key, &upload_id);
-                action.request(&s3).await?;
-            }
+        Action::PutObject { .. } => {
+            actions::object_put::handle(&s3, action).await?;
         }
     }
 

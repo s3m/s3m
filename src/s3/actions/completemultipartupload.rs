@@ -78,7 +78,7 @@ impl<'a> CompleteMultipartUpload<'a> {
         let digest = tools::sha256_digest(&body);
         let (url, headers) = &self.sign(s3, digest.as_ref(), None, Some(body.len()))?;
         let response =
-            request::upload(url.clone(), self.http_method(), headers, Bytes::from(body)).await?;
+            request::upload(url.clone(), self.http_method()?, headers, Bytes::from(body)).await?;
 
         if response.status().is_success() {
             let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;
@@ -91,8 +91,8 @@ impl<'a> CompleteMultipartUpload<'a> {
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
 impl<'a> Action for CompleteMultipartUpload<'a> {
-    fn http_method(&self) -> Method {
-        Method::from_bytes(b"POST").unwrap()
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"POST")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -125,6 +125,6 @@ mod tests {
     fn test_method() {
         let parts: BTreeMap<u16, Part> = BTreeMap::new();
         let action = CompleteMultipartUpload::new("key", "uid", parts);
-        assert_eq!(Method::POST, action.http_method());
+        assert_eq!(Method::POST, action.http_method().unwrap());
     }
 }

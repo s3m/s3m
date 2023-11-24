@@ -1,11 +1,9 @@
 //! Actions
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations.html>
 
-use crate::s3::responses::ErrorResponse;
-use crate::s3::signature::Signature;
-use crate::s3::S3;
+use crate::s3::{responses::ErrorResponse, signature::Signature, S3};
 use anyhow::{anyhow, Result};
-use reqwest::Response;
+use reqwest::{Method, Response};
 use serde_xml_rs::from_str;
 use std::{collections::BTreeMap, fmt::Write};
 use url::Url;
@@ -69,12 +67,16 @@ pub use self::deleteobject::DeleteObject;
 mod createbucket;
 pub use self::createbucket::CreateBucket;
 
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html
+mod deletebucket;
+pub use self::deletebucket::DeleteBucket;
+
 pub trait Action {
     // headers to send in the request
     fn headers(&self) -> Option<BTreeMap<&str, &str>>;
 
-    // method to use GET/PUT...
-    fn http_method(&self) -> reqwest::Method;
+    // HTTP method to use
+    fn http_method(&self) -> Result<Method>;
 
     // URL query pairs
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>>;
@@ -110,15 +112,19 @@ pub trait Action {
             }
         }
 
-        let mut signature = Signature::new(s3, "s3", self.http_method())?;
+        let mut signature = Signature::new(s3, "s3", self.http_method()?)?;
+
         let headers = signature.sign(&url, hash_payload, md5, content_length, self.headers());
+
         Ok((url, headers))
     }
 }
 
 pub async fn response_error(response: Response) -> Result<String> {
     let mut error: BTreeMap<&str, String> = BTreeMap::new();
+
     error.insert("HTTP Status Code", response.status().to_string());
+
     if let Some(x_amz_id_2) = response.headers().get("x-amz-id-2") {
         error.insert("x-amz-id-2", x_amz_id_2.to_str()?.to_string());
     }

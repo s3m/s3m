@@ -1,6 +1,6 @@
 use crate::{
-    cli::Part,
     s3::{actions, S3},
+    stream::part::Part,
 };
 use anyhow::Result;
 use bincode::{deserialize, serialize};

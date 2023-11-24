@@ -1,7 +1,7 @@
 use crate::cli::commands::validator_is_num;
 use clap::{Arg, Command};
 
-pub fn subcommand_share() -> Command {
+pub fn command() -> Command {
     Command::new("share")
         .about("Share object using a presigned URL")
         .arg(

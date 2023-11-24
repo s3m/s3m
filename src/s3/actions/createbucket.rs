@@ -32,7 +32,7 @@ impl<'a> CreateBucket<'a> {
 
         let (url, headers) = &self.sign(s3, tools::sha256_digest(&xml).as_ref(), None, None)?;
         let response =
-            request::upload(url.clone(), self.http_method(), headers, Bytes::from(xml)).await?;
+            request::upload(url.clone(), self.http_method()?, headers, Bytes::from(xml)).await?;
 
         if response.status().is_success() {
             let mut h: BTreeMap<&str, String> = BTreeMap::new();
@@ -48,8 +48,8 @@ impl<'a> CreateBucket<'a> {
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html>
 impl<'a> Action for CreateBucket<'a> {
-    fn http_method(&self) -> Method {
-        Method::from_bytes(b"PUT").unwrap()
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"PUT")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -76,6 +76,6 @@ mod tests {
     #[test]
     fn test_method() {
         let action = CreateBucket::new("private");
-        assert_eq!(Method::PUT, action.http_method());
+        assert_eq!(Method::PUT, action.http_method().unwrap());
     }
 }

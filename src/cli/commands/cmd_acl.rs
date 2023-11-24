@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 
-pub fn subcommand_acl() -> Command {
+pub fn command() -> Command {
     Command::new("acl")
         .about("PUT or GET object ACL")
         .arg(

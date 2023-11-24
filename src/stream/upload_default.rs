@@ -1,5 +1,8 @@
-use crate::cli::{progressbar::Bar, Db};
-use crate::s3::{actions, S3};
+use crate::{
+    cli::progressbar::Bar,
+    s3::{actions, S3},
+    stream::db::Db,
+};
 use anyhow::{anyhow, Result};
 use crossbeam::channel::unbounded;
 use std::{cmp::min, collections::BTreeMap, fmt::Write, path::Path};
@@ -18,10 +21,9 @@ pub async fn upload(
     let (sender, receiver) = unbounded::<usize>();
     let channel = if quiet { None } else { Some(sender) };
     let action = actions::PutObject::new(key, Path::new(file), acl, meta, channel);
-    // TODO
-    //    action.x_amz_acl = Some(String::from("public-read"));
 
     if !quiet {
+        // Spawn a thread to update the progress bar
         if let Some(pb) = Bar::new(file_size).progress {
             tokio::spawn(async move {
                 let mut uploaded = 0;
@@ -40,7 +42,7 @@ pub async fn upload(
     sdb.save_etag(etag)?;
 
     Ok(response.iter().fold(String::new(), |mut output, (k, v)| {
-        let _ = writeln!(output, "{}: {}", k, v);
+        let _ = writeln!(output, "{k}: {v}");
         output
     }))
 }

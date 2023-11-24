@@ -45,7 +45,7 @@ impl<'a> PutObject<'a> {
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
         let response = request::request(
             url.clone(),
-            self.http_method(),
+            self.http_method()?,
             headers,
             Some(Path::new(self.file)),
             self.sender,
@@ -78,8 +78,8 @@ impl<'a> PutObject<'a> {
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
 impl<'a> Action for PutObject<'a> {
-    fn http_method(&self) -> Method {
-        Method::from_bytes(b"PUT").unwrap()
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"PUT")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -121,6 +121,6 @@ mod tests {
     #[test]
     fn test_method() {
         let action = PutObject::new("key", Path::new("/"), None, None, None);
-        assert_eq!(Method::PUT, action.http_method());
+        assert_eq!(Method::PUT, action.http_method().unwrap());
     }
 }

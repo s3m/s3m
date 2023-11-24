@@ -6,19 +6,13 @@ use anyhow::{anyhow, Result};
 use reqwest::Method;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Default)]
-pub struct DeleteObject<'a> {
-    key: &'a str,
-    version_id: Option<String>,
-}
+#[derive(Debug)]
+pub struct DeleteBucket {}
 
-impl<'a> DeleteObject<'a> {
+impl DeleteBucket {
     #[must_use]
-    pub fn new(key: &'a str) -> Self {
-        Self {
-            key,
-            ..Self::default()
-        }
+    pub const fn new() -> Self {
+        Self {}
     }
 
     /// # Errors
@@ -37,8 +31,8 @@ impl<'a> DeleteObject<'a> {
     }
 }
 
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html
-impl<'a> Action for DeleteObject<'a> {
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html
+impl Action for DeleteBucket {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"DELETE")?)
     }
@@ -48,24 +42,11 @@ impl<'a> Action for DeleteObject<'a> {
     }
 
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
-        // URL query_pairs
-        let mut map: BTreeMap<&str, &str> = BTreeMap::new();
-
-        if let Some(vid) = &self.version_id {
-            map.insert("versionId", vid);
-        }
-
-        Some(map)
+        None
     }
 
     fn path(&self) -> Option<Vec<&str>> {
-        // remove leading / or //
-        let clean_path = self
-            .key
-            .split('/')
-            .filter(|p| !p.is_empty())
-            .collect::<Vec<&str>>();
-        Some(clean_path)
+        None
     }
 }
 
@@ -75,7 +56,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = DeleteObject::new("key");
+        let action = DeleteBucket::new();
         assert_eq!(Method::DELETE, action.http_method().unwrap());
     }
 }

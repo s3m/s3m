@@ -50,7 +50,7 @@ impl<'a> StreamPart<'a> {
             &self.sign(s3, self.digest.0, Some(self.digest.1), Some(self.length))?;
         let response = request::request(
             url.clone(),
-            self.http_method(),
+            self.http_method()?,
             headers,
             Some(self.path),
             self.sender,
@@ -69,8 +69,8 @@ impl<'a> StreamPart<'a> {
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
 impl<'a> Action for StreamPart<'a> {
-    fn http_method(&self) -> Method {
-        Method::from_bytes(b"PUT").unwrap()
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"PUT")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -103,6 +103,6 @@ mod tests {
     #[test]
     fn test_method() {
         let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);
-        assert_eq!(Method::PUT, action.http_method());
+        assert_eq!(Method::PUT, action.http_method().unwrap());
     }
 }

@@ -23,7 +23,7 @@ impl ListMultipartUploads {
     pub async fn request(&self, s3: &S3) -> Result<ListMultipartUploadsResult> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
         let response =
-            request::request(url.clone(), self.http_method(), headers, None, None).await?;
+            request::request(url.clone(), self.http_method()?, headers, None, None).await?;
         if response.status().is_success() {
             let uploads: ListMultipartUploadsResult = from_str(&response.text().await?)?;
             Ok(uploads)
@@ -35,8 +35,8 @@ impl ListMultipartUploads {
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListMultipartUploads.html
 impl Action for ListMultipartUploads {
-    fn http_method(&self) -> Method {
-        Method::from_bytes(b"GET").unwrap()
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"GET")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -66,6 +66,6 @@ mod tests {
     #[test]
     fn test_method() {
         let action = ListMultipartUploads::new();
-        assert_eq!(Method::GET, action.http_method());
+        assert_eq!(Method::GET, action.http_method().unwrap());
     }
 }

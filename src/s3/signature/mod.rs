@@ -10,7 +10,6 @@ use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::Method;
 use ring::hmac;
 use std::collections::BTreeMap;
-use std::str;
 use url::Url;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
@@ -302,7 +301,7 @@ pub fn string_to_sign(timestamp: &str, scope: &str, hashed_canonical_request: &[
 
 fn signed_headers(headers: &BTreeMap<String, String>) -> String {
     let mut signed = String::new();
-    for (key, _) in headers.iter() {
+    for key in headers.keys() {
         if !signed.is_empty() {
             signed.push(';');
         }

@@ -28,7 +28,7 @@ impl<'a> HeadObject<'a> {
     pub async fn request(&self, s3: &S3) -> Result<BTreeMap<String, String>> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
         let response =
-            request::request(url.clone(), self.http_method(), headers, None, None).await?;
+            request::request(url.clone(), self.http_method()?, headers, None, None).await?;
         if response.status().is_success() {
             let mut h: BTreeMap<String, String> = BTreeMap::new();
             for (key, value) in response.headers() {
@@ -45,8 +45,8 @@ impl<'a> HeadObject<'a> {
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
 impl<'a> Action for HeadObject<'a> {
-    fn http_method(&self) -> Method {
-        Method::from_bytes(b"HEAD").unwrap()
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"HEAD")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -87,6 +87,6 @@ mod tests {
     #[test]
     fn test_method() {
         let action = HeadObject::new("key");
-        assert_eq!(Method::HEAD, action.http_method());
+        assert_eq!(Method::HEAD, action.http_method().unwrap());
     }
 }

@@ -6,12 +6,11 @@ use ring::{
     digest::{Context, SHA256},
     hmac,
 };
-use std::fmt::Write;
-use std::io::prelude::*;
-use std::io::SeekFrom;
-use std::path::Path;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use std::{fmt::Write, io::prelude::*, io::SeekFrom, path::Path};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt},
+};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 /// # Errors
@@ -42,19 +41,24 @@ pub async fn sha256_md5_digest_multipart(
     chunk: u64,
 ) -> Result<(digest::Digest, md5::Digest, usize)> {
     let mut file = File::open(file_path).await?;
+
     file.seek(SeekFrom::Start(seek)).await?;
+
     let file = file.take(chunk);
     let mut stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 256);
     let mut context_sha = Context::new(&SHA256);
     let mut context_md5 = md5::Context::new();
     let mut length: usize = 0;
+
     while let Some(bytes) = stream.try_next().await? {
         context_sha.update(&bytes);
         context_md5.consume(&bytes);
         length += &bytes.len();
     }
+
     let digest_sha = context_sha.finish();
     let digest_md5 = context_md5.compute();
+
     Ok((digest_sha, digest_md5, length))
 }
 
@@ -90,11 +94,13 @@ pub fn blake3(file_path: &str) -> Result<String> {
     let mut file = std::fs::File::open(file_path)?;
     let mut hasher = blake3::Hasher::new();
     let mut buf = [0_u8; 65536];
+
     while let Ok(size) = file.read(&mut buf[..]) {
         if size == 0 {
             break;
         }
         hasher.update(&buf[0..size]);
     }
+
     Ok(hasher.finalize().to_hex().to_string())
 }
