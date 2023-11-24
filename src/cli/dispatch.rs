@@ -1,7 +1,7 @@
 use crate::cli::actions::Action;
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, path::PathBuf, string::String};
 
 // return Action based on the command or subcommand
 pub fn dispatch(
@@ -20,7 +20,7 @@ pub fn dispatch(
 
     // Closure to check if hpb is not empty and if not return the file key
     let hbp_empty = |hbp: Vec<&str>| -> Result<String> {
-        if hbp.is_empty() && matches.subcommand_matches("mb").is_none() {
+        if hbp.is_empty() && matches.subcommand_matches("cb").is_none() {
             return Err(anyhow!(
                 "file name missing, <s3 provider>/<bucket>/{}, For more information try {}",
                 "<file name>".red(),
@@ -47,7 +47,7 @@ pub fn dispatch(
             let args: Vec<&str> = sub_m
                 .get_many::<String>("arguments")
                 .unwrap_or_default()
-                .map(|s| s.as_str())
+                .map(String::as_str)
                 .collect();
 
             let dest = if args.len() == 2 {
@@ -79,10 +79,10 @@ pub fn dispatch(
             })
         }
 
-        // MakeBucket
-        Some("mb") => match bucket {
+        // CreateBucket
+        Some("cb") => match bucket {
             Some(_) => {
-                let sub_m = sub_m("mb")?;
+                let sub_m = sub_m("cb")?;
                 let acl = sub_m
                     .get_one("acl")
                     .map_or_else(|| String::from("private"), |s: &String| s.to_string());
@@ -116,7 +116,7 @@ pub fn dispatch(
             let args: Vec<&str> = matches
                 .get_many::<String>("arguments")
                 .unwrap_or_default()
-                .map(|s| s.as_str())
+                .map(String::as_str)
                 .collect();
             if args.len() == 2 {
                 src = Some(args[0].to_string());

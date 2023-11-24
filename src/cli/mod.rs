@@ -17,8 +17,8 @@ mod start;
 pub use self::start::start;
 
 pub mod actions;
+pub mod progressbar;
 
 mod commands;
 mod dispatch;
 mod matches;
-pub mod progressbar;

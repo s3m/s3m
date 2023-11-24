@@ -1,8 +1,8 @@
 use clap::{Arg, Command};
 
-pub fn subcommand_mb() -> Command {
-    Command::new("mb")
-        .about("Make a bucket")
+pub fn subcommand_cb() -> Command {
+    Command::new("cb")
+        .about("Create a bucket")
         .arg(
             Arg::new("arguments")
                 .help("<s3 provider>/<bucket name>")

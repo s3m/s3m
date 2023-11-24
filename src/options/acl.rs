@@ -10,7 +10,7 @@ pub async fn acl(s3: &S3, key: &str, acl: Option<String>) -> Result<()> {
         let res = action.request(s3).await?.text().await?;
         // TODO pretty print
         // let acl: AccessControlPolicy = from_str(&res)?;
-        println!("{}", res);
+        println!("{res}");
     }
     Ok(())
 }

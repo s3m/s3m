@@ -8,7 +8,7 @@ pub async fn get(s3: S3, key: String, dest: Option<String>, quiet: bool) -> Resu
     // create a new destination
     let file_name = Path::new(&key)
         .file_name()
-        .with_context(|| format!("Failed to get file name from: {}", key))?;
+        .with_context(|| format!("Failed to get file name from: {key}"))?;
 
     let path = dest.map_or_else(
         || Path::new(".").join(file_name),

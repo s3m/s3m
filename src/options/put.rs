@@ -75,7 +75,7 @@ pub async fn put_object(
         .context("could not query db, try option \"-r\", to clean it");
     if let Ok(etag) = etag {
         if !quiet {
-            println!("{}", etag);
+            println!("{etag}");
         }
         return Ok(());
     };
@@ -96,12 +96,12 @@ pub async fn put_object(
         .await
         .context("multipart upload failed")?;
         if !quiet {
-            println!("{}", rs);
+            println!("{rs}");
         }
     } else {
         let rs = upload(s3, key, file, file_size, &db, acl, meta, quiet).await?;
         if !quiet {
-            println!("{}", rs);
+            println!("{rs}");
         }
     }
 

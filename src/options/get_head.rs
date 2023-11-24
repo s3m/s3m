@@ -11,7 +11,7 @@ pub async fn get_head(s3: S3, key: String) -> Result<()> {
     }
     i += 1;
     for (k, v) in headers {
-        println!("{:<width$} {}", format!("{}:", k).green(), v, width = i);
+        println!("{:<width$} {}", format!("{k}:").green(), v, width = i);
     }
     Ok(())
 }

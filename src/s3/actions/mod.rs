@@ -137,7 +137,7 @@ pub async fn response_error(response: Response) -> Result<String> {
     }
 
     Ok(error.iter().fold(String::new(), |mut output, (k, v)| {
-        let _ = writeln!(output, "{}: {}", k, v);
+        let _ = writeln!(output, "{k}: {v}");
         output
     }))
 }

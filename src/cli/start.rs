@@ -1,7 +1,11 @@
-use crate::cli::{actions::Action, commands, dispatch, matches, Config};
+use crate::cli::{actions::Action, commands, dispatch, matches, Config, Host};
 use crate::s3::{Credentials, S3};
 use anyhow::{anyhow, Context, Result};
-use std::{fs, path::PathBuf, process::exit};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::exit,
+};
 
 fn me() -> Option<String> {
     std::env::current_exe()
@@ -12,33 +16,34 @@ fn me() -> Option<String> {
         .into()
 }
 
+pub fn get_config_path() -> Result<PathBuf> {
+    let home_dir = dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h);
+
+    let config_path = Path::new(&home_dir).join(".config").join("s3m");
+    fs::create_dir_all(&config_path)
+        .context(format!("unable to create: {}", &config_path.display()))?;
+
+    Ok(config_path)
+}
+
 pub fn start() -> Result<(S3, Action)> {
-    let cmd = commands::new();
+    let config_path = get_config_path()?;
 
-    let matches = cmd.get_matches();
-
-    // Config file is required
-    let config_file: PathBuf = matches
-        .get_one::<PathBuf>("config")
-        .map(|c| c.into())
-        .unwrap_or_else(|| {
-            eprintln!("no config file found");
-            exit(1);
-        });
-
-    let config_path = config_file.parent().unwrap_or_else(|| {
-        eprintln!("no config file found");
+    // check if config file exists
+    if let Err(e) = fs::File::open(config_path.join("config.yml")) {
+        eprintln!(
+            "Config file {}/config.yml is required, see --help for more info:\n{}",
+            config_path.display(),
+            e
+        );
         exit(1);
-    });
+    }
 
-    let file = fs::File::open(&config_file).context("unable to open file")?;
+    // start the command line interface
+    let cmd = commands::new(&config_path);
 
-    let config: Config = match serde_yaml::from_reader(file) {
-        Err(e) => {
-            return Err(anyhow!("could not parse the configuration file: {}", e));
-        }
-        Ok(yml) => yml,
-    };
+    // get the matches
+    let matches = cmd.get_matches();
 
     // handle option --clean
     // removes ~/.config/s3m/streams directory
@@ -57,25 +62,44 @@ pub fn start() -> Result<(S3, Action)> {
         buf_size = 10_485_760;
     }
 
+    // Config file is required
+    let config_file: PathBuf = matches
+        .get_one::<PathBuf>("config")
+        .map(std::convert::Into::into)
+        .unwrap_or_else(|| {
+            eprintln!("no config file found");
+            exit(1);
+        });
+
+    // load the config file
+    let config = Config::new(config_file)?;
+
     // returns [host,bucket,path]
     // changes depending on the subcommand so need to check for each of them and then again to
     // create the action
     let mut hbp = matches::host_bucket_path(&matches)?;
 
-    // HOST
-    let host = if config.hosts.contains_key(hbp[0]) {
-        let key = hbp.remove(0);
-        &config.hosts[key]
-    } else {
-        return Err(anyhow!("no \"host\" found, check ~/.s3m/config.yml"));
+    // HOST: get it from the config file
+    let host: &Host = match config.get_host(hbp[0]) {
+        Ok(h) => {
+            hbp.remove(0);
+            h
+        }
+        Err(e) => {
+            return Err(anyhow!(
+                "No \"host\" found, check config file {}/config.yml: {}",
+                config_path.display(),
+                e
+            ));
+        }
     };
 
     // REGION
-    let region = matches::get_region(host)?;
+    let region = host.get_region()?;
 
     // BUCKET
     let bucket = if !hbp.is_empty() {
-        if matches.subcommand_matches("mb").is_some() {
+        if matches.subcommand_matches("cb").is_some() {
             Some(hbp[0].to_string())
         } else {
             Some(hbp.remove(0).to_string())
@@ -83,13 +107,13 @@ pub fn start() -> Result<(S3, Action)> {
     } else if matches.subcommand_matches("ls").is_some() {
         None
     } else {
-        if matches.subcommand_matches("mb").is_some() {
+        if matches.subcommand_matches("cb").is_some() {
             return Err(anyhow!(
-                "no \"bucket\" found, try: <s3 provider>/<bucket name>",
+                "No \"bucket\" found, try: <s3 provider>/<bucket name>",
             ));
         }
         return Err(anyhow!(
-            "no \"bucket\" found, try: {} /path/to/file <s3 provider>/<bucket name>/file",
+            "No \"bucket\" found, try: {} /path/to/file <s3 provider>/<bucket name>/file",
             me().unwrap_or_else(|| "s3m".to_string()),
         ));
     };
@@ -101,7 +125,18 @@ pub fn start() -> Result<(S3, Action)> {
     let s3 = S3::new(&credentials, &region, bucket.clone());
 
     // create the action
-    let action = dispatch::dispatch(hbp, bucket, buf_size, config_path.join("streams"), &matches)?;
+    let action = dispatch::dispatch(hbp, bucket, buf_size, config_path, &matches)?;
 
     Ok((s3, action))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_config_path() {
+        let config_path = get_config_path();
+        assert!(config_path.is_ok());
+    }
 }

@@ -1,10 +1,10 @@
-use crate::cli::Part;
-use crate::s3::{actions, S3};
+use crate::{
+    cli::Part,
+    s3::{actions, S3},
+};
 use anyhow::Result;
-use serde_cbor::{de::from_reader, to_vec};
-use std::collections::BTreeMap;
-use std::convert::Into;
-use std::path::Path;
+use bincode::{deserialize, serialize};
+use std::{collections::BTreeMap, convert::Into, path::Path};
 
 pub const DB_PARTS: &str = "parts";
 pub const DB_UPLOADED: &str = "uploaded parts";
@@ -41,7 +41,7 @@ impl Db {
         let etag = &self
             .db
             .get(format!("etag {}", &self.key).as_bytes())?
-            .map(|s| String::from_utf8(s.to_vec()).map(|s| format!("ETag: {}", s)))
+            .map(|s| String::from_utf8(s.to_vec()).map(|s| format!("ETag: {s}")))
             .transpose()?;
         Ok(etag.clone())
     }
@@ -100,7 +100,7 @@ impl Db {
     /// Will return `Err` if can not insert a `Part`
     pub fn create_part(&self, number: u16, seek: u64, chunk: u64) -> Result<Option<sled::IVec>> {
         let part = Part::new(number, seek, chunk);
-        let cbor_part = to_vec(&part)?;
+        let cbor_part = serialize(&part)?;
         Ok(self.db_parts()?.insert(number.to_be_bytes(), cbor_part)?)
     }
 
@@ -111,7 +111,7 @@ impl Db {
         let part = &self
             .db_parts()?
             .get(number.to_be_bytes())?
-            .map(|part| from_reader(&part[..]))
+            .map(|part| deserialize(&part[..]))
             .transpose()?;
         Ok(part.clone())
     }
@@ -125,7 +125,7 @@ impl Db {
             .values()
             .flat_map(|part| {
                 part.map(|part| {
-                    from_reader(&part[..])
+                    deserialize(&part[..])
                         .map(|p: Part| {
                             (
                                 p.get_number(),

@@ -1,8 +1,10 @@
-use crate::cli::{progressbar::Bar, Db, Part};
-use crate::s3::{actions, S3};
+use crate::{
+    cli::{progressbar::Bar, Db, Part},
+    s3::{actions, S3},
+};
 use anyhow::{anyhow, Result};
+use bincode::{deserialize, serialize};
 use futures::stream::{FuturesUnordered, StreamExt};
-use serde_cbor::{de::from_reader, to_vec};
 use sled::transaction::{TransactionError, Transactional};
 use std::collections::BTreeMap;
 use tokio::time::{sleep, Duration};
@@ -77,7 +79,7 @@ pub async fn multipart_upload(
 
     for part in db_parts.iter().values() {
         if let Ok(p) = part {
-            let part: Part = from_reader(&p[..])?;
+            let part: Part = deserialize(&p[..])?;
             tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
         }
 
@@ -166,7 +168,7 @@ async fn upload_part(
     };
 
     let part = part.set_etag(etag);
-    let cbor_part = to_vec(&part)?;
+    let cbor_part = serialize(&part)?;
 
     // move part to uploaded
     (&unprocessed, &processed)
