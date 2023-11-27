@@ -96,10 +96,4 @@ jobs:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
   package:
-    name: Package
-    runs-on: ubuntu-latest
-    needs:
-      - build
-    steps:
-      - name: PackageCloud
-        uses: ./.github/workflows/packagecloud.yml
+    uses: ./.github/workflows/packagecloud.yml
