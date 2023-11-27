@@ -53,7 +53,7 @@ impl<'a> UploadPart<'a> {
         let (url, headers) = &self.sign(s3, sha256.as_ref(), Some(md5.as_ref()), Some(length))?;
         let response = request::multipart_upload(
             url.clone(),
-            self.http_method(),
+            self.http_method()?,
             headers,
             self.file.to_string(),
             self.seek,
@@ -73,8 +73,8 @@ impl<'a> UploadPart<'a> {
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
 impl<'a> Action for UploadPart<'a> {
-    fn http_method(&self) -> Method {
-        Method::from_bytes(b"PUT").unwrap()
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"PUT")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -107,6 +107,6 @@ mod tests {
     #[test]
     fn test_method() {
         let action = UploadPart::new("key", "file", 1, "uid", 1, 1);
-        assert_eq!(Method::PUT, action.http_method());
+        assert_eq!(Method::PUT, action.http_method().unwrap());
     }
 }

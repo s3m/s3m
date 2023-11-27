@@ -29,16 +29,6 @@ pub fn get_config_path() -> Result<PathBuf> {
 pub fn start() -> Result<(S3, Action)> {
     let config_path = get_config_path()?;
 
-    // check if config file exists
-    if let Err(e) = fs::File::open(config_path.join("config.yml")) {
-        eprintln!(
-            "Config file {}/config.yml is required, see --help for more info:\n{}",
-            config_path.display(),
-            e
-        );
-        exit(1);
-    }
-
     // start the command line interface
     let cmd = commands::new(&config_path);
 
@@ -54,25 +44,34 @@ pub fn start() -> Result<(S3, Action)> {
     }
 
     // define chunk size
-    let mut buf_size: usize = *matches
+    let mut buf_size: usize = matches
         .get_one::<usize>("buffer")
-        .expect("no buffer size found");
+        .map_or(10_485_760, |size| *size);
 
     if buf_size < 5_242_880 {
         buf_size = 10_485_760;
     }
 
     // Config file is required
-    let config_file: PathBuf = matches
-        .get_one::<PathBuf>("config")
-        .map(std::convert::Into::into)
-        .unwrap_or_else(|| {
+    let config_file: PathBuf = matches.get_one::<PathBuf>("config").map_or_else(
+        || {
             eprintln!("no config file found");
             exit(1);
-        });
+        },
+        Into::into,
+    );
 
     // load the config file
     let config = Config::new(config_file)?;
+
+    // show config
+    if matches.get_one::<bool>("show").copied().unwrap_or(false) {
+        println!("Hosts:");
+        for key in config.hosts.keys() {
+            println!("   - {key}");
+        }
+        exit(0);
+    }
 
     // returns [host,bucket,path]
     // changes depending on the subcommand so need to check for each of them and then again to
@@ -107,11 +106,16 @@ pub fn start() -> Result<(S3, Action)> {
     } else if matches.subcommand_matches("ls").is_some() {
         None
     } else {
-        if matches.subcommand_matches("cb").is_some() {
+        let delete_bucket = matches
+            .subcommand_matches("rm")
+            .is_some_and(|sub_m| sub_m.get_one("bucket").copied().unwrap_or(false));
+
+        if matches.subcommand_matches("cb").is_some() || delete_bucket {
             return Err(anyhow!(
                 "No \"bucket\" found, try: <s3 provider>/<bucket name>",
             ));
         }
+
         return Err(anyhow!(
             "No \"bucket\" found, try: {} /path/to/file <s3 provider>/<bucket name>/file",
             me().unwrap_or_else(|| "s3m".to_string()),

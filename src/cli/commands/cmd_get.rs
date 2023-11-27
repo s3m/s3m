@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 
-pub fn subcommand_get() -> Command {
+pub fn command() -> Command {
     Command::new("get")
         .about("Retrieves objects")
         .arg(
@@ -14,7 +14,8 @@ pub fn subcommand_get() -> Command {
             Arg::new("HeadObject")
                 .help("Retrieves metadata from an object without returning the object itself")
                 .long("head")
-                .short('H'),
+                .short('H')
+                .num_args(0),
         )
         .arg(
             Arg::new("quiet")

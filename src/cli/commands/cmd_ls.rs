@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 
-pub fn subcommand_ls() -> Command {
+pub fn command() -> Command {
     Command::new("ls")
         .about("List objects and in-progress multipart uploads")
         .arg(
@@ -13,7 +13,8 @@ pub fn subcommand_ls() -> Command {
             Arg::new("ListMultipartUploads")
                 .help("Lists in-progress multipart uploads")
                 .long("multipart")
-                .short('m'),
+                .short('m')
+                .num_args(0),
         )
         .arg(
             Arg::new("prefix")

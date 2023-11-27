@@ -16,14 +16,14 @@ use std::{
 };
 
 pub fn validator_key_value() -> ValueParser {
-    ValueParser::from(move |s: &str| -> std::result::Result<(), String> {
+    ValueParser::from(move |s: &str| -> std::result::Result<String, String> {
         for pair in s.split(';') {
             match pair.split_once('=') {
                 Some(_) => (),
                 None => return Err(String::from("metadata format is key1=value1;key2=value2")),
             }
         }
-        Ok(())
+        Ok(s.to_string())
     })
 }
 
@@ -36,11 +36,25 @@ pub fn validator_is_num() -> ValueParser {
 
 pub fn validator_is_file() -> ValueParser {
     ValueParser::from(move |s: &str| -> std::result::Result<PathBuf, String> {
-        if fs::metadata(s).map_err(|e| e.to_string())?.is_file() {
-            Ok(PathBuf::from(s))
-        } else {
-            Err(format!("Cannot read the file: {s}"))
+        if let Ok(metadata) = fs::metadata(s) {
+            if metadata.is_file() {
+                return Ok(PathBuf::from(s));
+            }
         }
+
+        Err(format!("Invalid file path or file does not exist: '{s}'"))
+    })
+}
+
+pub fn validator_is_dir() -> ValueParser {
+    ValueParser::from(move |s: &str| -> std::result::Result<PathBuf, String> {
+        if let Ok(metadata) = fs::metadata(s) {
+            if metadata.is_dir() {
+                return Ok(PathBuf::from(s));
+            }
+        }
+
+        Err(format!("Invalid path or directory does not exist: '{s}'"))
     })
 }
 
@@ -129,15 +143,31 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("arguments")
             .help("/path/to/file <s3 provider>/<bucket>/<file>")
-            .required_unless_present("clean")
+            .required_unless_present_any(["clean", "show"])
             .num_args(1..=2)
         )
-        .subcommand(cmd_acl::subcommand_acl())
-        .subcommand(cmd_get::subcommand_get())
-        .subcommand(cmd_ls::subcommand_ls())
-        .subcommand(cmd_cb::subcommand_cb())
-        .subcommand(cmd_rm::subcommand_rm())
-        .subcommand(cmd_share::subcommand_share())
+        .arg(
+            Arg::new("tmp-dir")
+            .help("Specify a directory for temporarily storing the STDIN buffer.")
+            .short('t')
+            .long("tmp-dir")
+            .default_value(std::env::temp_dir().into_os_string())
+            .value_parser(validator_is_dir())
+            .num_args(1)
+        )
+        .arg(
+            Arg::new("show")
+            .help("Show available hosts")
+            .short('s')
+            .long("show")
+            .num_args(0)
+        )
+        .subcommand(cmd_acl::command())
+        .subcommand(cmd_get::command())
+        .subcommand(cmd_ls::command())
+        .subcommand(cmd_cb::command())
+        .subcommand(cmd_rm::command())
+        .subcommand(cmd_share::command())
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ impl<'a> PutObjectAcl<'a> {
     pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
         let response =
-            request::request(url.clone(), self.http_method(), headers, None, None).await?;
+            request::request(url.clone(), self.http_method()?, headers, None, None).await?;
 
         if response.status().is_success() {
             let mut h: BTreeMap<&str, String> = BTreeMap::new();
@@ -52,8 +52,8 @@ impl<'a> PutObjectAcl<'a> {
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
 impl<'a> Action for PutObjectAcl<'a> {
-    fn http_method(&self) -> Method {
-        Method::from_bytes(b"PUT").unwrap()
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"PUT")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
@@ -91,6 +91,6 @@ mod tests {
     #[test]
     fn test_method() {
         let action = PutObjectAcl::new("key", "public-read");
-        assert_eq!(Method::PUT, action.http_method());
+        assert_eq!(Method::PUT, action.http_method().unwrap());
     }
 }

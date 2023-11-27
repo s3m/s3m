@@ -19,37 +19,66 @@ impl Bar {
     #[must_use]
     pub fn new(file_size: u64) -> Self {
         let pb = ProgressBar::new(file_size);
-        pb.set_style(
-        ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})").unwrap()
-            .progress_chars(PROGRES_CHARS),
-    );
+
+        let style_result = ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:50.green/blue} {bytes}/{total_bytes} ({bytes_per_sec} - {eta})");
+
+        let style = match style_result {
+            Ok(style) => style,
+            Err(err) => {
+                eprintln!("Error creating progress bar style: {err}");
+                return Self { progress: None };
+            }
+        };
+
+        pb.set_style(style.progress_chars(PROGRES_CHARS));
+
         Self { progress: Some(pb) }
     }
 
     #[must_use]
     pub fn new_spinner() -> Self {
         let pb = ProgressBar::new_spinner();
+
         pb.enable_steady_tick(Duration::from_millis(200));
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .tick_strings(PROGRES_CHARS_SPINNER)
-                .template("checksum: {spinner:.green}")
-                .unwrap(),
-        );
+
+        let style_result = ProgressStyle::default_spinner()
+            .tick_strings(PROGRES_CHARS_SPINNER)
+            .template("checksum: {spinner:.green}");
+
+        let style = match style_result {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("Error creating spinner style: {err}");
+                return Self { progress: None };
+            }
+        };
+
+        pb.set_style(style);
+
         Self { progress: Some(pb) }
     }
 
     #[must_use]
     pub fn new_spinner_stream() -> Self {
         let pb = ProgressBar::new_spinner();
+
         pb.enable_steady_tick(Duration::from_millis(200));
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .tick_strings(PROGRES_CHARS_SPINNER)
-                .template("[{elapsed_precise}] {msg} {spinner:.green}")
-                .unwrap(),
-        );
+
+        let style_result = ProgressStyle::default_spinner()
+            .tick_strings(PROGRES_CHARS_SPINNER)
+            .template("[{elapsed_precise}] {msg} {spinner:.green}");
+
+        let style = match style_result {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("Error creating spinner style: {err}");
+                return Self { progress: None };
+            }
+        };
+
+        pb.set_style(style);
+
         Self { progress: Some(pb) }
     }
 }

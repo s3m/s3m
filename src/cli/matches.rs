@@ -174,6 +174,10 @@ hosts:
                 hbp: vec!["host", "bucket", "file"],
             },
             Test {
+                args: vec!["s3m", "rm", "host/bucket"],
+                hbp: vec!["host", "bucket"],
+            },
+            Test {
                 args: vec!["s3m", "share", "host/bucket/file"],
                 hbp: vec!["host", "bucket", "file"],
             },

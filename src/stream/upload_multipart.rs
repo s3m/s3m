@@ -1,6 +1,7 @@
 use crate::{
-    cli::{progressbar::Bar, Db, Part},
+    cli::progressbar::Bar,
     s3::{actions, S3},
+    stream::{db::Db, part::Part},
 };
 use anyhow::{anyhow, Result};
 use bincode::{deserialize, serialize};
@@ -14,7 +15,7 @@ use tokio::time::{sleep, Duration};
 // * Upload Part
 // * Complete Multipart Upload
 #[allow(clippy::too_many_arguments)]
-pub async fn multipart_upload(
+pub async fn upload_multipart(
     s3: &S3,
     key: &str,
     file: &str,
