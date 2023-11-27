@@ -101,6 +101,7 @@ jobs:
 
   package:
     name: Package
+    runs-on: ubuntu-latest
     needs:
       - build
     steps:
