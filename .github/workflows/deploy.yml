@@ -43,6 +43,10 @@ jobs:
       - name: Get the release version from the tag
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
+      - name: Install OpenSSL development package
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
