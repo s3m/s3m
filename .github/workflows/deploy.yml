@@ -102,4 +102,4 @@ jobs:
       - build
     steps:
       - name: PackageCloud
-        uses: ./.github/workflows/templates/packagecloud.yml
+        uses: ./.github/workflows/packagecloud.yml
