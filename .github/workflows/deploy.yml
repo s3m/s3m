@@ -95,5 +95,11 @@ jobs:
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
-  packagecloud:
-    extends: ./.github/workflows/packagecloud.yml
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    steps:
+      - name: PackageCloud
+        uses: ./.github/workflows/templates/packagecloud.yml
