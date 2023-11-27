@@ -3,9 +3,6 @@ name: PackageCloud
 needs:
   - build
 
-extends:
-  job: build
-
 jobs:
   additional_steps:
     runs-on: ubuntu-latest
