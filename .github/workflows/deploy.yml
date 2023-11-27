@@ -101,9 +101,8 @@ jobs:
 
   package:
     name: Package
-    runs-on: ubuntu-latest
     needs:
       - build
     steps:
       - name: PackageCloud
-        uses: ./.github/workflows/templates/packagecloud.yml
+        uses: ./.github/workflows/packagecloud.yml

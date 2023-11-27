@@ -1,4 +1,9 @@
 ---
+name: PackageCloud
+
+on:
+  workflow_call:
+
 jobs:
   additional_steps:
     runs-on: ubuntu-latest
@@ -6,8 +11,14 @@ jobs:
       PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
 
     steps:
-      - name: ls
-        run: ls -al target/x86_64-unknown-linux-musl
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --locked
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
@@ -33,11 +44,11 @@ jobs:
 
       - name: create deb
         run: fpm -s dir -t deb -n s3m -v ${{ env.VERSION }} --description "${{ env.DESCRIPTION }}"  -a
-          amd64 -p dist -C target/x86_64-unknown-linux-musl/release/ ./s3m=/usr/local/bin/
+          amd64 -p dist -C target/release/ ./s3m=/usr/local/bin/
 
       - name: create rpm
         run: fpm -s dir -t rpm -n s3m -v ${{ env.VERSION }} --description "${{ env.DESCRIPTION }}"
-          -a x86_64 -p dist -C target/x86_64-unknown-linux-musl/release/ ./s3m=/usr/local/bin/
+          -a x86_64 -p dist -C target/release/ ./s3m=/usr/local/bin/
 
       - name: run ls
         run: ls -al dist
