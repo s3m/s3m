@@ -94,3 +94,6 @@ jobs:
       - run: cargo publish --token ${CRATES_TOKEN}
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
+
+  packagecloud:
+    extends: ./.github/workflows/packagecloud.yml
