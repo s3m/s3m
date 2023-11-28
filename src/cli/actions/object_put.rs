@@ -83,27 +83,21 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
             let file_clone = file.to_owned();
 
             // Use oneshot channel to send the result back from the async task
-            let (sender, mut receiver) = oneshot::channel();
+            let (sender, receiver) = oneshot::channel();
 
-            if let Some(checksum_algorithm) = checksum_algorithm {
-                let additional_checksum_task =
-                    additional_checksum_task(file_clone.clone(), checksum_algorithm.clone());
+            if let Some(algorithm) = checksum_algorithm {
+                let additional_checksum = additional_checksum(file_clone, algorithm);
 
                 // Spawn the task and send the result to the main thread
                 tokio::spawn(async move {
-                    let additional_checksum_result = additional_checksum_task.await;
+                    let additional_checksum_result = additional_checksum.await;
                     let _ = sender.send(additional_checksum_result);
                 });
             }
 
-            // Await the completion of the spawned task if it was spawned
-            task::block_in_place(|| {
-                let _ = tokio::runtime::Handle::current().block_on(&mut receiver);
-            });
-
             // Print the additional checksum if it was calculated
-            if let Some(additional_checksum) = receiver.try_recv().ok() {
-                println!("Additional Checksum: {}", additional_checksum?);
+            if let (Ok(additional_checksum),) = tokio::try_join!(receiver)? {
+                println!("Additional Checksum: {}", additional_checksum);
             }
 
             // keep track of the uploaded parts
@@ -172,15 +166,12 @@ pub fn checksum(file: &str, quiet: bool) -> Result<String> {
     Ok(checksum)
 }
 
-async fn additional_checksum_task(
-    file_clone: String,
-    checksum_algorithm: String,
-) -> Result<String> {
+async fn additional_checksum(file: String, algorithm: String) -> Result<String> {
     let algorithm =
-        ChecksumAlgorithm::from_str(&checksum_algorithm).context("invalid checksum algorithm")?;
+        ChecksumAlgorithm::from_str(&algorithm).context("invalid checksum algorithm")?;
 
     let checksum = Checksum::new(algorithm)
-        .calculate(&file_clone)
+        .calculate(&file)
         .context("could not calculate the checksum")?;
 
     Ok(checksum)
