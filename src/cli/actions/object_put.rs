@@ -1,6 +1,9 @@
 use crate::{
     cli::{actions::Action, progressbar::Bar},
-    s3::{tools, S3},
+    s3::{
+        checksum::{Checksum, ChecksumAlgorithm},
+        tools, S3,
+    },
     stream::{
         db::Db, upload_default::upload, upload_multipart::upload_multipart, upload_stdin::stream,
     },
@@ -10,6 +13,7 @@ use std::{
     fs::metadata,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::{sync::oneshot, task};
 
 const MAX_PART_SIZE: usize = 5_368_709_120;
 const MAX_FILE_SIZE: usize = 5_497_558_138_880;
@@ -74,10 +78,37 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
             }
 
             // get the checksum with progress bar
-            let checksum = checksum(file, quiet)?;
+            let blake3_checksum = task::block_in_place(|| checksum(file, quiet))?;
+
+            let file_clone = file.to_owned();
+
+            // Use oneshot channel to send the result back from the async task
+            let (sender, receiver) = oneshot::channel();
+
+            // spawn a thread for another checksum if needed
+            let additional_checksum_task = task::spawn(async move {
+                if let Some(checksum_algorithm) = checksum_algorithm {
+                    let checksum_algorithm = ChecksumAlgorithm::from_str(&checksum_algorithm)
+                        .context("invalid checksum algorithm")
+                        .unwrap();
+
+                    let checksum = Checksum::new(checksum_algorithm)
+                        .calculate(&file_clone)
+                        .unwrap();
+
+                    let _ = sender.send(checksum);
+                }
+            });
+
+            // Await the completion of the spawned task
+            task::block_in_place(|| {
+                let _ = tokio::runtime::Handle::current().block_on(additional_checksum_task);
+            });
+
+            println!("additional checksum: {}", receiver.await.unwrap());
 
             // keep track of the uploaded parts
-            let db = Db::new(s3, &key, &checksum, file_mtime, &s3m_dir)
+            let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
                 .context("could not create stream tree, try option \"--clean\"")?;
 
             // check if file has been uploaded already
