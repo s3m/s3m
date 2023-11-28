@@ -26,6 +26,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
         s3m_dir,
         quiet,
         tmp_dir,
+        checksum_algorithm,
     } = action
     {
         if pipe {

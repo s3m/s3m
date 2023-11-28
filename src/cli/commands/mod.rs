@@ -87,6 +87,19 @@ pub fn new(config_path: &Path) -> Command {
             .num_args(0)
         )
         .arg(
+            Arg::new("checksum")
+            .help("Additional checksums algorithms")
+            .long("checksum")
+            .value_parser([
+                "crc32",
+                "crc32c",
+                "sha1",
+                "sha256",
+            ])
+            .value_name("algorithm")
+            .num_args(1)
+        )
+        .arg(
             Arg::new("quiet")
             .long("quiet")
             .short('q')
