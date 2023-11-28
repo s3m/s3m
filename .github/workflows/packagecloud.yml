@@ -3,6 +3,9 @@ name: PackageCloud
 
 on:
   workflow_call:
+    secrets:
+      PACKAGECLOUD_TOKEN:
+        required: true
 
 jobs:
   additional_steps:
