@@ -4,6 +4,7 @@ pub mod cmd_get;
 pub mod cmd_ls;
 pub mod cmd_rm;
 pub mod cmd_share;
+pub mod cmd_show;
 
 use clap::{
     builder::styling::{AnsiColor, Effects, Styles},
@@ -143,7 +144,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("arguments")
             .help("/path/to/file <s3 provider>/<bucket>/<file>")
-            .required_unless_present_any(["clean", "show"])
+            .required_unless_present("clean")
             .num_args(1..=2)
         )
         .arg(
@@ -155,19 +156,13 @@ pub fn new(config_path: &Path) -> Command {
             .value_parser(validator_is_dir())
             .num_args(1)
         )
-        .arg(
-            Arg::new("show")
-            .help("Show available hosts")
-            .short('s')
-            .long("show")
-            .num_args(0)
-        )
         .subcommand(cmd_acl::command())
         .subcommand(cmd_get::command())
         .subcommand(cmd_ls::command())
         .subcommand(cmd_cb::command())
         .subcommand(cmd_rm::command())
         .subcommand(cmd_share::command())
+        .subcommand(cmd_show::command())
 }
 
 #[cfg(test)]

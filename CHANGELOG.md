@@ -1,3 +1,6 @@
+## 0.6.1
+* Added subcommand `show` instead of option `-s/--show` to list current available hosts
+
 ## 0.6.0 🛺
 * Added sub-comand `cb` (Create bucket)
 * Added option `-b/--bucket` to remove bucket when using `rm`

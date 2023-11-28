@@ -65,7 +65,7 @@ pub fn start() -> Result<(S3, Action)> {
     let config = Config::new(config_file)?;
 
     // show config
-    if matches.get_one::<bool>("show").copied().unwrap_or(false) {
+    if matches.subcommand_matches("show").is_some() {
         println!("Hosts:");
         for key in config.hosts.keys() {
             println!("   - {key}");

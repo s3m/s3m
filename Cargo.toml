@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "command line tool for storing streams of data in s3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"

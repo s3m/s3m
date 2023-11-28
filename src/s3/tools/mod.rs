@@ -104,3 +104,88 @@ pub fn blake3(file_path: &str) -> Result<String> {
 
     Ok(hasher.finalize().to_hex().to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_sha256_md5_digest() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"hello world").unwrap();
+        let (digest_sha, digest_md5, length) = sha256_md5_digest(&file.path()).await.unwrap();
+        assert_eq!(
+            write_hex_bytes(digest_sha.as_ref()),
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+        assert_eq!(
+            write_hex_bytes(digest_md5.as_ref()),
+            "5eb63bbbe01eeed093cb22bb8f5acdc3"
+        );
+        assert_eq!(length, 11);
+    }
+
+    #[tokio::test]
+    async fn test_sha256_md5_digest_multipart() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"hello world").unwrap();
+        let (digest_sha, digest_md5, length) =
+            sha256_md5_digest_multipart(&file.path().to_str().unwrap(), 0, 5)
+                .await
+                .unwrap();
+        assert_eq!(
+            write_hex_bytes(digest_sha.as_ref()),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+        assert_eq!(
+            write_hex_bytes(digest_md5.as_ref()),
+            "5d41402abc4b2a76b9719d911017c592"
+        );
+        assert_eq!(length, 5);
+    }
+
+    #[test]
+    fn test_sha256_digest() {
+        let digest = sha256_digest(b"hello world");
+        assert_eq!(
+            write_hex_bytes(digest.as_ref()),
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
+
+    #[test]
+    fn test_base64_md5() {
+        let md5 = base64_md5(b"hello world");
+        assert_eq!(md5, "XrY7u+Ae7tCTyyK7j1rNww==");
+    }
+
+    #[test]
+    fn test_sha256_hmac() {
+        let key = b"key";
+        let msg = b"The quick brown fox jumps over the lazy dog";
+        let tag = sha256_hmac(key, msg);
+        assert_eq!(
+            write_hex_bytes(tag.as_ref()),
+            "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+        );
+    }
+
+    #[test]
+    fn test_write_hex_bytes() {
+        let bytes = b"hello world";
+        assert_eq!(write_hex_bytes(bytes), "68656c6c6f20776f726c64");
+    }
+
+    #[test]
+    fn test_blake3() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"hello world").unwrap();
+        let hash = blake3(&file.path().to_str().unwrap()).unwrap();
+        assert_eq!(
+            hash,
+            "d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24"
+        );
+    }
+}

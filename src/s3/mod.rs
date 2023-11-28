@@ -60,3 +60,42 @@ impl S3 {
         Ok(url)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_s3() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+
+        assert_eq!(
+            s3.hash(),
+            "bc8cea3065fd34a0b9cda467e3ace6bae7737d046e0dd3d449381a33508c24ae"
+        );
+    }
+
+    #[test]
+    fn test_s3_endpoint() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+
+        assert_eq!(
+            s3.endpoint().unwrap().as_str(),
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1"
+        );
+    }
+}
