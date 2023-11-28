@@ -11,16 +11,16 @@ use std::{collections::BTreeMap, path::PathBuf};
 #[derive(Debug)]
 pub enum Action {
     ACL {
-        key: String,
         acl: Option<String>,
+        key: String,
     },
     CreateBucket {
         acl: String,
     },
     DeleteObject {
+        bucket: bool,
         key: String,
         upload_id: String,
-        bucket: bool,
     },
     ListObjects {
         bucket: Option<String>,
@@ -29,24 +29,25 @@ pub enum Action {
         start_after: Option<String>,
     },
     GetObject {
-        key: String,
-        get_head: bool,
         dest: Option<String>,
+        get_head: bool,
+        key: String,
         quiet: bool,
     },
     PutObject {
         acl: Option<String>,
-        meta: Option<BTreeMap<String, String>>,
         buf_size: usize,
+        checksum_algorithm: Option<String>,
         file: Option<String>,
         key: String,
+        meta: Option<BTreeMap<String, String>>,
         pipe: bool,
-        s3m_dir: PathBuf,
         quiet: bool,
+        s3m_dir: PathBuf,
         tmp_dir: PathBuf,
     },
     ShareObject {
-        key: String,
         expire: usize,
+        key: String,
     },
 }

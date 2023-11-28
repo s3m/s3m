@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod checksum;
 pub mod credentials;
 pub mod region;
 pub mod request;

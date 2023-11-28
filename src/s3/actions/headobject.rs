@@ -50,7 +50,11 @@ impl<'a> Action for HeadObject<'a> {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        None
+        let mut map: BTreeMap<&str, &str> = BTreeMap::new();
+
+        map.insert("x-amz-checksum-mode", "ENABLED");
+
+        Some(map)
     }
 
     fn path(&self) -> Option<Vec<&str>> {

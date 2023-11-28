@@ -168,6 +168,7 @@ pub fn dispatch(
                     || std::env::temp_dir().join(format!("s3m-{}", std::process::id())),
                     ToOwned::to_owned,
                 ),
+                checksum_algorithm: matches.get_one("checksum").map(|s: &String| s.to_string()),
             })
         }
     }
@@ -363,6 +364,7 @@ hosts:
                 pipe,
                 quiet,
                 tmp_dir,
+                checksum_algorithm,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
@@ -373,6 +375,7 @@ hosts:
                 assert_eq!(pipe, false);
                 assert_eq!(quiet, false);
                 assert_eq!(tmp_dir, std::env::temp_dir());
+                assert_eq!(checksum_algorithm, None);
             }
             _ => panic!("wrong action"),
         }
@@ -408,6 +411,7 @@ hosts:
                 pipe,
                 quiet,
                 tmp_dir,
+                checksum_algorithm,
             } => {
                 assert_eq!(acl, Some("public-read".to_string()));
                 assert_eq!(meta, None);
@@ -418,6 +422,7 @@ hosts:
                 assert_eq!(pipe, false);
                 assert_eq!(quiet, false);
                 assert_eq!(tmp_dir, std::env::temp_dir());
+                assert_eq!(checksum_algorithm, None);
             }
             _ => panic!("wrong action"),
         }
@@ -438,6 +443,8 @@ hosts:
             "h/b/f",
             "--meta",
             "key1=val1;key2=val2",
+            "--checksum",
+            "sha256",
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
@@ -453,6 +460,7 @@ hosts:
                 pipe,
                 quiet,
                 tmp_dir,
+                checksum_algorithm,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(
@@ -474,6 +482,7 @@ hosts:
                 assert_eq!(pipe, false);
                 assert_eq!(quiet, false);
                 assert_eq!(tmp_dir, std::env::temp_dir());
+                assert_eq!(checksum_algorithm, Some("sha256".to_string()));
             }
             _ => panic!("wrong action"),
         }
