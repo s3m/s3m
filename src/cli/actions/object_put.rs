@@ -83,29 +83,28 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
             let file_clone = file.to_owned();
 
             // Use oneshot channel to send the result back from the async task
-            let (sender, receiver) = oneshot::channel();
+            let (sender, mut receiver) = oneshot::channel();
 
-            // spawn a thread for another checksum if needed
-            let additional_checksum_task = task::spawn(async move {
-                if let Some(checksum_algorithm) = checksum_algorithm {
-                    let checksum_algorithm = ChecksumAlgorithm::from_str(&checksum_algorithm)
-                        .context("invalid checksum algorithm")
-                        .unwrap();
+            if let Some(checksum_algorithm) = checksum_algorithm {
+                let additional_checksum_task =
+                    additional_checksum_task(file_clone.clone(), checksum_algorithm.clone());
 
-                    let checksum = Checksum::new(checksum_algorithm)
-                        .calculate(&file_clone)
-                        .unwrap();
+                // Spawn the task and send the result to the main thread
+                tokio::spawn(async move {
+                    let additional_checksum_result = additional_checksum_task.await;
+                    let _ = sender.send(additional_checksum_result);
+                });
+            }
 
-                    let _ = sender.send(checksum);
-                }
-            });
-
-            // Await the completion of the spawned task
+            // Await the completion of the spawned task if it was spawned
             task::block_in_place(|| {
-                let _ = tokio::runtime::Handle::current().block_on(additional_checksum_task);
+                let _ = tokio::runtime::Handle::current().block_on(&mut receiver);
             });
 
-            println!("additional checksum: {}", receiver.await.unwrap());
+            // Print the additional checksum if it was calculated
+            if let Some(additional_checksum) = receiver.try_recv().ok() {
+                println!("Additional Checksum: {}", additional_checksum?);
+            }
 
             // keep track of the uploaded parts
             let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
@@ -169,6 +168,20 @@ pub fn checksum(file: &str, quiet: bool) -> Result<String> {
         pb.finish_and_clear();
         println!("checksum: {}", &checksum);
     }
+
+    Ok(checksum)
+}
+
+async fn additional_checksum_task(
+    file_clone: String,
+    checksum_algorithm: String,
+) -> Result<String> {
+    let algorithm =
+        ChecksumAlgorithm::from_str(&checksum_algorithm).context("invalid checksum algorithm")?;
+
+    let checksum = Checksum::new(algorithm)
+        .calculate(&file_clone)
+        .context("could not calculate the checksum")?;
 
     Ok(checksum)
 }
