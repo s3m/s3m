@@ -1,6 +1,6 @@
 use crate::{
     cli::progressbar::Bar,
-    s3::{actions, S3},
+    s3::{actions, checksum::Checksum, S3},
     stream::db::Db,
 };
 use anyhow::{anyhow, Result};
@@ -17,10 +17,18 @@ pub async fn upload(
     acl: Option<String>,
     meta: Option<BTreeMap<String, String>>,
     quiet: bool,
+    additional_checksum: Option<Checksum>,
 ) -> Result<String> {
     let (sender, receiver) = unbounded::<usize>();
     let channel = if quiet { None } else { Some(sender) };
-    let action = actions::PutObject::new(key, Path::new(file), acl, meta, channel);
+    let action = actions::PutObject::new(
+        key,
+        Path::new(file),
+        acl,
+        meta,
+        channel,
+        additional_checksum,
+    );
 
     if !quiet {
         // Spawn a thread to update the progress bar

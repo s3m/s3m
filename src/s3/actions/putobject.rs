@@ -1,6 +1,6 @@
 use crate::{
     s3::actions::{response_error, Action},
-    s3::{request, tools, S3},
+    s3::{checksum::Checksum, request, tools, S3},
 };
 use anyhow::{anyhow, Result};
 use crossbeam::channel::Sender;
@@ -15,6 +15,7 @@ pub struct PutObject<'a> {
     acl: Option<String>,
     meta: Option<BTreeMap<String, String>>,
     sender: Option<Sender<usize>>,
+    additional_checksum: Option<Checksum>,
 }
 
 impl<'a> PutObject<'a> {
@@ -25,6 +26,7 @@ impl<'a> PutObject<'a> {
         acl: Option<String>,
         meta: Option<BTreeMap<String, String>>,
         sender: Option<Sender<usize>>,
+        additional_checksum: Option<Checksum>,
     ) -> Self {
         Self {
             key,
@@ -32,6 +34,7 @@ impl<'a> PutObject<'a> {
             acl,
             meta,
             sender,
+            additional_checksum,
         }
     }
 
@@ -43,6 +46,7 @@ impl<'a> PutObject<'a> {
         // TODO
         // pass headers
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
+
         let response = request::request(
             url.clone(),
             self.http_method()?,
@@ -96,6 +100,14 @@ impl<'a> Action for PutObject<'a> {
             }
         }
 
+        // <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html>
+        if let Some(additional_checksum) = &self.additional_checksum {
+            map.insert(
+                additional_checksum.algorithm.as_amz(),
+                &additional_checksum.checksum,
+            );
+        }
+
         Some(map)
     }
 
@@ -120,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = PutObject::new("key", Path::new("/"), None, None, None);
+        let action = PutObject::new("key", Path::new("/"), None, None, None, None);
         assert_eq!(Method::PUT, action.http_method().unwrap());
     }
 }

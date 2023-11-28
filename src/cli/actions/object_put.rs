@@ -11,9 +11,10 @@ use crate::{
 use anyhow::{anyhow, Context, Result};
 use std::{
     fs::metadata,
+    str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::{sync::oneshot, task};
+use tokio::sync::oneshot;
 
 const MAX_PART_SIZE: usize = 5_368_709_120;
 const MAX_FILE_SIZE: usize = 5_497_558_138_880;
@@ -78,27 +79,10 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
             }
 
             // get the checksum with progress bar
-            let blake3_checksum = task::block_in_place(|| checksum(file, quiet))?;
+            let blake3_checksum = checksum(file, quiet)?;
 
-            let file_clone = file.to_owned();
-
-            // Use oneshot channel to send the result back from the async task
-            let (sender, receiver) = oneshot::channel();
-
-            if let Some(algorithm) = checksum_algorithm {
-                let additional_checksum = additional_checksum(file_clone, algorithm);
-
-                // Spawn the task and send the result to the main thread
-                tokio::spawn(async move {
-                    let additional_checksum_result = additional_checksum.await;
-                    let _ = sender.send(additional_checksum_result);
-                });
-            }
-
-            // Print the additional checksum if it was calculated
-            if let (Ok(additional_checksum),) = tokio::try_join!(receiver)? {
-                println!("Additional Checksum: {}", additional_checksum);
-            }
+            let additional_checksum =
+                calculate_additional_checksum(file.to_owned(), checksum_algorithm).await;
 
             // keep track of the uploaded parts
             let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
@@ -137,7 +121,18 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                 }
             } else {
                 // upload the file as a whole if it is smaller than the chunk size (buf_size)
-                let rs = upload(s3, &key, file, file_size, &db, acl, meta, quiet).await?;
+                let rs = upload(
+                    s3,
+                    &key,
+                    file,
+                    file_size,
+                    &db,
+                    acl,
+                    meta,
+                    quiet,
+                    additional_checksum,
+                )
+                .await?;
                 if !quiet {
                     println!("{rs}");
                 }
@@ -166,13 +161,45 @@ pub fn checksum(file: &str, quiet: bool) -> Result<String> {
     Ok(checksum)
 }
 
-async fn additional_checksum(file: String, algorithm: String) -> Result<String> {
-    let algorithm =
-        ChecksumAlgorithm::from_str(&algorithm).context("invalid checksum algorithm")?;
+async fn additional_checksum(file: String, algorithm: String) -> Result<Checksum> {
+    let algorithm = ChecksumAlgorithm::from_str(&algorithm.to_lowercase())
+        .map_err(|()| anyhow!("invalid checksum algorithm: {}", algorithm))?;
 
-    let checksum = Checksum::new(algorithm)
+    let mut checksum = Checksum::new(algorithm);
+    checksum
         .calculate(&file)
         .context("could not calculate the checksum")?;
 
     Ok(checksum)
+}
+
+// New function encapsulating the logic
+async fn calculate_additional_checksum(
+    file: String,
+    checksum_algorithm: Option<String>,
+) -> Option<Checksum> {
+    if let Some(algorithm) = checksum_algorithm {
+        let file_clone = file.clone();
+
+        // Use oneshot channel to send the result back from the async task
+        let (sender, receiver) = oneshot::channel();
+        let additional_checksum_task = additional_checksum(file_clone, algorithm);
+
+        // Spawn the task and send the result to the main thread
+        tokio::spawn(async move {
+            let additional_checksum_result = additional_checksum_task.await;
+            let _ = sender.send(additional_checksum_result);
+        });
+
+        // Wait for the result from the async task
+        (receiver.await).map_or(None, |additional_checksum| {
+            Some(
+                additional_checksum
+                    .context("could not calculate the additional checksum")
+                    .unwrap_or_else(|_| Checksum::new(ChecksumAlgorithm::None)),
+            )
+        })
+    } else {
+        None
+    }
 }

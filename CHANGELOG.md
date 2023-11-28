@@ -1,3 +1,6 @@
+## 0.7.0 🚜
+* Added support for Additional Checksum Algorithms `x-amz-checksum-mode` option `--checksum`
+
 ## 0.6.1
 * Added subcommand `show` instead of option `-s/--show` to list current available hosts
 
