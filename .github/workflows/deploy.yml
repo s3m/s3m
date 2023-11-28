@@ -110,9 +110,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: ls
-        run: ls -al target/
-
       - name: Build
         run: cargo build --release --locked
 
