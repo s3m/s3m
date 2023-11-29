@@ -28,6 +28,10 @@ pub use self::getobject::GetObject;
 mod getobjectacl;
 pub use self::getobjectacl::GetObjectAcl;
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectAttributes.html>
+mod getobjectattributes;
+pub use self::getobjectattributes::GetObjectAttributes;
+
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
 mod putobject;
 pub use self::putobject::PutObject;

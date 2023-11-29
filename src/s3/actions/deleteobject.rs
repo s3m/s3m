@@ -72,10 +72,53 @@ impl<'a> Action for DeleteObject<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{Credentials, Region, S3};
 
     #[test]
     fn test_method() {
         let action = DeleteObject::new("key");
         assert_eq!(Method::DELETE, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_headers() {
+        let action = DeleteObject::new("key");
+        assert_eq!(None, action.headers());
+    }
+
+    #[test]
+    fn test_query_pairs() {
+        let action = DeleteObject::new("key");
+        assert!(action.query_pairs().is_some());
+    }
+
+    #[test]
+    fn test_path() {
+        let action = DeleteObject::new("key");
+        assert_eq!(Some(vec!["key"]), action.path());
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+        let action = DeleteObject::new("key");
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
     }
 }

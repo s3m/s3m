@@ -7,52 +7,44 @@ use reqwest::Method;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
-pub struct HeadObject<'a> {
+pub struct GetObjectAttributes<'a> {
     key: &'a str,
-    pub part_number: Option<String>,
-    pub version_id: Option<String>,
 }
 
-impl<'a> HeadObject<'a> {
+impl<'a> GetObjectAttributes<'a> {
     #[must_use]
-    pub fn new(key: &'a str) -> Self {
-        Self {
-            key,
-            ..Self::default()
-        }
+    pub const fn new(key: &'a str) -> Self {
+        Self { key }
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(&self, s3: &S3) -> Result<BTreeMap<String, String>> {
+    pub async fn request(&self, s3: &S3) -> Result<reqwest::Response> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
         let response =
             request::request(url.clone(), self.http_method()?, headers, None, None).await?;
         if response.status().is_success() {
-            let mut h: BTreeMap<String, String> = BTreeMap::new();
-            for (key, value) in response.headers() {
-                if !value.is_empty() {
-                    h.insert(key.as_str().to_string(), value.to_str()?.to_string());
-                }
-            }
-            Ok(h)
+            Ok(response)
         } else {
             Err(anyhow!(response_error(response).await?))
         }
     }
 }
 
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
-impl<'a> Action for HeadObject<'a> {
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectAttributes.html>
+impl<'a> Action for GetObjectAttributes<'a> {
     fn http_method(&self) -> Result<Method> {
-        Ok(Method::from_bytes(b"HEAD")?)
+        Ok(Method::from_bytes(b"GET")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
         let mut map: BTreeMap<&str, &str> = BTreeMap::new();
 
-        map.insert("x-amz-checksum-mode", "ENABLED");
+        map.insert(
+            "x-amz-object-attributes",
+            "ETag,Checksum,ObjectParts,StorageClass,ObjectSize",
+        );
 
         Some(map)
     }
@@ -72,13 +64,7 @@ impl<'a> Action for HeadObject<'a> {
         // URL query_pairs
         let mut map: BTreeMap<&str, &str> = BTreeMap::new();
 
-        if let Some(pn) = &self.part_number {
-            map.insert("partNumber", pn);
-        }
-
-        if let Some(vid) = &self.version_id {
-            map.insert("versionId", vid);
-        }
+        map.insert("attributes", "");
 
         Some(map)
     }
@@ -93,16 +79,8 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = HeadObject::new("key");
-        assert_eq!(Method::HEAD, action.http_method().unwrap());
-    }
-
-    #[test]
-    fn test_headers() {
-        let action = HeadObject::new("key");
-        let mut headers = BTreeMap::new();
-        headers.insert("x-amz-checksum-mode", "ENABLED");
-        assert_eq!(headers, action.headers().unwrap());
+        let action = GetObjectAttributes::new("key");
+        assert_eq!(Method::GET, action.http_method().unwrap());
     }
 
     #[test]
@@ -116,17 +94,21 @@ mod tests {
             Some("awsexamplebucket1".to_string()),
         );
 
-        let action = HeadObject::new("key");
+        let action = GetObjectAttributes::new("key");
         let (url, headers) = action
             .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
             .unwrap();
         assert_eq!(
-            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key",
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?attributes=",
             url.as_str()
         );
         assert!(headers
             .get("authorization")
             .unwrap()
             .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
+        assert_eq!(
+            headers.get("x-amz-object-attributes").unwrap(),
+            "ETag,Checksum,ObjectParts,StorageClass,ObjectSize"
+        );
     }
 }

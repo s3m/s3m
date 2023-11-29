@@ -78,4 +78,24 @@ mod tests {
         let action = CreateBucket::new("private");
         assert_eq!(Method::PUT, action.http_method().unwrap());
     }
+
+    #[test]
+    fn test_headers() {
+        let action = CreateBucket::new("private");
+        let mut map = BTreeMap::new();
+        map.insert("x-amz-acl", "private");
+        assert_eq!(Some(map), action.headers());
+    }
+
+    #[test]
+    fn test_query_pairs() {
+        let action = CreateBucket::new("private");
+        assert_eq!(None, action.query_pairs());
+    }
+
+    #[test]
+    fn test_path() {
+        let action = CreateBucket::new("private");
+        assert_eq!(None, action.path());
+    }
 }

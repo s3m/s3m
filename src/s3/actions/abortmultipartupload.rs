@@ -3,8 +3,10 @@
 //! Maximum number of parts per upload  10,000
 //! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>
 
-use crate::s3::actions::{response_error, Action};
-use crate::s3::{request, tools, S3};
+use crate::{
+    s3::actions::{response_error, Action},
+    s3::{request, tools, S3},
+};
 use anyhow::{anyhow, Result};
 use reqwest::Method;
 use std::collections::BTreeMap;
@@ -71,10 +73,49 @@ impl<'a> Action for AbortMultipartUpload<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{Credentials, Region, S3};
 
     #[test]
     fn test_method() {
         let action = AbortMultipartUpload::new("key", "uid");
         assert_eq!(Method::DELETE, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_query_pairs() {
+        let action = AbortMultipartUpload::new("key", "uid");
+        let mut map = BTreeMap::new();
+        map.insert("uploadId", "uid");
+        assert_eq!(Some(map), action.query_pairs());
+    }
+
+    #[test]
+    fn test_path() {
+        let action = AbortMultipartUpload::new("key", "uid");
+        assert_eq!(Some(vec!["key"]), action.path());
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+        let action = AbortMultipartUpload::new("key", "uid");
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?uploadId=uid",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
     }
 }

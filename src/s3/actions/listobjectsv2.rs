@@ -93,6 +93,9 @@ impl Action for ListObjectsV2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{
+        tools, {Credentials, Region, S3},
+    };
 
     #[test]
     fn test_method() {
@@ -101,5 +104,30 @@ mod tests {
             Some(String::from("start-after")),
         );
         assert_eq!(Method::GET, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+
+        let action = ListObjectsV2::new(None, None);
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1?list-type=2",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
     }
 }

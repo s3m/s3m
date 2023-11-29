@@ -18,10 +18,13 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
         if get_head {
             let action = actions::HeadObject::new(&key);
             let headers = action.request(s3).await?;
+
             let mut i = 0;
+
             for k in headers.keys() {
                 i = k.len();
             }
+
             i += 1;
             for (k, v) in headers {
                 println!("{:<width$} {}", format!("{k}:").green(), v, width = i);

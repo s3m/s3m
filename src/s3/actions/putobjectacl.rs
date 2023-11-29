@@ -50,7 +50,7 @@ impl<'a> PutObjectAcl<'a> {
     }
 }
 
-// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectAcl.html>
 impl<'a> Action for PutObjectAcl<'a> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"PUT")?)
@@ -87,10 +87,74 @@ impl<'a> Action for PutObjectAcl<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{Credentials, Region, S3};
 
     #[test]
     fn test_method() {
         let action = PutObjectAcl::new("key", "public-read");
         assert_eq!(Method::PUT, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_headers() {
+        let action = PutObjectAcl::new("key", "public-read");
+        let mut map = BTreeMap::new();
+        map.insert("x-amz-acl", "public-read");
+        assert_eq!(Some(map), action.headers());
+    }
+
+    #[test]
+    fn test_headers_acl() {
+        let test = vec![
+            ("private", "private"),
+            ("public-read", "public-read"),
+            ("public-read-write", "public-read-write"),
+            ("authenticated-read", "authenticated-read"),
+            ("aws-exec-read", "aws-exec-read"),
+            ("bucket-owner-read", "bucket-owner-read"),
+            ("bucket-owner-full-control", "bucket-owner-full-control"),
+        ];
+
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+
+        for (acl, expected) in test {
+            let action = PutObjectAcl::new("key", acl);
+            let (_, headers) = action
+                .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+                .unwrap();
+            assert_eq!(expected, headers.get("x-amz-acl").unwrap());
+        }
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+
+        let action = PutObjectAcl::new("key", "public-read");
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?acl=",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
     }
 }

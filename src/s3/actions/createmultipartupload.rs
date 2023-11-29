@@ -6,7 +6,7 @@
 use crate::{
     s3::actions::{response_error, Action},
     s3::responses::InitiateMultipartUploadResult,
-    s3::{request, tools, S3},
+    s3::{checksum::Checksum, request, tools, S3},
 };
 use anyhow::{anyhow, Result};
 use reqwest::Method;
@@ -18,41 +18,22 @@ pub struct CreateMultipartUpload<'a> {
     key: &'a str,
     acl: Option<String>,
     meta: Option<BTreeMap<String, String>>,
-    pub x_amz_acl: Option<String>,
-    pub cache_control: Option<String>,
-    pub content_disposition: Option<String>,
-    pub content_encoding: Option<String>,
-    pub content_language: Option<String>,
-    pub content_length: Option<String>,
-    pub content_type: Option<String>,
-    pub expires: Option<String>,
-    pub x_amz_grant_full_control: Option<String>,
-    pub x_amz_grant_read: Option<String>,
-    pub x_amz_grant_read_acp: Option<String>,
-    pub x_amz_grant_write_acp: Option<String>,
-    pub x_amz_server_side_encryption: Option<String>,
-    pub x_amz_storage_class: Option<String>,
-    pub x_amz_website_redirect_location: Option<String>,
-    pub x_amz_server_side_encryption_customer_algorithm: Option<String>,
-    pub x_amz_server_side_encryption_customer_key: Option<String>,
-    pub x_amz_server_side_encryption_customer_key_md5: Option<String>,
-    pub x_amz_server_side_encryption_aws_kms_key_id: Option<String>,
-    pub x_amz_server_side_encryption_context: Option<String>,
-    pub x_amz_request_payer: Option<String>,
-    pub x_amz_tagging: Option<String>,
-    pub x_amz_object_lock_mode: Option<String>,
-    pub x_amz_object_lock_retain_until_date: Option<String>,
-    pub x_amz_object_lock_legal_hold: Option<String>,
+    additional_checksum: Option<Checksum>,
 }
 
 impl<'a> CreateMultipartUpload<'a> {
     #[must_use]
-    pub fn new(key: &'a str, acl: Option<String>, meta: Option<BTreeMap<String, String>>) -> Self {
+    pub const fn new(
+        key: &'a str,
+        acl: Option<String>,
+        meta: Option<BTreeMap<String, String>>,
+        additional_checksum: Option<Checksum>,
+    ) -> Self {
         Self {
             key,
             acl,
             meta,
-            ..Self::default()
+            additional_checksum,
         }
     }
 
@@ -61,6 +42,7 @@ impl<'a> CreateMultipartUpload<'a> {
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: &S3) -> Result<InitiateMultipartUploadResult> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
+
         let response =
             request::request(url.clone(), self.http_method()?, headers, None, None).await?;
 
@@ -92,6 +74,14 @@ impl<'a> Action for CreateMultipartUpload<'a> {
             }
         }
 
+        // <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html>
+        if let Some(additional_checksum) = &self.additional_checksum {
+            map.insert(
+                "x-amz-checksum-algorithm",
+                additional_checksum.algorithm.as_algorithm(),
+            );
+        }
+
         Some(map)
     }
 
@@ -119,10 +109,103 @@ impl<'a> Action for CreateMultipartUpload<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{
+        checksum::{Checksum, ChecksumAlgorithm},
+        Credentials, Region, S3,
+    };
 
     #[test]
     fn test_method() {
-        let action = CreateMultipartUpload::new("key", None, None);
+        let action = CreateMultipartUpload::new("key", None, None, None);
         assert_eq!(Method::POST, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_headers() {
+        let action = CreateMultipartUpload::new("key", None, None, None);
+        let headers = action.headers().unwrap();
+        assert_eq!(None, headers.get("x-amz-acl"));
+        assert_eq!(None, headers.get("x-amz-meta-"));
+        assert_eq!(None, headers.get("x-amz-checksum-algorithm"));
+    }
+
+    #[test]
+    fn test_headers_acl() {
+        let test = vec![
+            "private",
+            "public-read",
+            "public-read-write",
+            "authenticated-read",
+            "aws-exec-read",
+            "bucket-owner-read",
+            "bucket-owner-full-control",
+        ];
+        for acl in test {
+            let action = CreateMultipartUpload::new("key", Some(acl.to_string()), None, None);
+            let headers = action.headers().unwrap();
+            assert_eq!(Some(acl), headers.get("x-amz-acl").copied());
+        }
+    }
+
+    #[test]
+    fn test_headers_with_checksum() {
+        let test = vec![
+            ChecksumAlgorithm::Crc32,
+            ChecksumAlgorithm::Crc32c,
+            ChecksumAlgorithm::Sha1,
+            ChecksumAlgorithm::Sha256,
+        ];
+        for algorithm in test {
+            let action = CreateMultipartUpload::new(
+                "key",
+                None,
+                None,
+                Some(Checksum::new(algorithm.clone())),
+            );
+            let headers = action.headers().unwrap();
+            assert_eq!(None, headers.get("x-amz-acl"));
+            assert_eq!(
+                headers.get("x-amz-checksum-algorithm").unwrap(),
+                &algorithm.as_algorithm()
+            );
+        }
+    }
+
+    #[test]
+    fn test_query_pairs() {
+        let action = CreateMultipartUpload::new("key", None, None, None);
+        let mut map = BTreeMap::new();
+        map.insert("uploads", "");
+        assert_eq!(Some(map), action.query_pairs());
+    }
+
+    #[test]
+    fn test_path() {
+        let action = CreateMultipartUpload::new("key", None, None, None);
+        assert_eq!(Some(vec!["key"]), action.path());
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+        let action = CreateMultipartUpload::new("key", None, None, None);
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?uploads=",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential="));
     }
 }

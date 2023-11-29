@@ -51,3 +51,10 @@ buildflags = ["--release"]
 
 [package.metadata.rpm.targets]
 s3m = { path = "/usr/bin/s3m" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_futures"] }
+
+[[bench]]
+name = "sha256_md5_digest_benchmark"
+harness = false

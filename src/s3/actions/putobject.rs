@@ -1,6 +1,9 @@
 use crate::{
     s3::actions::{response_error, Action},
-    s3::{checksum::Checksum, request, tools, S3},
+    s3::{
+        checksum::{sha256_md5_digest, Checksum},
+        request, S3,
+    },
 };
 use anyhow::{anyhow, Result};
 use crossbeam::channel::Sender;
@@ -42,9 +45,8 @@ impl<'a> PutObject<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
-        let (sha, md5, length) = tools::sha256_md5_digest(self.file).await?;
-        // TODO
-        // pass headers
+        let (sha, md5, length) = sha256_md5_digest(self.file).await?;
+
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
 
         let response = request::request(
@@ -129,10 +131,75 @@ impl<'a> Action for PutObject<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{
+        tools, {Credentials, Region, S3},
+    };
 
     #[test]
     fn test_method() {
         let action = PutObject::new("key", Path::new("/"), None, None, None, None);
         assert_eq!(Method::PUT, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_headers_acl() {
+        let test = vec![
+            ("private", "private"),
+            ("public-read", "public-read"),
+            ("public-read-write", "public-read-write"),
+            ("authenticated-read", "authenticated-read"),
+            ("aws-exec-read", "aws-exec-read"),
+            ("bucket-owner-read", "bucket-owner-read"),
+            ("bucket-owner-full-control", "bucket-owner-full-control"),
+        ];
+
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+
+        for (acl, expected) in test {
+            let action = PutObject::new(
+                "key",
+                Path::new("/"),
+                Some(acl.to_string()),
+                None,
+                None,
+                None,
+            );
+            let (_, headers) = action
+                .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+                .unwrap();
+            assert_eq!(expected, headers.get("x-amz-acl").unwrap());
+        }
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+
+        let action = PutObject::new("key", Path::new("/"), None, None, None, None);
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
     }
 }

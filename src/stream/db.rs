@@ -1,5 +1,5 @@
 use crate::{
-    s3::{actions, S3},
+    s3::{actions, checksum::Checksum, S3},
     stream::part::Part,
 };
 use anyhow::Result;
@@ -98,8 +98,14 @@ impl Db {
     /// # Errors
     ///
     /// Will return `Err` if can not insert a `Part`
-    pub fn create_part(&self, number: u16, seek: u64, chunk: u64) -> Result<Option<sled::IVec>> {
-        let part = Part::new(number, seek, chunk);
+    pub fn create_part(
+        &self,
+        number: u16,
+        seek: u64,
+        chunk: u64,
+        checksum: Option<Checksum>,
+    ) -> Result<Option<sled::IVec>> {
+        let part = Part::new(number, seek, chunk, checksum);
         let cbor_part = serialize(&part)?;
         Ok(self.db_parts()?.insert(number.to_be_bytes(), cbor_part)?)
     }
@@ -130,8 +136,9 @@ impl Db {
                             (
                                 p.get_number(),
                                 actions::Part {
-                                    etag: p.get_etag(),
+                                    etag: p.get_etag().to_string(),
                                     number: p.get_number(),
+                                    checksum: p.get_checksum(),
                                 },
                             )
                         })
@@ -139,5 +146,125 @@ impl Db {
                 })
             })
             .collect::<Result<BTreeMap<u16, actions::Part>>>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::s3::{credentials::Credentials, Region, S3};
+    use anyhow::Result;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_db() -> Result<()> {
+        let dir = tempdir()?;
+        let path = PathBuf::from(dir.path());
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+        let db = Db::new(&s3, "key", "checksum", 0, &path)?;
+        assert_eq!(db.db().len(), 0);
+        assert_eq!(db.db_parts()?.len(), 0);
+        assert_eq!(db.db_uploaded()?.len(), 0);
+        assert_eq!(db.check()?, None);
+        assert_eq!(db.upload_id()?, None);
+        assert_eq!(db.save_upload_id("uid")?, None);
+        assert_eq!(db.save_etag("etag")?, None);
+        assert!(db.flush().is_ok());
+        assert_eq!(db.flush()?, 0);
+        assert_eq!(db.check()?, Some("ETag: etag".to_string()));
+        assert_eq!(db.upload_id()?, Some("uid".to_string()));
+        assert_eq!(db.db().len(), 2);
+        assert_eq!(db.db_parts()?.len(), 0);
+        assert_eq!(db.db_uploaded()?.len(), 0);
+        assert_eq!(db.create_part(1, 0, 0, None)?, None);
+        assert_eq!(db.create_part(2, 0, 0, None)?, None);
+        assert_eq!(db.db().len(), 2);
+        assert_eq!(db.db_parts()?.len(), 2);
+        assert_eq!(db.db_uploaded()?.len(), 0);
+        assert_eq!(db.get_part(1)?.unwrap().get_number(), 1);
+        assert_eq!(db.get_part(2)?.unwrap().get_number(), 2);
+        assert_eq!(db.uploaded_parts()?.len(), 0);
+        assert!(db.flush().is_ok());
+        assert_eq!(db.db_parts()?.len(), 2);
+        assert_eq!(db.db_uploaded()?.len(), 0);
+        assert_eq!(db.uploaded_parts()?.len(), 0);
+        assert_eq!(db.get_part(1)?.unwrap().get_number(), 1);
+        assert_eq!(db.get_part(2)?.unwrap().get_number(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_db_parts() -> Result<()> {
+        let dir = tempdir()?;
+        let path = PathBuf::from(dir.path());
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+        let db = Db::new(&s3, "key", "checksum", 0, &path)?;
+        assert_eq!(db.db_parts()?.len(), 0);
+        assert_eq!(db.create_part(1, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 1);
+        assert_eq!(db.create_part(2, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 2);
+        assert_eq!(db.create_part(3, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 3);
+        assert_eq!(db.create_part(4, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 4);
+        assert_eq!(db.create_part(5, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 5);
+        assert_eq!(db.create_part(6, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 6);
+        assert_eq!(db.create_part(7, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 7);
+        assert_eq!(db.create_part(8, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 8);
+        assert_eq!(db.create_part(9, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 9);
+        assert_eq!(db.create_part(10, 0, 0, None)?, None);
+        assert_eq!(db.db_parts()?.len(), 10);
+        assert_eq!(db.db_parts()?.iter().count(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_db_uploaded() -> Result<()> {
+        let dir = tempdir()?;
+        let path = PathBuf::from(dir.path());
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+        let db = Db::new(&s3, "key", "checksum", 0, &path)?;
+        assert_eq!(db.db_uploaded()?.len(), 0);
+        assert_eq!(
+            db.db_uploaded()?
+                .insert(1_i32.to_be_bytes(), "etag".as_bytes())?,
+            None
+        );
+        assert_eq!(db.db_uploaded()?.len(), 1);
+        assert_eq!(
+            db.db_uploaded()?
+                .insert(2_i32.to_be_bytes(), "etag".as_bytes())?,
+            None
+        );
+        assert_eq!(db.db_uploaded()?.len(), 2);
+        Ok(())
     }
 }

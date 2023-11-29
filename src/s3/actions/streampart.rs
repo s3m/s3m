@@ -5,8 +5,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use crossbeam::channel::Sender;
 use reqwest::Method;
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Clone)]
 pub struct StreamPart<'a> {
@@ -48,6 +47,7 @@ impl<'a> StreamPart<'a> {
     pub async fn request(self, s3: &S3) -> Result<String> {
         let (url, headers) =
             &self.sign(s3, self.digest.0, Some(self.digest.1), Some(self.length))?;
+
         let response = request::request(
             url.clone(),
             self.http_method()?,
@@ -56,6 +56,7 @@ impl<'a> StreamPart<'a> {
             self.sender,
         )
         .await?;
+
         if response.status().is_success() {
             match response.headers().get("ETag") {
                 Some(etag) => Ok(etag.to_str()?.to_string()),
@@ -99,10 +100,47 @@ impl<'a> Action for StreamPart<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{
+        tools, {Credentials, Region, S3},
+    };
 
     #[test]
     fn test_method() {
         let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);
         assert_eq!(Method::PUT, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_query_pairs() {
+        let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);
+        let mut map = BTreeMap::new();
+        map.insert("partNumber", "1");
+        map.insert("uploadId", "uid");
+        assert_eq!(Some(map), action.query_pairs());
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+        );
+
+        let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?partNumber=1&uploadId=uid",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
     }
 }

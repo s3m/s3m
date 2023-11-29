@@ -11,7 +11,7 @@ use std::{cmp::min, collections::BTreeMap, fmt::Write, path::Path};
 pub async fn upload(
     s3: &S3,
     key: &str,
-    file: &str,
+    file: &Path,
     file_size: u64,
     sdb: &Db,
     acl: Option<String>,

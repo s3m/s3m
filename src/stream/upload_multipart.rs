@@ -1,14 +1,16 @@
 use crate::{
     cli::progressbar::Bar,
-    s3::{actions, S3},
+    s3::{actions, checksum::Checksum, S3},
     stream::{db::Db, part::Part},
 };
 use anyhow::{anyhow, Result};
 use bincode::{deserialize, serialize};
 use futures::stream::{FuturesUnordered, StreamExt};
 use sled::transaction::{TransactionError, Transactional};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 use tokio::time::{sleep, Duration};
+
+const MAX_RETRIES: usize = 3;
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
@@ -18,13 +20,14 @@ use tokio::time::{sleep, Duration};
 pub async fn upload_multipart(
     s3: &S3,
     key: &str,
-    file: &str,
+    file: &Path,
     file_size: u64,
     chunk_size: u64,
     sdb: &Db,
     acl: Option<String>,
     meta: Option<BTreeMap<String, String>>,
     quiet: bool,
+    additional_checksum: Option<Checksum>,
 ) -> Result<String> {
     // trees for keeping track of parts to upload
     let db_parts = sdb.db_parts()?;
@@ -34,8 +37,11 @@ pub async fn upload_multipart(
         uid
     } else {
         // Initiate Multipart Upload - request an Upload ID
-        let action = actions::CreateMultipartUpload::new(key, acl, meta);
+        let action =
+            actions::CreateMultipartUpload::new(key, acl, meta, additional_checksum.clone());
+
         let response = action.request(s3).await?;
+
         db_parts.clear()?;
         // save the upload_id to resume if required
         sdb.save_upload_id(&response.upload_id)?;
@@ -52,7 +58,7 @@ pub async fn upload_multipart(
             if (file_size - seek) <= chunk {
                 chunk = file_size % chunk;
             }
-            sdb.create_part(number, seek, chunk)?;
+            sdb.create_part(number, seek, chunk, additional_checksum.clone())?;
             seek += chunk;
             number += 1;
         }
@@ -72,10 +78,11 @@ pub async fn upload_multipart(
 
     let mut tasks = FuturesUnordered::new();
 
-    let threads = if num_cpus::get_physical() - 1 == 0 {
-        1
+    // Calculate the number of CPUs to use, leaving 2 free
+    let threads = if num_cpus::get_physical() > 2 {
+        num_cpus::get_physical() - 2
     } else {
-        num_cpus::get_physical() - 1
+        1
     };
 
     for part in db_parts.iter().values() {
@@ -87,11 +94,13 @@ pub async fn upload_multipart(
         // limit to N threads
         if tasks.len() == threads {
             if let Some(r) = tasks.next().await {
-                // TODO better error handling
-                if r.is_ok() {
-                    if let Some(pb) = pb.progress.as_ref() {
-                        pb.inc(chunk_size);
+                match r {
+                    Ok(_) => {
+                        if let Some(pb) = pb.progress.as_ref() {
+                            pb.inc(chunk_size);
+                        }
                     }
+                    Err(e) => return Err(anyhow!("{}", e)),
                 }
             }
         }
@@ -119,7 +128,8 @@ pub async fn upload_multipart(
 
     // Complete Multipart Upload
     let uploaded = sdb.uploaded_parts()?;
-    let action = actions::CompleteMultipartUpload::new(key, &upload_id, uploaded);
+    let action =
+        actions::CompleteMultipartUpload::new(key, &upload_id, uploaded, additional_checksum);
     let rs = action.request(s3).await?;
 
     // cleanup uploads tree
@@ -134,7 +144,7 @@ pub async fn upload_multipart(
 async fn upload_part(
     s3: &S3,
     key: &str,
-    file: &str,
+    file: &Path,
     uid: &str,
     db: &Db,
     part: Part,
@@ -142,9 +152,11 @@ async fn upload_part(
     let unprocessed = db.db_parts()?;
     let processed = db.db_uploaded()?;
 
-    // do request to get the ETag and update the part
+    let mut additional_checksum = part.get_checksum();
+
+    // do request to get the ETag and update the checksum if required
     let part_number = part.get_number();
-    let mut retries: u64 = 0;
+    let mut retries = 0;
     let etag = loop {
         let action = actions::UploadPart::new(
             key,
@@ -153,14 +165,16 @@ async fn upload_part(
             uid,
             part.get_seek(),
             part.get_chunk(),
+            additional_checksum.as_mut(),
         );
 
+        // retry 3 times
         match action.request(s3).await {
             Ok(etag) => break etag,
             Err(e) => {
-                if retries < 3 {
+                if retries < MAX_RETRIES {
                     retries += 1;
-                    sleep(Duration::from_secs(retries)).await;
+                    sleep(Duration::from_secs(retries as u64)).await;
                 } else {
                     return Err(e);
                 }
@@ -168,7 +182,9 @@ async fn upload_part(
         }
     };
 
-    let part = part.set_etag(etag);
+    // update part with the etag and checksum if any
+    let part = part.set_etag(etag).set_checksum(additional_checksum);
+
     let cbor_part = serialize(&part)?;
 
     // move part to uploaded

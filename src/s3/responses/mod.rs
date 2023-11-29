@@ -13,8 +13,7 @@ where
         "true" => Ok(true),
         "false" => Ok(false),
         other => Err(D::Error::custom(format!(
-            "got {}, but expected `true` or `false`",
-            other
+            "got {other}, but expected `true` or `false`"
         ))),
     }
 }
@@ -178,6 +177,14 @@ pub struct CompleteMultipartUploadResult {
     pub key: String,
     #[serde(rename = "ETag")]
     pub e_tag: String,
+    #[serde(rename = "ChecksumCRC32")]
+    pub checksum_crc32: Option<String>,
+    #[serde(rename = "ChecksumCRC32C")]
+    pub checksum_crc32c: Option<String>,
+    #[serde(rename = "ChecksumSHA1")]
+    pub checksum_sha1: Option<String>,
+    #[serde(rename = "ChecksumSHA256")]
+    pub checksum_sha256: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
