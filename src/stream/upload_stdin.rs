@@ -39,7 +39,7 @@ pub async fn stream(
     tmp_dir: PathBuf,
 ) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
-    let action = actions::CreateMultipartUpload::new(key, acl, meta);
+    let action = actions::CreateMultipartUpload::new(key, acl, meta, None);
     let response = action.request(s3).await?;
     let upload_id = response.upload_id;
     let (sender, receiver) = unbounded::<usize>();
@@ -113,10 +113,19 @@ pub async fn stream(
         .etags
         .into_iter()
         .zip(1..)
-        .map(|(etag, number)| (number, actions::Part { etag, number }))
+        .map(|(etag, number)| {
+            (
+                number,
+                actions::Part {
+                    etag,
+                    number,
+                    checksum: None,
+                },
+            )
+        })
         .collect();
 
-    let action = actions::CompleteMultipartUpload::new(key, &upload_id, uploaded);
+    let action = actions::CompleteMultipartUpload::new(key, &upload_id, uploaded, None);
 
     let rs = action.request(s3).await?;
 

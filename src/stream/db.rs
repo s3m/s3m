@@ -1,5 +1,5 @@
 use crate::{
-    s3::{actions, S3},
+    s3::{actions, checksum::Checksum, S3},
     stream::part::Part,
 };
 use anyhow::Result;
@@ -98,8 +98,14 @@ impl Db {
     /// # Errors
     ///
     /// Will return `Err` if can not insert a `Part`
-    pub fn create_part(&self, number: u16, seek: u64, chunk: u64) -> Result<Option<sled::IVec>> {
-        let part = Part::new(number, seek, chunk);
+    pub fn create_part(
+        &self,
+        number: u16,
+        seek: u64,
+        chunk: u64,
+        checksum: Option<Checksum>,
+    ) -> Result<Option<sled::IVec>> {
+        let part = Part::new(number, seek, chunk, checksum);
         let cbor_part = serialize(&part)?;
         Ok(self.db_parts()?.insert(number.to_be_bytes(), cbor_part)?)
     }
@@ -130,8 +136,9 @@ impl Db {
                             (
                                 p.get_number(),
                                 actions::Part {
-                                    etag: p.get_etag(),
+                                    etag: p.get_etag().to_string(),
                                     number: p.get_number(),
+                                    checksum: p.get_checksum(),
                                 },
                             )
                         })

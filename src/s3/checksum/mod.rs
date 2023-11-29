@@ -1,27 +1,47 @@
 use anyhow::Result;
 use base64ct::{Base64, Encoding};
+use bytes::Bytes;
 use crc32c::{crc32c, crc32c_append};
 use crc32fast::Hasher;
+use futures::stream::TryStreamExt;
 use ring::digest::{Context, SHA1_FOR_LEGACY_USE_ONLY, SHA256};
-use std::{fs::File, io::Read, str::FromStr};
+use serde::{Deserialize, Serialize};
+use std::{io::SeekFrom, path::Path, str::FromStr};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt},
+};
+use tokio_util::codec::{BytesCodec, FramedRead};
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ChecksumAlgorithm {
     Crc32,
     Crc32c,
+    Md5,
     Sha1,
     Sha256,
-    None,
 }
 
 impl ChecksumAlgorithm {
+    #[must_use]
     pub const fn as_amz(&self) -> &'static str {
         match self {
             Self::Crc32 => "x-amz-checksum-crc32",
             Self::Crc32c => "x-amz-checksum-crc32c",
             Self::Sha1 => "x-amz-checksum-sha1",
             Self::Sha256 => "x-amz-checksum-sha256",
-            Self::None => "",
+            Self::Md5 => unimplemented!(),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_algorithm(&self) -> &'static str {
+        match self {
+            Self::Crc32 => "CRC32",
+            Self::Crc32c => "CRC32C",
+            Self::Sha1 => "SHA1",
+            Self::Sha256 => "SHA256",
+            Self::Md5 => unimplemented!(),
         }
     }
 }
@@ -40,13 +60,108 @@ impl FromStr for ChecksumAlgorithm {
     }
 }
 
-#[derive(Debug)]
+/// A trait for checksum calculation.
+pub trait ChecksumHasher: Send + Sync {
+    fn new() -> Self
+    where
+        Self: Sized;
+    fn update(&mut self, bytes: &[u8]);
+    fn finalize(self: Box<Self>) -> Bytes;
+}
+
+// CRC32
+struct Crc32Hasher(Hasher);
+
+impl ChecksumHasher for Crc32Hasher {
+    fn new() -> Self {
+        Self(crc32fast::Hasher::new())
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    fn finalize(self: Box<Self>) -> Bytes {
+        Bytes::from(self.0.finalize().to_be_bytes().to_vec())
+    }
+}
+
+// CRC32C
+struct Crc32cHasher(u32);
+
+impl ChecksumHasher for Crc32cHasher {
+    fn new() -> Self {
+        Self(crc32c(&[]))
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        self.0 = crc32c_append(self.0, bytes);
+    }
+
+    fn finalize(self: Box<Self>) -> Bytes {
+        Bytes::from(self.0.to_be_bytes().to_vec())
+    }
+}
+
+// Md5
+struct Md5Hasher(md5::Context);
+
+impl ChecksumHasher for Md5Hasher {
+    fn new() -> Self {
+        Self(md5::Context::new())
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        self.0.consume(bytes);
+    }
+
+    fn finalize(self: Box<Self>) -> Bytes {
+        Bytes::from(self.0.compute().0.to_vec())
+    }
+}
+
+// SHA1
+struct Sha1Hasher(Context);
+
+impl ChecksumHasher for Sha1Hasher {
+    fn new() -> Self {
+        Self(Context::new(&SHA1_FOR_LEGACY_USE_ONLY))
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    fn finalize(self: Box<Self>) -> Bytes {
+        Bytes::from(self.0.finish().as_ref().to_vec())
+    }
+}
+
+// SHA256
+struct Sha256Hasher(Context);
+
+impl ChecksumHasher for Sha256Hasher {
+    fn new() -> Self {
+        Self(Context::new(&SHA256))
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    fn finalize(self: Box<Self>) -> Bytes {
+        Bytes::from(self.0.finish().as_ref().to_vec())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checksum {
     pub algorithm: ChecksumAlgorithm,
     pub checksum: String,
 }
 
 impl Checksum {
+    #[must_use]
     pub const fn new(algorithm: ChecksumAlgorithm) -> Self {
         Self {
             algorithm,
@@ -54,120 +169,173 @@ impl Checksum {
         }
     }
 
-    pub fn calculate(&mut self, file_path: &str) -> Result<String> {
-        match self.algorithm {
-            ChecksumAlgorithm::Crc32 => self.calculate_crc32(file_path),
-            ChecksumAlgorithm::Crc32c => self.calculate_crc32c(file_path),
-            ChecksumAlgorithm::Sha1 => self.calculate_sha1(file_path),
-            ChecksumAlgorithm::Sha256 => self.calculate_sha256(file_path),
-            ChecksumAlgorithm::None => Ok(String::new()),
-        }
+    pub fn hasher(&mut self) -> Box<dyn ChecksumHasher> {
+        let hasher: Box<dyn ChecksumHasher> = match self.algorithm {
+            ChecksumAlgorithm::Crc32 => Box::new(Crc32Hasher::new()),
+            ChecksumAlgorithm::Crc32c => Box::new(Crc32cHasher::new()),
+            ChecksumAlgorithm::Md5 => Box::new(Md5Hasher::new()),
+            ChecksumAlgorithm::Sha1 => Box::new(Sha1Hasher::new()),
+            ChecksumAlgorithm::Sha256 => Box::new(Sha256Hasher::new()),
+        };
+        hasher
     }
 
-    fn calculate_crc32(&mut self, file_path: &str) -> Result<String> {
-        let mut file = File::open(file_path)?;
-        let mut buf = [0_u8; 65_536];
+    pub async fn calculate(&mut self, file: &Path) -> Result<String> {
+        let mut hasher: Box<dyn ChecksumHasher> = match self.algorithm {
+            ChecksumAlgorithm::Crc32 => Box::new(Crc32Hasher::new()),
+            ChecksumAlgorithm::Crc32c => Box::new(Crc32cHasher::new()),
+            ChecksumAlgorithm::Md5 => Box::new(Md5Hasher::new()),
+            ChecksumAlgorithm::Sha1 => Box::new(Sha1Hasher::new()),
+            ChecksumAlgorithm::Sha256 => Box::new(Sha256Hasher::new()),
+        };
 
-        let mut hasher = Hasher::new();
-        while let Ok(size) = file.read(&mut buf[..]) {
-            if size == 0 {
-                break;
-            }
-            hasher.update(&buf[0..size]);
+        // Buffer size is 256KB
+        let mut stream =
+            FramedRead::with_capacity(File::open(file).await?, BytesCodec::new(), 1024 * 256);
+
+        while let Some(bytes) = stream.try_next().await? {
+            hasher.update(&bytes);
         }
 
-        self.checksum = Base64::encode_string(&hasher.finalize().to_be_bytes());
+        self.checksum = Base64::encode_string(&hasher.finalize());
         Ok(self.checksum.clone())
     }
 
-    fn calculate_crc32c(&mut self, file_path: &str) -> Result<String> {
-        let mut file = File::open(file_path)?;
-        let mut buf = [0_u8; 65_536];
+    pub fn digest(&mut self, data: &[u8]) -> Result<String> {
+        let mut hasher: Box<dyn ChecksumHasher> = match self.algorithm {
+            ChecksumAlgorithm::Crc32 => Box::new(Crc32Hasher::new()),
+            ChecksumAlgorithm::Crc32c => Box::new(Crc32cHasher::new()),
+            ChecksumAlgorithm::Md5 => Box::new(Md5Hasher::new()),
+            ChecksumAlgorithm::Sha1 => Box::new(Sha1Hasher::new()),
+            ChecksumAlgorithm::Sha256 => Box::new(Sha256Hasher::new()),
+        };
 
-        let mut hasher: u32 = crc32c(&[]);
-        while let Ok(size) = file.read(&mut buf[..]) {
-            if size == 0 {
-                break;
-            }
-            hasher = crc32c_append(hasher, &buf[0..size]);
-        }
+        hasher.update(data);
 
-        self.checksum = Base64::encode_string(&hasher.to_be_bytes());
+        self.checksum = Base64::encode_string(&hasher.finalize());
         Ok(self.checksum.clone())
     }
+}
 
-    fn calculate_sha1(&mut self, file_path: &str) -> Result<String> {
-        let mut file = File::open(file_path)?;
-        let mut buf = [0_u8; 65_536];
+pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)> {
+    let mut md5hasher = Checksum::new(ChecksumAlgorithm::Md5).hasher();
+    let mut sha256hasher = Checksum::new(ChecksumAlgorithm::Sha256).hasher();
 
-        let mut context = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
-        while let Ok(size) = file.read(&mut buf[..]) {
-            if size == 0 {
-                break;
-            }
-            context.update(&buf[0..size]);
-        }
+    // Buffer size is 256KB
+    let mut stream =
+        FramedRead::with_capacity(File::open(file_path).await?, BytesCodec::new(), 1024 * 256);
 
-        self.checksum = Base64::encode_string(context.finish().as_ref());
-        Ok(self.checksum.clone())
+    let mut length: usize = 0;
+
+    while let Some(bytes) = stream.try_next().await? {
+        md5hasher.update(&bytes);
+        sha256hasher.update(&bytes);
+        length += &bytes.len();
     }
 
-    fn calculate_sha256(&mut self, file_path: &str) -> Result<String> {
-        let mut file = File::open(file_path)?;
-        let mut buf = [0_u8; 65_536];
+    Ok((sha256hasher.finalize(), md5hasher.finalize(), length))
+}
 
-        let mut context = Context::new(&SHA256);
-        while let Ok(size) = file.read(&mut buf[..]) {
-            if size == 0 {
-                break;
-            }
-            context.update(&buf[0..size]);
+pub async fn sha256_md5_digest_multipart(
+    file_path: &Path,
+    seek: u64,
+    chunk: u64,
+    mut algorithm: Option<&mut Checksum>,
+) -> Result<(Bytes, Bytes, usize, Option<Checksum>)> {
+    let mut md5hasher = Checksum::new(ChecksumAlgorithm::Md5).hasher();
+    let mut sha256hasher = Checksum::new(ChecksumAlgorithm::Sha256).hasher();
+    let mut hasher = algorithm.as_mut().map(|checksum| checksum.hasher());
+
+    let mut file = File::open(file_path).await?;
+
+    // Seek to the start position
+    file.seek(SeekFrom::Start(seek)).await?;
+
+    // Take the chunk
+    let file = file.take(chunk);
+
+    // Buffer size is 256KB,
+    let mut stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 256);
+
+    let mut length: usize = 0;
+
+    while let Some(bytes) = stream.try_next().await? {
+        md5hasher.update(&bytes);
+        sha256hasher.update(&bytes);
+        if let Some(ref mut hasher) = hasher {
+            hasher.update(&bytes);
+        }
+        length += &bytes.len();
+    }
+
+    let digest = hasher.map(|hasher| Base64::encode_string(&hasher.finalize()));
+
+    if let Some(checksum) = algorithm {
+        // Modify the contents of the Checksum struct with the output of the hash
+        if let Some(d) = digest.as_ref() {
+            checksum.checksum = d.clone();
         }
 
-        self.checksum = Base64::encode_string(context.finish().as_ref());
-        Ok(self.checksum.clone())
+        return Ok((
+            sha256hasher.finalize(),
+            md5hasher.finalize(),
+            length,
+            Some(checksum.clone()),
+        ));
     }
+
+    Ok((sha256hasher.finalize(), md5hasher.finalize(), length, None))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64ct::{Base64, Encoding};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_crc32() {
+    #[tokio::test]
+    async fn test_crc32() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Crc32);
-        let result = checksum.calculate(&file.path().to_string_lossy()).unwrap();
+        let result = checksum.calculate(&file.path()).await.unwrap();
         assert_eq!(result, "DUoRhQ==");
     }
 
-    #[test]
-    fn test_crc32c() {
+    #[tokio::test]
+    async fn test_crc32c() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Crc32c);
-        let result = checksum.calculate(&file.path().to_string_lossy()).unwrap();
+        let result = checksum.calculate(&file.path()).await.unwrap();
         assert_eq!(result, "yZRlqg==");
     }
 
-    #[test]
-    fn test_sha1() {
+    #[tokio::test]
+    async fn test_md5() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"hello world").unwrap();
+        let mut checksum = Checksum::new(ChecksumAlgorithm::Md5);
+        let result = checksum.calculate(&file.path()).await.unwrap();
+        assert_eq!(result, "XrY7u+Ae7tCTyyK7j1rNww==");
+    }
+
+    #[tokio::test]
+    async fn test_sha1() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Sha1);
-        let result = checksum.calculate(&file.path().to_string_lossy()).unwrap();
+        let result = checksum.calculate(&file.path()).await.unwrap();
         assert_eq!(result, "Kq5sNclPz7QV2+lfQIuc6R7oRu0=");
     }
 
-    #[test]
-    fn test_sha256() {
+    #[tokio::test]
+    async fn test_sha256() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
-        let result = checksum.calculate(&file.path().to_string_lossy()).unwrap();
+        let result = checksum.calculate(&file.path()).await.unwrap();
         assert_eq!(result, "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=");
     }
 
@@ -194,5 +362,102 @@ mod tests {
         );
 
         assert_eq!("md5".parse::<ChecksumAlgorithm>(), Err(()));
+    }
+
+    #[test]
+    fn test_as_amz() {
+        assert_eq!(ChecksumAlgorithm::Crc32.as_amz(), "x-amz-checksum-crc32");
+        assert_eq!(ChecksumAlgorithm::Crc32c.as_amz(), "x-amz-checksum-crc32c");
+        assert_eq!(ChecksumAlgorithm::Sha1.as_amz(), "x-amz-checksum-sha1");
+        assert_eq!(ChecksumAlgorithm::Sha256.as_amz(), "x-amz-checksum-sha256");
+    }
+
+    #[test]
+    fn test_hasher() {
+        let mut hasher = Checksum::new(ChecksumAlgorithm::Crc32).hasher();
+        hasher.update(b"hello world");
+        let result = Box::new(hasher).finalize();
+        assert_eq!(Base64::encode_string(&result), "DUoRhQ==");
+
+        let mut hasher = Checksum::new(ChecksumAlgorithm::Crc32c).hasher();
+        hasher.update(b"hello world");
+        let result = Box::new(hasher).finalize();
+        assert_eq!(Base64::encode_string(&result), "yZRlqg==");
+
+        let mut hasher = Checksum::new(ChecksumAlgorithm::Md5).hasher();
+        hasher.update(b"hello world");
+        let result = Box::new(hasher).finalize();
+        assert_eq!(
+            format!("{:x}", result),
+            Bytes::from("5eb63bbbe01eeed093cb22bb8f5acdc3")
+        );
+
+        let mut hasher = Checksum::new(ChecksumAlgorithm::Sha1).hasher();
+        hasher.update(b"hello world");
+        let result = Box::new(hasher).finalize();
+        assert_eq!(
+            format!("{:x}", result),
+            Bytes::from("2aae6c35c94fcfb415dbe95f408b9ce91ee846ed")
+        );
+
+        let mut hasher = Checksum::new(ChecksumAlgorithm::Sha256).hasher();
+        hasher.update(b"hello world");
+        let result = Box::new(hasher).finalize();
+        assert_eq!(
+            format!("{:x}", result),
+            Bytes::from("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sha256_md5_digest() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"hello world").unwrap();
+        let (sha256, md5, length) = sha256_md5_digest(&file.path()).await.unwrap();
+        assert_eq!(
+            Base64::encode_string(&sha256),
+            "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+        );
+        assert_eq!(Base64::encode_string(&md5), "XrY7u+Ae7tCTyyK7j1rNww==");
+        assert_eq!(length, 11);
+    }
+
+    #[tokio::test]
+    async fn test_sha256_md5_digest_multipart() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"hello world").unwrap();
+        let (sha256, md5, length, checksum) =
+            sha256_md5_digest_multipart(&file.path(), 0, 11, None)
+                .await
+                .unwrap();
+        assert_eq!(
+            Base64::encode_string(&sha256),
+            "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+        );
+        assert_eq!(Base64::encode_string(&md5), "XrY7u+Ae7tCTyyK7j1rNww==");
+        assert_eq!(length, 11);
+        assert!(checksum.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_sha256_md5_digest_multipart_wtih_checksum() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"hello world").unwrap();
+        let mut checksum = Some(Checksum::new(ChecksumAlgorithm::Sha256));
+        let (sha256, md5, length, checksum) =
+            sha256_md5_digest_multipart(&file.path(), 0, 11, checksum.as_mut())
+                .await
+                .unwrap();
+        assert_eq!(
+            Base64::encode_string(&sha256),
+            "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+        );
+        assert_eq!(Base64::encode_string(&md5), "XrY7u+Ae7tCTyyK7j1rNww==");
+        assert_eq!(length, 11);
+        assert_eq!(checksum.clone().unwrap().algorithm.as_algorithm(), "SHA256");
+        assert_eq!(
+            checksum.unwrap().checksum,
+            "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+        );
     }
 }

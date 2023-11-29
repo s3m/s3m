@@ -1,8 +1,3 @@
-//! Amazon S3 multipart upload limits
-//! Maximum object size 5 TB
-//! Maximum number of parts per upload  10,000
-//! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>
-
 use crate::{
     s3::actions::{response_error, Action},
     s3::{request, tools, S3},
@@ -12,49 +7,44 @@ use reqwest::Method;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
-pub struct AbortMultipartUpload<'a> {
+pub struct GetObjectAttributes<'a> {
     key: &'a str,
-    upload_id: &'a str,
 }
 
-impl<'a> AbortMultipartUpload<'a> {
+impl<'a> GetObjectAttributes<'a> {
     #[must_use]
-    pub const fn new(key: &'a str, upload_id: &'a str) -> Self {
-        Self { key, upload_id }
+    pub const fn new(key: &'a str) -> Self {
+        Self { key }
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(&self, s3: &S3) -> Result<String> {
+    pub async fn request(&self, s3: &S3) -> Result<reqwest::Response> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
         let response =
             request::request(url.clone(), self.http_method()?, headers, None, None).await?;
-
         if response.status().is_success() {
-            Ok(response.text().await?)
+            Ok(response)
         } else {
             Err(anyhow!(response_error(response).await?))
         }
     }
 }
 
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_AbortMultipartUpload.html
-impl<'a> Action for AbortMultipartUpload<'a> {
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectAttributes.html>
+impl<'a> Action for GetObjectAttributes<'a> {
     fn http_method(&self) -> Result<Method> {
-        Ok(Method::from_bytes(b"DELETE")?)
+        Ok(Method::from_bytes(b"GET")?)
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        None
-    }
-
-    fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
-        // URL query_pairs
         let mut map: BTreeMap<&str, &str> = BTreeMap::new();
 
-        // uploadId - Upload ID that identifies the multipart upload.
-        map.insert("uploadId", self.upload_id);
+        map.insert(
+            "x-amz-object-attributes",
+            "ETag,Checksum,ObjectParts,StorageClass,ObjectSize",
+        );
 
         Some(map)
     }
@@ -68,6 +58,16 @@ impl<'a> Action for AbortMultipartUpload<'a> {
             .collect::<Vec<&str>>();
         Some(clean_path)
     }
+
+    // URL query pairs
+    fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
+        // URL query_pairs
+        let mut map: BTreeMap<&str, &str> = BTreeMap::new();
+
+        map.insert("attributes", "");
+
+        Some(map)
+    }
 }
 
 #[cfg(test)]
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = AbortMultipartUpload::new("key", "uid");
-        assert_eq!(Method::DELETE, action.http_method().unwrap());
+        let action = GetObjectAttributes::new("key");
+        assert_eq!(Method::GET, action.http_method().unwrap());
     }
 }

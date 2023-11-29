@@ -1,6 +1,9 @@
 use crate::{
     s3::actions::{response_error, Action},
-    s3::{checksum::Checksum, request, tools, S3},
+    s3::{
+        checksum::{sha256_md5_digest, Checksum},
+        request, S3,
+    },
 };
 use anyhow::{anyhow, Result};
 use crossbeam::channel::Sender;
@@ -42,9 +45,8 @@ impl<'a> PutObject<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
-        let (sha, md5, length) = tools::sha256_md5_digest(self.file).await?;
-        // TODO
-        // pass headers
+        let (sha, md5, length) = sha256_md5_digest(self.file).await?;
+
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
 
         let response = request::request(

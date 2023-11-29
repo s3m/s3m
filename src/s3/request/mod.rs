@@ -10,11 +10,11 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Response,
 };
-use std::collections::BTreeMap;
-use std::io::SeekFrom;
-use std::path::Path;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use std::{collections::BTreeMap, io::SeekFrom, path::Path};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt},
+};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 
@@ -62,7 +62,7 @@ pub async fn multipart_upload(
     url: Url,
     method: reqwest::Method,
     headers: &BTreeMap<String, String>,
-    file: String,
+    file: &Path,
     seek: u64,
     chunk: u64,
 ) -> Result<Response> {

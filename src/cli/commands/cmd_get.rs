@@ -18,6 +18,13 @@ pub fn command() -> Command {
                 .num_args(0),
         )
         .arg(
+            Arg::new("attributes")
+                .help("Retrieves metadata from an object without returning the object itself")
+                .long("attributes")
+                .short('a')
+                .num_args(0),
+        )
+        .arg(
             Arg::new("quiet")
                 .long("quiet")
                 .short('q')

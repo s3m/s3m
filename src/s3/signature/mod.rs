@@ -1,8 +1,10 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
-use crate::s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes};
-use crate::s3::S3;
+use crate::{
+    s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes},
+    s3::S3,
+};
 use anyhow::{anyhow, Result};
 use base64ct::{Base64, Encoding};
 use chrono::prelude::{DateTime, Utc};

@@ -5,8 +5,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use crossbeam::channel::Sender;
 use reqwest::Method;
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Clone)]
 pub struct StreamPart<'a> {
@@ -48,6 +47,7 @@ impl<'a> StreamPart<'a> {
     pub async fn request(self, s3: &S3) -> Result<String> {
         let (url, headers) =
             &self.sign(s3, self.digest.0, Some(self.digest.1), Some(self.length))?;
+
         let response = request::request(
             url.clone(),
             self.http_method()?,
@@ -56,6 +56,7 @@ impl<'a> StreamPart<'a> {
             self.sender,
         )
         .await?;
+
         if response.status().is_success() {
             match response.headers().get("ETag") {
                 Some(etag) => Ok(etag.to_str()?.to_string()),
