@@ -2,7 +2,7 @@
 name = "s3m"
 version = "0.7.0"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
-description = "command line tool for storing streams of data in s3 buckets"
+description = "A CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
 homepage = "https://s3m.stream"
 repository = "https://github.com/s3m/s3m"
