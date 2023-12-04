@@ -43,7 +43,7 @@ pub fn dispatch(
         Some("get") => {
             let key = hbp_empty(hbp)?;
             let sub_m = sub_m("get")?;
-            let get_head = sub_m.get_one("HeadObject").copied().unwrap_or(false);
+            let metadata = sub_m.get_one("metadata").copied().unwrap_or(false);
             let args: Vec<&str> = sub_m
                 .get_many::<String>("arguments")
                 .unwrap_or_default()
@@ -52,17 +52,19 @@ pub fn dispatch(
             let quiet = sub_m.get_one("quiet").copied().unwrap_or(false);
             let force = sub_m.get_one("force").copied().unwrap_or(false);
 
+            // get destination file/path
             let dest = if args.len() == 2 {
                 Some(args[1].to_string())
             } else {
                 None
             };
+
             Ok(Action::GetObject {
-                key,
-                get_head,
                 dest,
-                quiet,
                 force,
+                key,
+                metadata,
+                quiet,
             })
         }
 
@@ -223,14 +225,41 @@ hosts:
         match action {
             Action::GetObject {
                 key,
-                get_head,
+                metadata,
                 dest,
                 quiet,
+                force,
             } => {
                 assert_eq!(key, "h/b/f");
-                assert_eq!(get_head, false);
+                assert_eq!(metadata, false);
                 assert_eq!(dest, None);
                 assert_eq!(quiet, false);
+                assert_eq!(force, false);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_get_quiet_force() {
+        let cmd = Command::new("test").subcommand(cmd_get::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f", "-q", "-f"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::GetObject {
+                key,
+                metadata,
+                dest,
+                quiet,
+                force,
+            } => {
+                assert_eq!(key, "h/b/f");
+                assert_eq!(metadata, false);
+                assert_eq!(dest, None);
+                assert_eq!(quiet, true);
+                assert_eq!(force, true);
             }
             _ => panic!("wrong action"),
         }

@@ -30,7 +30,7 @@ pub enum Action {
     },
     GetObject {
         dest: Option<String>,
-        get_head: bool,
+        metadata: bool,
         key: String,
         quiet: bool,
         force: bool,

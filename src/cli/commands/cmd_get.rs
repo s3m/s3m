@@ -5,23 +5,16 @@ pub fn command() -> Command {
         .about("Retrieves objects")
         .arg(
             Arg::new("arguments")
-                .help("<s3 provider>/<bucket>/<file>")
+                .help("<s3 provider>/<bucket>/<file> <optional path/file>")
                 .required(true)
                 .value_names(["S3M"])
-                .num_args(1),
+                .num_args(1..=2),
         )
         .arg(
-            Arg::new("HeadObject")
+            Arg::new("metadata")
                 .help("Retrieves metadata from an object without returning the object itself")
-                .long("head")
-                .short('H')
-                .num_args(0),
-        )
-        .arg(
-            Arg::new("attributes")
-                .help("Retrieves metadata from an object without returning the object itself")
-                .long("attributes")
-                .short('a')
+                .long("meta")
+                .short('m')
                 .num_args(0),
         )
         .arg(
