@@ -66,8 +66,6 @@ pub fn new(config_path: &Path) -> Command {
     // get the streams directory path (default: ~/.config/s3m/streams)
     let config_streams_path = config_path.join("streams");
 
-    let after_help = format!("The checksum of the file is calculated before uploading it and is used to keep a reference of where the file has been uploaded to prevent uploading it again, this is stored in [{}/] use the option (--clean) to clean up the directory.\n\nIf the file is bigger than the buffer size (-b 10MB default) is going to be uploaded in parts. The upload process can be interrupted at any time and in the next attempt, it will be resumed in the position that was left when possible.\n\nhttps://s3m.stream", config_streams_path.display());
-
     let styles = Styles::styled()
         .header(AnsiColor::Yellow.on_default() | Effects::BOLD)
         .usage(AnsiColor::Green.on_default() | Effects::BOLD)
@@ -77,7 +75,6 @@ pub fn new(config_path: &Path) -> Command {
     Command::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand_negates_reqs(true)
-        .after_help(after_help)
         .color(ColorChoice::Auto)
         .styles(styles)
         .arg(
@@ -162,7 +159,7 @@ pub fn new(config_path: &Path) -> Command {
         )
         .arg(
             Arg::new("tmp-dir")
-            .help("Specify a directory for temporarily storing the STDIN buffer.")
+            .help("Specify a directory for temporarily storing the STDIN buffer")
             .short('t')
             .long("tmp-dir")
             .default_value(std::env::temp_dir().into_os_string())
