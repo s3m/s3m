@@ -129,7 +129,7 @@ fn get_dest(dest: Option<String>, file_name: &OsStr) -> Result<PathBuf> {
     }
 
     // Use default path if dest is None
-    Ok(Path::new(".").join(file_name).to_path_buf())
+    Ok(Path::new(".").join(file_name))
 }
 
 #[cfg(test)]
