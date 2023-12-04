@@ -49,6 +49,8 @@ pub fn dispatch(
                 .unwrap_or_default()
                 .map(String::as_str)
                 .collect();
+            let quiet = sub_m.get_one("quiet").copied().unwrap_or(false);
+            let force = sub_m.get_one("force").copied().unwrap_or(false);
 
             let dest = if args.len() == 2 {
                 Some(args[1].to_string())
@@ -59,7 +61,8 @@ pub fn dispatch(
                 key,
                 get_head,
                 dest,
-                quiet: sub_m.contains_id("quiet"),
+                quiet,
+                force,
             })
         }
 

@@ -33,6 +33,7 @@ pub enum Action {
         get_head: bool,
         key: String,
         quiet: bool,
+        force: bool,
     },
     PutObject {
         acl: Option<String>,

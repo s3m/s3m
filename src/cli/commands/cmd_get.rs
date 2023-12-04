@@ -28,6 +28,14 @@ pub fn command() -> Command {
             Arg::new("quiet")
                 .long("quiet")
                 .short('q')
-                .help("Don't show progress bar"),
+                .help("Don't show progress bar")
+                .num_args(0),
+        )
+        .arg(
+            Arg::new("force")
+                .long("force")
+                .short('f')
+                .help("Force overwrite")
+                .num_args(0),
         )
 }
