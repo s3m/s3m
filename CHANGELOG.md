@@ -1,3 +1,6 @@
+## 0.7.1
+* Removed after_help
+
 ## 0.7.0 🚜
 * Added support for Additional Checksum Algorithms `x-amz-checksum-mode` option `--checksum`
 
