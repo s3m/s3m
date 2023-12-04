@@ -122,9 +122,8 @@ fn get_dest(dest: Option<String>, file_name: &OsStr) -> Result<PathBuf> {
                     "parent directory {} does not exist",
                     parent.display()
                 ));
-            } else {
-                return Ok(Path::new(".").join(path_buf));
             }
+            return Ok(Path::new(".").join(path_buf));
         }
     }
 

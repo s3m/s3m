@@ -176,6 +176,7 @@ mod tests {
         assert_eq!(db.check()?, None);
         assert_eq!(db.upload_id()?, None);
         assert_eq!(db.save_upload_id("uid")?, None);
+        assert_eq!(db.upload_id()?, Some("uid".to_string()));
         assert_eq!(db.save_etag("etag")?, None);
         assert!(db.flush().is_ok());
         assert_eq!(db.flush()?, 0);

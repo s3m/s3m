@@ -33,3 +33,30 @@ impl Credentials {
         &self.secret
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_credentials() {
+        let creds = Credentials::new("access", "secret");
+        assert_eq!(creds.aws_access_key_id(), "access");
+        assert_eq!(creds.aws_secret_access_key(), "secret");
+    }
+
+    #[test]
+    fn test_credentials_env() {
+        temp_env::with_vars(
+            [
+                ("AWS_ACCESS_KEY_ID", Some("env-access")),
+                ("AWS_SECRET_ACCESS_KEY", Some("env-secret")),
+            ],
+            || {
+                let creds = Credentials::new("access", "secret");
+                assert_eq!(creds.aws_access_key_id(), "env-access");
+                assert_eq!(creds.aws_secret_access_key(), "env-secret");
+            },
+        );
+    }
+}
