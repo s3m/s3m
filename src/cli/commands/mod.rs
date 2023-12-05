@@ -276,6 +276,7 @@ hosts:
         Ok(())
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_check_tmp_dir() -> Result<()> {
         let config = get_config().unwrap();
