@@ -32,9 +32,9 @@ jobs:
             os: macos-latest
             target: x86_64-apple-darwin
 
-          - build: windows-gnu
+          - build: windows
             os: windows-latest
-            target: x86_64-pc-windows-gnu
+            target: x86_64-pc-windows-msvc
 
     steps:
       - name: Checkout
@@ -48,9 +48,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install dependencies
+      - run: sudo apt -y install musl-dev musl-tools
         if: matrix.build == 'linux'
-        run: sudo apt -y install musl-dev musl-tools
+
+      - run: choco install openssl
+        if: matrix.build == 'windows'
+
+      - run: echo 'OPENSSL_DIR=C:\Program Files\OpenSSL-Win64' | Out-File -FilePath
+          $env:GITHUB_ENV -Append
+        if: matrix.build == 'windows'
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
