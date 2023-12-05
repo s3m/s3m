@@ -100,7 +100,8 @@ pub fn new(config_path: &Path) -> Command {
             Arg::new("quiet")
             .long("quiet")
             .short('q')
-            .help("Don't show progress bar when uploading")
+            .help("Don't show progress bar")
+            .num_args(0)
         )
         .arg(
             Arg::new("acl")
@@ -219,6 +220,174 @@ hosts:
                 .map(|s| s.display().to_string()),
             Some(config.join("config.yml").display().to_string())
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_clean() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--clean"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<bool>("clean").copied(), Some(true));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_buffer() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--buffer", "123"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<usize>("buffer").map(|s| *s), Some(123));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_config() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--config", "test.yml"]);
+        assert!(m.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_pipe() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--pipe"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<bool>("pipe").copied(), Some(true));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_tmp_dir() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--tmp-dir", "/tmp"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<PathBuf>("tmp-dir")
+                .map(|s| s.display().to_string()),
+            Some("/tmp".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_quiet() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--quiet"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<bool>("quiet").copied(), Some(true));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_acl() -> Result<()> {
+        let tets = vec![
+            "private",
+            "public-read",
+            "public-read-write",
+            "authenticated-read",
+            "aws-exec-read",
+            "bucket-owner-read",
+            "bucket-owner-full-control",
+        ];
+        for acl in tets {
+            let config = get_config().unwrap();
+            let cmd = new(&config);
+            let m = cmd.try_get_matches_from(vec!["s3m", "test", "--acl", acl]);
+            assert!(m.is_ok());
+
+            // get matches
+            let m = m.unwrap();
+            assert_eq!(m.get_one::<String>("acl").map(String::as_str), Some(acl));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_meta() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--meta", "key1=value1;key2=value2"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<String>("meta").map(String::as_str),
+            Some("key1=value1;key2=value2")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_checksum() -> Result<()> {
+        let tets = vec!["crc32", "crc32c", "sha1", "sha256"];
+        for checksum in tets {
+            let config = get_config().unwrap();
+            let cmd = new(&config);
+            let m = cmd.try_get_matches_from(vec!["s3m", "test", "--checksum", checksum]);
+            assert!(m.is_ok());
+
+            // get matches
+            let m = m.unwrap();
+            assert_eq!(
+                m.get_one::<String>("checksum").map(String::as_str),
+                Some(checksum)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_arguments() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "/path/to/file", "s3/my-bucket/path/to/file"]);
+
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<String>("arguments").map(String::as_str),
+            Some("/path/to/file")
+        );
+        let args: Vec<&str> = m
+            .get_many::<String>("arguments")
+            .unwrap_or_default()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(args, vec!["/path/to/file", "s3/my-bucket/path/to/file"]);
 
         Ok(())
     }

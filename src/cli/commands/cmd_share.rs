@@ -20,3 +20,39 @@ pub fn command() -> Command {
                 .value_parser(validator_is_num()),
         )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    #[test]
+    fn test_check_expire() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--expire", "604800"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<usize>("expire").map_or_else(|| 0, |v| *v),
+            604800 as usize
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_arguments() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<String>("arguments").map(String::as_str),
+            Some("test")
+        );
+        Ok(())
+    }
+}

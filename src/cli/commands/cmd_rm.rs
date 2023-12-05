@@ -24,3 +24,51 @@ pub fn command() -> Command {
                 .num_args(0),
         )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    #[test]
+    fn test_check_arguments() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<String>("arguments").map(String::as_str),
+            Some("test")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_abort() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--abort", "test"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<String>("UploadId").map(String::as_str),
+            Some("test")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_bucket() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--bucket"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<bool>("bucket").copied(), Some(true));
+        Ok(())
+    }
+}
