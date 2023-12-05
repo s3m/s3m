@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.7.2"
+version = "0.7.3"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -31,6 +31,7 @@ http = "1"
 indicatif = "0.17"
 md5 = "0.7"
 num_cpus = "1.16"
+openssl = { version = "0.10.61", features = ["vendored"] }
 percent-encoding = "2.3"
 reqwest = { version = "0.11", features = ["stream"] }
 ring = "0.17"
