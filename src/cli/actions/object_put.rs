@@ -82,8 +82,15 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
             // file_path
             let file_path = Path::new(file);
 
+            log::debug!(
+                "file path: {}\nfile size: {file_size}\nlast modified time: {file_mtime}\nbuffer size: {buf_size}\nparts: {parts}",
+                file_path.display()
+            );
+
             // get the checksum with progress bar
             let blake3_checksum = blake3_checksum(file_path, quiet)?;
+
+            log::debug!("checksum: {}", &blake3_checksum);
 
             // keep track of the uploaded parts
             let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
@@ -104,9 +111,11 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
 
             // upload the file in parts if it is bigger than the chunk size (buf_size)
             if file_size > buf_size as u64 {
-                // return only the the additional checksum algorithim if the option is set
+                // return only the the additional checksum algorithm if the option is set
                 let additional_checksum =
                     calculate_additional_checksum(file_path, checksum_algorithm, false).await;
+
+                log::debug!("additional checksum: {:#?}", &additional_checksum);
 
                 let rs = upload_multipart(
                     s3,
@@ -122,6 +131,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                 )
                 .await
                 .context("multipart upload failed")?;
+
                 if !quiet {
                     println!("{rs}");
                 }
@@ -131,6 +141,8 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                 // calculate the additional checksum if the option is set
                 let additional_checksum =
                     calculate_additional_checksum(file_path, checksum_algorithm, true).await;
+
+                log::debug!("additional checksum: {:?}", &additional_checksum);
 
                 let rs = upload(
                     s3,

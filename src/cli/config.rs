@@ -1,22 +1,32 @@
 use crate::s3::Region;
 use anyhow::{Context, Result};
+use secrecy::Secret;
 use serde::Deserialize;
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
 
-#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Deserialize)]
 pub struct Config {
     pub hosts: BTreeMap<String, Host>,
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Deserialize)]
 pub struct Host {
     pub endpoint: Option<String>,
     pub region: Option<String>,
+
     #[serde(default)]
     pub access_key: String,
-    #[serde(default)]
-    pub secret_key: String,
+
+    #[serde(default = "default_secret_key")]
+    pub secret_key: SecretKey,
+
     pub bucket: Option<String>,
+}
+
+pub type SecretKey = Secret<String>;
+
+pub fn default_secret_key() -> SecretKey {
+    Secret::new(String::new())
 }
 
 impl Config {
@@ -58,6 +68,7 @@ impl Host {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
     use std::io::Write;
     use std::str::FromStr;
     use tempfile::NamedTempFile;
@@ -103,7 +114,7 @@ hosts:
         let c = c.unwrap();
         assert_eq!(c.hosts.len(), 1);
         assert_eq!(c.hosts.get("s3").unwrap().access_key, "XXX");
-        assert_eq!(c.hosts.get("s3").unwrap().secret_key, "YYY");
+        assert_eq!(c.hosts.get("s3").unwrap().secret_key.expose_secret(), "YYY");
         assert_eq!(
             c.hosts.get("s3").unwrap().bucket,
             Some("my-bucket".to_string())
@@ -345,7 +356,7 @@ hosts:
         let mut tmp_file = NamedTempFile::new().unwrap();
         tmp_file.write_all(yaml_content.as_bytes()).unwrap();
         let c = Config::new(tmp_file.into_temp_path().to_path_buf());
-        assert!(c.is_ok());
+        //        assert!(c.is_ok());
         let c = c.unwrap();
 
         for (name, region, endpoint) in &aws_s3_regions {

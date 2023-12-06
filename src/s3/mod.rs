@@ -65,13 +65,14 @@ impl S3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::Secret;
 
     #[test]
     fn test_s3() {
         let s3 = S3::new(
             &Credentials::new(
                 "AKIAIOSFODNN7EXAMPLE",
-                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
@@ -88,7 +89,7 @@ mod tests {
         let s3 = S3::new(
             &Credentials::new(
                 "AKIAIOSFODNN7EXAMPLE",
-                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),

@@ -1,3 +1,4 @@
+use secrecy::{ExposeSecret, Secret};
 use std::env;
 
 #[derive(Clone, Debug)]
@@ -5,19 +6,20 @@ pub struct Credentials {
     // AWS_ACCESS_KEY_ID
     key: String,
     // AWS_SECRET_ACCESS_KEY
-    secret: String,
+    secret: Secret<String>,
 }
 
 impl Credentials {
     // TODO
     // give priority to passed keys and then env
     #[must_use]
-    pub fn new(access: &str, secret: &str) -> Self {
+    pub fn new(access: &str, secret: &Secret<String>) -> Self {
         let access_key = env::var("AWS_ACCESS_KEY_ID").unwrap_or_else(|_| access.to_string());
-        let secret_key = env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_else(|_| secret.to_string());
+        let secret_key = env::var("AWS_SECRET_ACCESS_KEY")
+            .unwrap_or_else(|_| secret.expose_secret().to_string());
         Self {
             key: access_key,
-            secret: secret_key,
+            secret: Secret::new(secret_key),
         }
     }
 
@@ -30,7 +32,7 @@ impl Credentials {
     /// Get a reference to the secret access key.
     #[must_use]
     pub fn aws_secret_access_key(&self) -> &str {
-        &self.secret
+        self.secret.expose_secret()
     }
 }
 
@@ -40,7 +42,7 @@ mod tests {
 
     #[test]
     fn test_credentials() {
-        let creds = Credentials::new("access", "secret");
+        let creds = Credentials::new("access", &Secret::new(String::from("secret")));
         assert_eq!(creds.aws_access_key_id(), "access");
         assert_eq!(creds.aws_secret_access_key(), "secret");
     }
@@ -53,7 +55,7 @@ mod tests {
                 ("AWS_SECRET_ACCESS_KEY", Some("env-secret")),
             ],
             || {
-                let creds = Credentials::new("access", "secret");
+                let creds = Credentials::new("access", &Secret::new(String::from("secret")));
                 assert_eq!(creds.aws_access_key_id(), "env-access");
                 assert_eq!(creds.aws_secret_access_key(), "env-secret");
             },

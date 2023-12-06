@@ -21,6 +21,9 @@ impl Db {
     /// Will return `Err` if can not create the db
     pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &Path) -> Result<Self> {
         let key = format!("{} {} {}", &s3.hash()[0..8], key, mtime);
+
+        log::debug!("db key: [{}], path: {}", &key, path.display());
+
         let db = sled::Config::new()
             .path(format!("{}/streams/{}", path.display(), checksum))
             .use_compression(true)
@@ -154,6 +157,7 @@ mod tests {
     use super::*;
     use crate::s3::{credentials::Credentials, Region, S3};
     use anyhow::Result;
+    use secrecy::Secret;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -164,7 +168,7 @@ mod tests {
         let s3 = S3::new(
             &Credentials::new(
                 "AKIAIOSFODNN7EXAMPLE",
-                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
@@ -209,7 +213,7 @@ mod tests {
         let s3 = S3::new(
             &Credentials::new(
                 "AKIAIOSFODNN7EXAMPLE",
-                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
@@ -247,7 +251,7 @@ mod tests {
         let s3 = S3::new(
             &Credentials::new(
                 "AKIAIOSFODNN7EXAMPLE",
-                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),

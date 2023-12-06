@@ -35,6 +35,22 @@ pub fn start() -> Result<(S3, Action)> {
     // get the matches
     let matches = cmd.get_matches();
 
+    let verbosity_level =
+        match matches
+            .get_one::<u8>("verbose")
+            .map_or(0, |&v| if v > 1 { 4 } else { v })
+        {
+            0 => log::LevelFilter::Off,
+            1 => log::LevelFilter::Info,
+            _ => log::LevelFilter::Debug,
+        };
+
+    env_logger::Builder::new()
+        .filter_level(verbosity_level)
+        .init();
+
+    log::info!("config path: {}", config_path.display());
+
     // handle option --clean
     // removes ~/.config/s3m/streams directory
     if matches.get_one::<bool>("clean").copied().unwrap_or(false) {
@@ -51,6 +67,8 @@ pub fn start() -> Result<(S3, Action)> {
     if buf_size < 5_242_880 {
         buf_size = 10_485_760;
     }
+
+    log::info!("buffer size: {}", buf_size);
 
     // Config file is required
     let config_file: PathBuf = matches.get_one::<PathBuf>("config").map_or_else(
@@ -78,6 +96,8 @@ pub fn start() -> Result<(S3, Action)> {
     // create the action
     let mut hbp = matches::host_bucket_path(&matches)?;
 
+    log::info!("hbp: {:?}", hbp);
+
     // HOST: get it from the config file
     let host: &Host = match config.get_host(hbp[0]) {
         Ok(h) => {
@@ -93,8 +113,12 @@ pub fn start() -> Result<(S3, Action)> {
         }
     };
 
+    log::debug!("host: {:#?}", host);
+
     // REGION
     let region = host.get_region()?;
+
+    log::debug!("region: {:#?}", region);
 
     // BUCKET
     let bucket = if !hbp.is_empty() {
@@ -122,14 +146,20 @@ pub fn start() -> Result<(S3, Action)> {
         ));
     };
 
+    log::debug!("bucket: {:#?}", bucket);
+
     // AUTH
     let credentials = Credentials::new(&host.access_key, &host.secret_key);
 
     // S3
     let s3 = S3::new(&credentials, &region, bucket.clone());
 
+    log::debug!("s3: {:#?}", s3);
+
     // create the action
     let action = dispatch::dispatch(hbp, bucket, buf_size, config_path, &matches)?;
+
+    log::debug!("action: {:#?}", action);
 
     Ok((s3, action))
 }

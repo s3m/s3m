@@ -1,3 +1,7 @@
+## 0.7.4
+* Added --verbose flag
+* Fixed bug potential to loop indefinitely while creating multi-parts
+
 ## 0.7.1
 * Removed after_help.
 * Added `-f/--force` when getting a file.

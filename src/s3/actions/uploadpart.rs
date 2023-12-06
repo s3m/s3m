@@ -33,6 +33,18 @@ impl<'a> UploadPart<'a> {
         additional_checksum: Option<&'a mut Checksum>,
     ) -> Self {
         let pn = part_number.to_string();
+
+        log::debug!(
+            "key: {key}, file: {file}, part_number: {pn}, upload_id: {upload_id}, seek: {seek}, chunk: {chunk}, additional_checksum: {additional_checksum:?}",
+            key = key,
+            file = file.display(),
+            pn = pn,
+            upload_id = upload_id,
+            seek = seek,
+            chunk = chunk,
+            additional_checksum = additional_checksum
+        );
+
         Self {
             key,
             file,
@@ -144,6 +156,7 @@ mod tests {
     use crate::s3::{
         tools, {Credentials, Region, S3},
     };
+    use secrecy::Secret;
 
     #[test]
     fn test_method() {
@@ -171,7 +184,7 @@ mod tests {
         let s3 = S3::new(
             &Credentials::new(
                 "AKIAIOSFODNN7EXAMPLE",
-                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),

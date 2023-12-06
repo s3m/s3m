@@ -76,6 +76,7 @@ mod tests {
     use crate::s3::{
         tools, {Credentials, Region, S3},
     };
+    use secrecy::Secret;
 
     #[test]
     fn test_method() {
@@ -88,7 +89,7 @@ mod tests {
         let s3 = S3::new(
             &Credentials::new(
                 "AKIAIOSFODNN7EXAMPLE",
-                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),

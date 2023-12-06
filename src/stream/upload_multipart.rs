@@ -29,6 +29,21 @@ pub async fn upload_multipart(
     quiet: bool,
     additional_checksum: Option<Checksum>,
 ) -> Result<String> {
+    log::debug!(
+        "Starting multi part upload:
+        key: {key}
+        file: {}
+        file_size: {file_size}
+        part size: {chunk_size}
+        acl: {:#?}
+        meta: {:#?}
+        additional checksum: {:#?}",
+        file.display(),
+        acl,
+        meta,
+        additional_checksum
+    );
+
     // trees for keeping track of parts to upload
     let db_parts = sdb.db_parts()?;
     let db_uploaded = sdb.db_uploaded()?;
@@ -48,17 +63,22 @@ pub async fn upload_multipart(
         response.upload_id
     };
 
+    log::debug!("upload_id: {}", &upload_id);
+
     // if db_parts is not empty it means that a previous upload did not finish successfully.
     // skip creating the parts again and try to re-upload the pending ones
     if db_parts.is_empty() {
         let mut chunk = chunk_size;
         let mut seek: u64 = 0;
         let mut number: u16 = 1;
-        while seek < file_size {
+        while seek < file_size && chunk > 0 {
             if (file_size - seek) <= chunk {
                 chunk = file_size % chunk;
             }
             sdb.create_part(number, seek, chunk, additional_checksum.clone())?;
+
+            log::debug!("part: {number}, seek: {seek}, chunk: {chunk}, file size: {file_size}");
+
             seek += chunk;
             number += 1;
         }
@@ -85,9 +105,18 @@ pub async fn upload_multipart(
         1
     };
 
+    log::info!(
+        "num_cpus: {}, threads: {}",
+        num_cpus::get_physical(),
+        threads
+    );
+
     for part in db_parts.iter().values() {
         if let Ok(p) = part {
             let part: Part = deserialize(&p[..])?;
+
+            log::debug!("Task push part: {:?}", part);
+
             tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
         }
 
