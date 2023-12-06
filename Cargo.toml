@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.7.3"
+version = "0.7.4"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -53,6 +53,11 @@ buildflags = ["--release"]
 
 [package.metadata.rpm.targets]
 s3m = { path = "/usr/bin/s3m" }
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/s3m", dest = "/usr/bin/s3m", mode = "0755" },
+]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_futures"] }
