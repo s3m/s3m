@@ -32,7 +32,7 @@ pub async fn upload(
 
     if !quiet {
         // Spawn a thread to update the progress bar
-        if let Some(pb) = Bar::new(file_size).progress {
+        if let Some(pb) = Bar::new(file_size, Some(quiet)).progress {
             tokio::spawn(async move {
                 let mut uploaded = 0;
                 while let Ok(i) = receiver.recv() {
