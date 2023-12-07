@@ -1,7 +1,7 @@
 use crate::{
     cli::progressbar::Bar,
     s3::{actions, checksum::Checksum, S3},
-    stream::{db::Db, part::Part},
+    stream::{db::Db, iterator::PartIterator, part::Part},
 };
 use anyhow::{anyhow, Result};
 use bincode::{deserialize, serialize};
@@ -68,88 +68,38 @@ pub async fn upload_multipart(
     // if db_parts is not empty it means that a previous upload did not finish successfully.
     // skip creating the parts again and try to re-upload the pending ones
     if db_parts.is_empty() {
-        let mut chunk = chunk_size;
-        let mut seek: u64 = 0;
-        let mut number: u16 = 1;
-        while seek < file_size && chunk > 0 {
-            if (file_size - seek) <= chunk {
-                chunk = file_size % chunk;
-            }
+        for (number, seek, chunk) in PartIterator::new(file_size, chunk_size) {
             sdb.create_part(number, seek, chunk, additional_checksum.clone())?;
-
-            log::debug!("part: {number}, seek: {seek}, chunk: {chunk}, file size: {file_size}");
-
-            seek += chunk;
-            number += 1;
         }
         db_parts.flush()?;
     }
 
     // Upload parts progress bar
-    let pb = if quiet {
-        Bar::default()
-    } else {
-        Bar::new(file_size)
-    };
+    let pb = Bar::new(file_size, Some(quiet));
 
-    if let Some(pb) = pb.progress.as_ref() {
-        pb.inc(db_uploaded.len() as u64 * chunk_size);
-    }
+    increment_progress_bar(&pb, db_uploaded.len() as u64 * chunk_size, None);
 
     let mut tasks = FuturesUnordered::new();
 
-    // Calculate the number of CPUs to use, leaving 2 free
-    let threads = if num_cpus::get_physical() > 2 {
-        num_cpus::get_physical() - 2
-    } else {
-        1
-    };
+    for part in db_parts
+        .iter()
+        .values()
+        .filter_map(Result::ok)
+        .map(|p| deserialize(&p[..]).map_err(anyhow::Error::from))
+    {
+        let part = part?;
 
-    log::info!(
-        "num_cpus: {}, threads: {}",
-        num_cpus::get_physical(),
-        threads
-    );
+        log::debug!("Task push part: {:?}", part);
 
-    for part in db_parts.iter().values() {
-        if let Ok(p) = part {
-            let part: Part = deserialize(&p[..])?;
+        tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
 
-            log::debug!("Task push part: {:?}", part);
-
-            tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
-        }
-
-        // limit to N threads
-        if tasks.len() == threads {
-            if let Some(r) = tasks.next().await {
-                match r {
-                    Ok(_) => {
-                        if let Some(pb) = pb.progress.as_ref() {
-                            pb.inc(chunk_size);
-                        }
-                    }
-                    Err(e) => return Err(anyhow!("{}", e)),
-                }
-            }
-        }
+        await_tasks(&mut tasks, &pb, chunk_size).await?;
     }
 
-    // consume remaining tasks
-    while let Some(r) = tasks.next().await {
-        match r {
-            Ok(_) => {
-                if let Some(pb) = pb.progress.as_ref() {
-                    pb.inc(chunk_size);
-                }
-            }
-            Err(e) => return Err(anyhow!("{}", e)),
-        }
-    }
+    await_remaining_tasks(&mut tasks, &pb, chunk_size).await?;
 
-    if let Some(pb) = pb.progress.as_ref() {
-        pb.finish();
-    }
+    // finish progress bar
+    increment_progress_bar(&pb, 0, Some(true));
 
     if !db_parts.is_empty() {
         return Err(anyhow!("could not upload all parts"));
@@ -168,6 +118,63 @@ pub async fn upload_multipart(
     sdb.save_etag(&rs.e_tag)?;
 
     Ok(format!("ETag: {}", rs.e_tag))
+}
+
+async fn await_tasks<T>(tasks: &mut FuturesUnordered<T>, pb: &Bar, chunk_size: u64) -> Result<()>
+where
+    T: std::future::Future<Output = Result<usize>> + Send,
+{
+    // limit to num_cpus - 2 or 1
+    while tasks.len() >= (num_cpus::get_physical() - 2).max(1) {
+        log::debug!("Available tasks: {}", tasks.len());
+
+        if let Some(r) = tasks.next().await {
+            match r {
+                Ok(_) => {
+                    log::debug!("Task completed");
+
+                    increment_progress_bar(pb, chunk_size, None);
+                }
+                Err(e) => return Err(anyhow!("{}", e)),
+            }
+        }
+    }
+
+    log::debug!("Remaining tasks: {}", tasks.len());
+
+    Ok(())
+}
+
+// consume remaining tasks
+async fn await_remaining_tasks<T>(
+    tasks: &mut FuturesUnordered<T>,
+    pb: &Bar,
+    chunk_size: u64,
+) -> Result<()>
+where
+    T: std::future::Future<Output = Result<usize>> + Send,
+{
+    while let Some(r) = tasks.next().await {
+        match r {
+            Ok(_) => {
+                log::debug!("Task completed");
+
+                increment_progress_bar(pb, chunk_size, None);
+            }
+            Err(e) => return Err(anyhow!("{}", e)),
+        }
+    }
+    Ok(())
+}
+
+fn increment_progress_bar(pb: &Bar, chunk_size: u64, finish: Option<bool>) {
+    if let Some(pb) = pb.progress.as_ref() {
+        pb.inc(chunk_size);
+
+        if finish == Some(true) {
+            pb.finish();
+        }
+    }
 }
 
 async fn upload_part(
@@ -197,12 +204,17 @@ async fn upload_part(
             additional_checksum.as_mut(),
         );
 
+        log::debug!("Uploading part: {}", part_number);
+
         // retry 3 times
         match action.request(s3).await {
             Ok(etag) => break etag,
             Err(e) => {
                 if retries < MAX_RETRIES {
                     retries += 1;
+
+                    log::warn!("Error uploading part: {}, {}", part_number, e);
+
                     sleep(Duration::from_secs(retries as u64)).await;
                 } else {
                     return Err(e);

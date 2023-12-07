@@ -17,15 +17,11 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-const MAX_PART_SIZE: usize = 5_368_709_120;
-const MAX_FILE_SIZE: usize = 5_497_558_138_880;
-const MAX_PARTS_PER_UPLOAD: usize = 10_000;
-
 pub async fn handle(s3: &S3, action: Action) -> Result<()> {
     if let Action::PutObject {
         acl,
         meta,
-        mut buf_size,
+        buf_size,
         file,
         key,
         pipe,
@@ -63,34 +59,21 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                     ))
                 })?;
 
-            // <https://aws.amazon.com/blogs/aws/amazon-s3-object-size-limit/>
-            if file_size > MAX_FILE_SIZE as u64 {
-                return Err(anyhow!("object size limit 5 TB"));
-            }
-
-            // calculate the chunk size
-            let mut parts = file_size / buf_size as u64;
-            while parts > MAX_PARTS_PER_UPLOAD as u64 {
-                buf_size *= 2;
-                parts = file_size / buf_size as u64;
-            }
-
-            if buf_size > MAX_PART_SIZE {
-                return Err(anyhow!("max part size 5 GB"));
-            }
+            // get the part/chunk size
+            let part_size = tools::calculate_part_size(file_size, buf_size as u64)?;
 
             // file_path
             let file_path = Path::new(file);
 
-            log::debug!(
-                "file path: {}\nfile size: {file_size}\nlast modified time: {file_mtime}\nbuffer size: {buf_size}\nparts: {parts}",
+            log::info!(
+                "file path: {}\nfile size: {file_size}\nlast modified time: {file_mtime}\npart size: {part_size}",
                 file_path.display()
             );
 
             // get the checksum with progress bar
             let blake3_checksum = blake3_checksum(file_path, quiet)?;
 
-            log::debug!("checksum: {}", &blake3_checksum);
+            log::info!("checksum: {}", &blake3_checksum);
 
             // keep track of the uploaded parts
             let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
@@ -110,7 +93,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
             };
 
             // upload the file in parts if it is bigger than the chunk size (buf_size)
-            if file_size > buf_size as u64 {
+            if file_size > part_size as u64 {
                 // return only the the additional checksum algorithm if the option is set
                 let additional_checksum =
                     calculate_additional_checksum(file_path, checksum_algorithm, false).await;
@@ -122,7 +105,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                     &key,
                     file_path,
                     file_size,
-                    buf_size as u64,
+                    part_size,
                     &db,
                     acl,
                     meta,
