@@ -116,6 +116,11 @@ pub trait Action {
             }
         }
 
+        // --no-sign-request
+        if s3.no_sign_request {
+            return Ok((url, BTreeMap::new()));
+        }
+
         let mut signature = Signature::new(s3, "s3", self.http_method()?)?;
 
         let headers = signature.sign(&url, hash_payload, md5, content_length, self.headers());

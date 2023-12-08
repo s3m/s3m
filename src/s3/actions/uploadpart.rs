@@ -188,6 +188,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
 
         let action = UploadPart::new("key", Path::new("file"), 1, "uid", 1, 1, None);

@@ -172,6 +172,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
         let db = Db::new(&s3, "key", "checksum", 0, &path)?;
         assert_eq!(db.db().len(), 0);
@@ -217,6 +218,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
         let db = Db::new(&s3, "key", "checksum", 0, &path)?;
         assert_eq!(db.db_parts()?.len(), 0);
@@ -255,6 +257,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
         let db = Db::new(&s3, "key", "checksum", 0, &path)?;
         assert_eq!(db.db_uploaded()?.len(), 0);

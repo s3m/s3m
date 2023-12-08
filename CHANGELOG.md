@@ -1,3 +1,6 @@
+## 0.8.0 🚋
+* Added option `--no-sign-request` to support public buckets
+
 ## 0.7.6
 * Added option `-n/--number` [1..3500] to specify the max number of concurrent requests
 

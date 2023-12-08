@@ -195,6 +195,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
         let action = CreateMultipartUpload::new("key", None, None, None);
         let (url, headers) = action

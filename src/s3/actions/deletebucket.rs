@@ -89,6 +89,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
         let action = DeleteBucket::new();
         let (url, headers) = action

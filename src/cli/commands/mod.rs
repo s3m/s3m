@@ -183,9 +183,15 @@ pub fn new(config_path: &Path) -> Command {
             .short('n')
             .long("number")
             .default_value(num_threads)
-            .global(true)
             .value_parser(clap::value_parser!(u16).range(1..=3500))
             .num_args(1)
+        )
+        .arg(
+            Arg::new("no-sign-request")
+            .help("Do not sign requests (Credentials not required for public buckets)")
+            .long("no-sign-request")
+            .global(true)
+            .num_args(0)
         )
         .subcommand(cmd_acl::command())
         .subcommand(cmd_get::command())
@@ -414,6 +420,24 @@ hosts:
             let m = cmd.try_get_matches_from(vec!["s3m", "test", "--number", n]);
             assert!(m.is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_no_sign_request() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--no-sign-request"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<bool>("no-sign-request")
+                .copied()
+                .unwrap_or(false),
+            true
+        );
         Ok(())
     }
 

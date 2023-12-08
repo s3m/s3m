@@ -129,6 +129,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
 
         let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);

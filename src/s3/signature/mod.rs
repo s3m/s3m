@@ -342,7 +342,7 @@ mod tests {
         let date = DateTime::parse_from_rfc2822("Fri, 24 May 2013 00:00:00 GMT").unwrap();
         let date_utc: DateTime<Utc> = date.with_timezone(&Utc);
 
-        let s3 = S3::new(&credentials, &region, None);
+        let s3 = S3::new(&credentials, &region, None, false);
         let mut sign = Signature::new(&s3, "s3", Method::from_bytes(b"GET").unwrap()).unwrap();
         sign.datetime = date_utc;
         let rs = sign.presigned_url("/test.txt", 86400).unwrap();

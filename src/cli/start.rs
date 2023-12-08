@@ -151,8 +151,14 @@ pub fn start() -> Result<(S3, Action)> {
     // AUTH
     let credentials = Credentials::new(&host.access_key, &host.secret_key);
 
-    // S3
-    let s3 = S3::new(&credentials, &region, bucket.clone());
+    // sign or not the request ( --no-sign-request )
+    let no_sign_request = matches
+        .get_one::<bool>("no-sign-request")
+        .copied()
+        .unwrap_or(false);
+
+    // create the S3 object
+    let s3 = S3::new(&credentials, &region, bucket.clone(), no_sign_request);
 
     log::debug!("s3: {:#?}", s3);
 

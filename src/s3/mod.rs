@@ -20,17 +20,25 @@ pub struct S3 {
     region: Region,
     // bucket name
     bucket: Option<String>,
+    // sign request
+    no_sign_request: bool,
 }
 
 // Amazon S3 API Reference
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations.html>
 impl S3 {
     #[must_use]
-    pub fn new(credentials: &Credentials, region: &Region, bucket: Option<String>) -> Self {
+    pub fn new(
+        credentials: &Credentials,
+        region: &Region,
+        bucket: Option<String>,
+        no_sign_request: bool,
+    ) -> Self {
         Self {
             credentials: credentials.clone(),
             region: region.clone(),
             bucket,
+            no_sign_request,
         }
     }
 
@@ -76,6 +84,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
 
         assert_eq!(
@@ -93,6 +102,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
 
         assert_eq!(

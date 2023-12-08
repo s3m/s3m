@@ -123,6 +123,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
 
         for (acl, expected) in test {
@@ -143,6 +144,7 @@ mod tests {
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),
+            false,
         );
 
         let action = PutObjectAcl::new("key", "public-read");
