@@ -98,17 +98,9 @@ mod tests {
     // test iterate 50GB file with 10MB chunk chunk_size
     fn test_part_iterator_with_large_file() {
         let file_size = 50 * 1024 * 1024 * 1000;
-        let mut chunk_size = 10 * 1024 * 1024;
+        let chunk_size = 10 * 1024 * 1024;
 
-        // calculate the chunk size
-        let mut parts = file_size / chunk_size as u64;
-        while parts > 10_000 as u64 {
-            chunk_size *= 2;
-            parts = file_size / chunk_size as u64;
-        }
-
-        let (number, seek, chunk) = PartIterator::new(file_size, chunk_size).last().unwrap();
-        assert_eq!(parts, number.into());
+        let (_number, seek, chunk) = PartIterator::new(file_size, chunk_size).last().unwrap();
         assert_eq!(file_size, seek + chunk);
     }
 

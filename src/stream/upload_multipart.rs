@@ -10,7 +10,7 @@ use sled::transaction::{TransactionError, Transactional};
 use std::{collections::BTreeMap, path::Path};
 use tokio::time::{sleep, Duration};
 
-const MAX_RETRIES: usize = 3;
+const MAX_RETRIES: u32 = 3;
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
@@ -28,6 +28,7 @@ pub async fn upload_multipart(
     meta: Option<BTreeMap<String, String>>,
     quiet: bool,
     additional_checksum: Option<Checksum>,
+    max_requests: u16,
 ) -> Result<String> {
     log::debug!(
         "Starting multi part upload:
@@ -81,10 +82,7 @@ pub async fn upload_multipart(
 
     let mut tasks = FuturesUnordered::new();
 
-    log::info!(
-        "Concurrent tasks: {}",
-        (num_cpus::get_physical() - 2).max(1)
-    );
+    log::info!("Max concurrent requests: {}", max_requests);
 
     for part in db_parts
         .iter()
@@ -99,7 +97,7 @@ pub async fn upload_multipart(
         // spawn task (upload part)
         tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
 
-        await_tasks(&mut tasks, &pb, chunk_size).await?;
+        await_tasks(&mut tasks, &pb, chunk_size, max_requests.into()).await?;
     }
 
     // wait for the remaining tasks
@@ -124,18 +122,26 @@ pub async fn upload_multipart(
     // save the returned Etag
     sdb.save_etag(&rs.e_tag)?;
 
+    // upload finished
+    log::info!("Upload finished, ETag: {}", rs.e_tag);
+
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
 // throttling tasks
-async fn await_tasks<T>(tasks: &mut FuturesUnordered<T>, pb: &Bar, chunk_size: u64) -> Result<()>
+async fn await_tasks<T>(
+    tasks: &mut FuturesUnordered<T>,
+    pb: &Bar,
+    chunk_size: u64,
+    max_requests: usize,
+) -> Result<()>
 where
     T: std::future::Future<Output = Result<usize>> + Send,
 {
     log::debug!("Running tasks: {}", tasks.len());
 
     // limit to num_cpus - 2 or 1
-    while tasks.len() >= (num_cpus::get_physical() - 2).max(1) {
+    while tasks.len() >= max_requests {
         if let Some(r) = tasks.next().await {
             r.map_err(|e| anyhow!("{}", e))?;
             increment_progress_bar(pb, chunk_size, None);
@@ -188,45 +194,69 @@ async fn upload_part(
 
     // do request to get the ETag and update the checksum if required
     let part_number = part.get_number();
-    let mut retries = 0;
-    let etag = loop {
-        let action = actions::UploadPart::new(
+
+    let mut etag: String = String::new();
+
+    // Retry with exponential backoff
+    for attempt in 1..=MAX_RETRIES {
+        let backoff_time = 2u64.pow(attempt - 1);
+        if attempt > 1 {
+            log::warn!(
+                "Error uploading part: {}, retrying in {} seconds",
+                part_number,
+                backoff_time
+            );
+
+            sleep(Duration::from_secs(backoff_time)).await;
+        }
+
+        match try_upload_part(
+            s3,
             key,
             file,
             part_number,
             uid,
             part.get_seek(),
             part.get_chunk(),
-            additional_checksum.as_mut(),
-        );
+            &mut additional_checksum,
+        )
+        .await
+        {
+            Ok(e) => {
+                etag = e;
 
-        log::debug!("Uploading part: {}", part_number);
+                log::info!(
+                    "Uploaded part: {}, etag: {}{}",
+                    part_number,
+                    etag,
+                    additional_checksum
+                        .as_ref()
+                        .map(|c| format!(" additional_checksum: {}", c.checksum))
+                        .unwrap_or_default()
+                );
 
-        // retry 3 times
-        match action.request(s3).await {
-            Ok(etag) => break etag,
+                break;
+            }
+
             Err(e) => {
-                if retries < MAX_RETRIES {
-                    retries += 1;
+                log::error!(
+                    "Error uploading part: {}, attempt {}/{} failed: {}",
+                    part.get_number(),
+                    attempt,
+                    MAX_RETRIES,
+                    e
+                );
 
-                    log::warn!(
-                        "Error uploading part: {}, {}, retrying: {}",
-                        part_number,
-                        e,
-                        retries
-                    );
-
-                    sleep(Duration::from_secs(retries as u64)).await;
-                } else {
-                    log::error!("Error uploading part: {}, {}", part_number, e);
-
+                // Increment attempt after an error
+                if attempt == MAX_RETRIES {
+                    // If it's the last attempt, return the error without incrementing attempt
                     return Err(e);
                 }
+
+                continue;
             }
         }
-    };
-
-    log::info!("Uploaded part: {}, etag: {}", part_number, etag);
+    }
 
     // update part with the etag and checksum if any
     let part = part.set_etag(etag).set_checksum(additional_checksum);
@@ -245,4 +275,30 @@ async fn upload_part(
         })?;
 
     db.flush()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_upload_part(
+    s3: &S3,
+    key: &str,
+    file: &Path,
+    number: u16,
+    uid: &str,
+    seek: u64,
+    chunk: u64,
+    additional_checksum: &mut Option<Checksum>,
+) -> Result<String> {
+    let action = actions::UploadPart::new(
+        key,
+        file,
+        number,
+        uid,
+        seek,
+        chunk,
+        additional_checksum.as_mut(),
+    );
+
+    log::debug!("Uploading part: {}", number);
+
+    action.request(s3).await
 }

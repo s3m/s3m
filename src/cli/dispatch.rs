@@ -174,6 +174,7 @@ pub fn dispatch(
                     ToOwned::to_owned,
                 ),
                 checksum_algorithm: matches.get_one("checksum").map(|s: &String| s.to_string()),
+                number: matches.get_one::<u16>("number").copied().unwrap_or(1),
             })
         }
     }
@@ -397,6 +398,7 @@ hosts:
                 quiet,
                 tmp_dir,
                 checksum_algorithm,
+                number,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
@@ -408,6 +410,7 @@ hosts:
                 assert_eq!(quiet, false);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
+                assert_eq!(number, (num_cpus::get_physical() - 2).max(1) as u16);
             }
             _ => panic!("wrong action"),
         }
@@ -428,6 +431,8 @@ hosts:
             "h/b/f",
             "--acl",
             "public-read",
+            "--number",
+            "32",
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
@@ -444,6 +449,7 @@ hosts:
                 quiet,
                 tmp_dir,
                 checksum_algorithm,
+                number,
             } => {
                 assert_eq!(acl, Some("public-read".to_string()));
                 assert_eq!(meta, None);
@@ -455,6 +461,7 @@ hosts:
                 assert_eq!(quiet, false);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
+                assert_eq!(number, 32);
             }
             _ => panic!("wrong action"),
         }
@@ -477,6 +484,8 @@ hosts:
             "key1=val1;key2=val2",
             "--checksum",
             "sha256",
+            "-n",
+            "4",
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
@@ -493,6 +502,7 @@ hosts:
                 quiet,
                 tmp_dir,
                 checksum_algorithm,
+                number,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(
@@ -515,6 +525,7 @@ hosts:
                 assert_eq!(quiet, false);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, Some("sha256".to_string()));
+                assert_eq!(number, 4);
             }
             _ => panic!("wrong action"),
         }
