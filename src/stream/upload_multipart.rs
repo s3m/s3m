@@ -81,7 +81,10 @@ pub async fn upload_multipart(
 
     let mut tasks = FuturesUnordered::new();
 
-    log::info!("Available cpus: {}", (num_cpus::get_physical() - 2).max(1));
+    log::info!(
+        "Concurrent tasks: {}",
+        (num_cpus::get_physical() - 2).max(1)
+    );
 
     for part in db_parts
         .iter()
@@ -89,16 +92,14 @@ pub async fn upload_multipart(
         .filter_map(Result::ok)
         .map(|p| deserialize(&p[..]).map_err(anyhow::Error::from))
     {
-        let part = part?;
+        let part: Part = part?;
 
-        log::info!("Task push part: {:?}", part);
+        log::info!("Task push part: {}", part.get_number());
 
-        // spawn task
+        // spawn task (upload part)
         tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
 
         await_tasks(&mut tasks, &pb, chunk_size).await?;
-
-        log::info!("Tasks length: {}", tasks.len());
     }
 
     // wait for the remaining tasks
@@ -131,17 +132,13 @@ async fn await_tasks<T>(tasks: &mut FuturesUnordered<T>, pb: &Bar, chunk_size: u
 where
     T: std::future::Future<Output = Result<usize>> + Send,
 {
+    log::debug!("Running tasks: {}", tasks.len());
+
     // limit to num_cpus - 2 or 1
     while tasks.len() >= (num_cpus::get_physical() - 2).max(1) {
         if let Some(r) = tasks.next().await {
-            match r {
-                Ok(_) => {
-                    log::debug!("Task completed");
-
-                    increment_progress_bar(pb, chunk_size, None);
-                }
-                Err(e) => return Err(anyhow!("{}", e)),
-            }
+            r.map_err(|e| anyhow!("{}", e))?;
+            increment_progress_bar(pb, chunk_size, None);
         }
     }
 
@@ -157,15 +154,11 @@ async fn await_remaining_tasks<T>(
 where
     T: std::future::Future<Output = Result<usize>> + Send,
 {
-    while let Some(r) = tasks.next().await {
-        match r {
-            Ok(_) => {
-                log::debug!("Task completed");
+    log::debug!("Remaining tasks: {}", tasks.len());
 
-                increment_progress_bar(pb, chunk_size, None);
-            }
-            Err(e) => return Err(anyhow!("{}", e)),
-        }
+    while let Some(r) = tasks.next().await {
+        r.map_err(|e| anyhow!("{}", e))?;
+        increment_progress_bar(pb, chunk_size, None);
     }
     Ok(())
 }
@@ -216,15 +209,24 @@ async fn upload_part(
                 if retries < MAX_RETRIES {
                     retries += 1;
 
-                    log::warn!("Error uploading part: {}, {}", part_number, e);
+                    log::warn!(
+                        "Error uploading part: {}, {}, retrying: {}",
+                        part_number,
+                        e,
+                        retries
+                    );
 
                     sleep(Duration::from_secs(retries as u64)).await;
                 } else {
+                    log::error!("Error uploading part: {}, {}", part_number, e);
+
                     return Err(e);
                 }
             }
         }
     };
+
+    log::info!("Uploaded part: {}, etag: {}", part_number, etag);
 
     // update part with the etag and checksum if any
     let part = part.set_etag(etag).set_checksum(additional_checksum);
@@ -241,5 +243,6 @@ async fn upload_part(
         .map_err(|err| match err {
             TransactionError::Abort(err) | TransactionError::Storage(err) => err,
         })?;
+
     db.flush()
 }
