@@ -27,6 +27,8 @@ async fn compute_hash(
 }
 
 /// Compute the SHA256 and MD5 hashes of a file
+/// # Errors
+/// Will return an error if the file cannot be opened or read
 pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)> {
     let file = File::open(file_path).await?;
 
@@ -70,6 +72,8 @@ pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)
 }
 
 /// Compute the SHA256 and MD5 hashes of a file chunk
+/// # Errors
+/// Will return an error if the file cannot be opened or read
 pub async fn sha256_md5_digest_multipart(
     file_path: &Path,
     seek: u64,

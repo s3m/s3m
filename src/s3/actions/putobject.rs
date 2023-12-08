@@ -1,4 +1,5 @@
 use crate::{
+    cli::globals::GlobalArgs,
     s3::actions::{response_error, Action},
     s3::{
         checksum::{sha256_md5_digest, Checksum},
@@ -44,7 +45,7 @@ impl<'a> PutObject<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(self, s3: &S3) -> Result<BTreeMap<&str, String>> {
+    pub async fn request(self, s3: &S3, globals: GlobalArgs) -> Result<BTreeMap<&str, String>> {
         let (sha, md5, length) = sha256_md5_digest(self.file).await?;
 
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
@@ -55,6 +56,7 @@ impl<'a> PutObject<'a> {
             headers,
             Some(Path::new(self.file)),
             self.sender,
+            globals.throttle,
         )
         .await?;
 

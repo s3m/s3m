@@ -30,6 +30,10 @@ pub fn default_secret_key() -> SecretKey {
 }
 
 impl Config {
+    /// Create a new config from a config.yml file
+    /// # Errors
+    /// Will return an error if the config file is not found or if the config
+    /// cannot be parsed
     pub fn new(config_path: PathBuf) -> Result<Self> {
         let file = File::open(config_path)?;
 
@@ -39,6 +43,8 @@ impl Config {
     }
 
     /// Get the host from the config.yml
+    /// # Errors
+    /// Will return an error if the host is not found
     pub fn get_host(&self, name: &str) -> Result<&Host> {
         self.hosts
             .get(name)
@@ -48,6 +54,8 @@ impl Config {
 
 impl Host {
     /// Get the region for the host
+    /// # Errors
+    /// Will return an error if the region is not found
     pub fn get_region(&self) -> Result<Region> {
         Ok(match &self.region {
             Some(r) => r.parse::<Region>()?,
@@ -109,7 +117,6 @@ hosts:
         let mut tmp_file = NamedTempFile::new().unwrap();
         tmp_file.write_all(CONF.as_bytes()).unwrap();
         let c = Config::new(tmp_file.into_temp_path().to_path_buf());
-        println!("{:?}", c);
         assert!(c.is_ok());
         let c = c.unwrap();
         assert_eq!(c.hosts.len(), 1);

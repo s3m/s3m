@@ -5,6 +5,8 @@ use crate::{
 use anyhow::Result;
 use reqwest::Method;
 
+/// # Errors
+/// Will return an error if the action fails
 pub fn handle(s3: &S3, action: Action) -> Result<()> {
     if let Action::ShareObject { key, expire } = action {
         let url =

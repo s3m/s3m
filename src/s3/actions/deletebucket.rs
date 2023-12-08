@@ -21,7 +21,7 @@ impl DeleteBucket {
     pub async fn request(&self, s3: &S3) -> Result<String> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
         let response =
-            request::request(url.clone(), self.http_method()?, headers, None, None).await?;
+            request::request(url.clone(), self.http_method()?, headers, None, None, None).await?;
 
         if response.status().is_success() {
             Ok(response.text().await?)

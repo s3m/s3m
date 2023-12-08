@@ -1,5 +1,5 @@
 use crate::{
-    cli::{actions::Action, progressbar::Bar},
+    cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
     s3::{actions, S3},
 };
 use anyhow::{anyhow, Context, Result};
@@ -9,9 +9,15 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
 };
-use tokio::{fs::OpenOptions, io::AsyncWriteExt};
+use tokio::{
+    fs::OpenOptions,
+    io::AsyncWriteExt,
+    time::{sleep, Duration},
+};
 
-pub async fn handle(s3: &S3, action: Action) -> Result<()> {
+/// # Errors
+/// Will return an error if the action fails
+pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> {
     if let Action::GetObject {
         key,
         metadata,
@@ -57,7 +63,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
 
             // do the request
             let action = actions::GetObject::new(&key);
-            let mut res = action.request(s3).await?;
+            let mut res = action.request(s3, &globals).await?;
 
             // Open the file with the specified options
             let mut file = options
@@ -84,6 +90,11 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                 }
 
                 file.write_all(&bytes).await?;
+
+                // throttle bandwidth
+                if let Some(bandwidth_kb) = globals.throttle {
+                    throttle_download(bandwidth_kb, bytes.len()).await;
+                }
             }
 
             if let Some(pb) = pb.progress.as_ref() {
@@ -97,6 +108,22 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) {
+    let bandwidth_bytes_per_sec = bandwidth_kb * 1024;
+
+    let duration_per_chunk =
+        Duration::from_secs(chunk_size as u64 / bandwidth_bytes_per_sec as u64);
+
+    sleep(duration_per_chunk).await;
+
+    log::info!(
+        "Throttling to {} KB/s (duration per chunk: {}, chunk size: {})",
+        bandwidth_kb,
+        duration_per_chunk.as_secs_f64(),
+        chunk_size
+    );
 }
 
 fn get_dest(dest: Option<String>, file_name: &OsStr) -> Result<PathBuf> {

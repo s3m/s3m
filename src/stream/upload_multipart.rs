@@ -1,5 +1,5 @@
 use crate::{
-    cli::progressbar::Bar,
+    cli::{globals::GlobalArgs, progressbar::Bar},
     s3::{actions, checksum::Checksum, S3},
     stream::{db::Db, iterator::PartIterator, part::Part},
 };
@@ -16,6 +16,8 @@ const MAX_RETRIES: u32 = 3;
 // * Initiate Multipart Upload
 // * Upload Part
 // * Complete Multipart Upload
+/// # Errors
+/// Will return an error if the upload fails
 #[allow(clippy::too_many_arguments)]
 pub async fn upload_multipart(
     s3: &S3,
@@ -29,6 +31,7 @@ pub async fn upload_multipart(
     quiet: bool,
     additional_checksum: Option<Checksum>,
     max_requests: u16,
+    globals: GlobalArgs,
 ) -> Result<String> {
     log::debug!(
         "Starting multi part upload:
@@ -95,7 +98,7 @@ pub async fn upload_multipart(
         log::info!("Task push part: {}", part.get_number());
 
         // spawn task (upload part)
-        tasks.push(upload_part(s3, key, file, &upload_id, sdb, part));
+        tasks.push(upload_part(s3, key, file, &upload_id, sdb, part, &globals));
 
         await_tasks(&mut tasks, &pb, chunk_size, max_requests.into()).await?;
     }
@@ -186,6 +189,7 @@ async fn upload_part(
     uid: &str,
     db: &Db,
     part: Part,
+    globals: &GlobalArgs,
 ) -> Result<usize> {
     let unprocessed = db.db_parts()?;
     let processed = db.db_uploaded()?;
@@ -219,6 +223,7 @@ async fn upload_part(
             part.get_seek(),
             part.get_chunk(),
             &mut additional_checksum,
+            globals.clone(),
         )
         .await
         {
@@ -287,6 +292,7 @@ async fn try_upload_part(
     seek: u64,
     chunk: u64,
     additional_checksum: &mut Option<Checksum>,
+    globals: GlobalArgs,
 ) -> Result<String> {
     let action = actions::UploadPart::new(
         key,
@@ -300,5 +306,5 @@ async fn try_upload_part(
 
     log::debug!("Uploading part: {}", number);
 
-    action.request(s3).await
+    action.request(s3, &globals).await
 }

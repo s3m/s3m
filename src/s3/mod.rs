@@ -10,6 +10,7 @@ pub use self::{credentials::Credentials, region::Region, signature::Signature};
 
 use crate::s3::tools::{sha256_digest, write_hex_bytes};
 use anyhow::Result;
+use std::fmt;
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,17 @@ pub struct S3 {
     bucket: Option<String>,
     // sign request
     no_sign_request: bool,
+}
+
+impl fmt::Display for S3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Write the formatted representation to the provided formatter
+        write!(
+            f,
+            "credentials: {:#?}\nregion: {:#?}\nbucket: {:#?}\nno_sign_request: {}",
+            self.credentials, self.region, self.bucket, self.no_sign_request
+        )
+    }
 }
 
 // Amazon S3 API Reference
@@ -59,6 +71,8 @@ impl S3 {
         write_hex_bytes(sha256_digest(&hash).as_ref())
     }
 
+    /// # Errors
+    /// Will return an error if the endpoint is invalid
     pub fn endpoint(&self) -> Result<Url> {
         let url = if let Some(bucket) = &self.bucket {
             Url::parse(&format!("https://{}/{}", &self.region.endpoint(), bucket))?

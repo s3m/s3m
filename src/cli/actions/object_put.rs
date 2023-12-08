@@ -1,5 +1,5 @@
 use crate::{
-    cli::{actions::Action, progressbar::Bar},
+    cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
     s3::{
         checksum::{Checksum, ChecksumAlgorithm},
         tools, S3,
@@ -17,7 +17,9 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-pub async fn handle(s3: &S3, action: Action) -> Result<()> {
+/// # Errors
+/// Will return an error if the action fails
+pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> {
     if let Action::PutObject {
         acl,
         meta,
@@ -33,7 +35,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
     } = action
     {
         if pipe {
-            let etag = stream(s3, &key, acl, meta, quiet, tmp_dir).await?;
+            let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals).await?;
             if !quiet {
                 println!("ETag: {etag}");
             }
@@ -113,6 +115,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                     quiet,
                     additional_checksum,
                     number,
+                    globals,
                 )
                 .await
                 .context("multipart upload failed")?;
@@ -139,6 +142,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                     meta,
                     quiet,
                     additional_checksum,
+                    globals,
                 )
                 .await?;
 
@@ -153,6 +157,8 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
 }
 
 /// Calculate the blake3 checksum of a file
+/// # Errors
+/// Will return an error if the checksum fails
 pub fn blake3_checksum(file: &Path, quiet: bool) -> Result<String> {
     let pb = if quiet {
         Bar::default()

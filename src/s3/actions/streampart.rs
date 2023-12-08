@@ -1,4 +1,5 @@
 use crate::{
+    cli::globals::GlobalArgs,
     s3::actions::{response_error, Action},
     s3::{request, S3},
 };
@@ -44,7 +45,7 @@ impl<'a> StreamPart<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(self, s3: &S3) -> Result<String> {
+    pub async fn request(self, s3: &S3, globals: &GlobalArgs) -> Result<String> {
         let (url, headers) =
             &self.sign(s3, self.digest.0, Some(self.digest.1), Some(self.length))?;
 
@@ -54,6 +55,7 @@ impl<'a> StreamPart<'a> {
             headers,
             Some(self.path),
             self.sender,
+            globals.throttle,
         )
         .await?;
 

@@ -1,5 +1,5 @@
 use crate::{
-    cli::progressbar::Bar,
+    cli::{globals::GlobalArgs, progressbar::Bar},
     s3::{actions, checksum::Checksum, S3},
     stream::db::Db,
 };
@@ -7,6 +7,8 @@ use anyhow::{anyhow, Result};
 use crossbeam::channel::unbounded;
 use std::{cmp::min, collections::BTreeMap, fmt::Write, path::Path};
 
+/// # Errors
+/// Will return an error if the upload fails
 #[allow(clippy::too_many_arguments)]
 pub async fn upload(
     s3: &S3,
@@ -18,6 +20,7 @@ pub async fn upload(
     meta: Option<BTreeMap<String, String>>,
     quiet: bool,
     additional_checksum: Option<Checksum>,
+    globals: GlobalArgs,
 ) -> Result<String> {
     let (sender, receiver) = unbounded::<usize>();
     let channel = if quiet { None } else { Some(sender) };
@@ -45,7 +48,7 @@ pub async fn upload(
         }
     };
 
-    let response = action.request(s3).await?;
+    let response = action.request(s3, globals).await?;
     let etag = &response.get("ETag").ok_or_else(|| anyhow!("no etag"))?;
     sdb.save_etag(etag)?;
 

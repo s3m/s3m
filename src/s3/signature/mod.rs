@@ -143,6 +143,8 @@ impl<'a> Signature<'a> {
         self.headers.clone()
     }
 
+    /// # Errors
+    /// Will return `Err` if can not make the URL
     pub fn presigned_url(&mut self, key: &'a str, expire: usize) -> Result<String> {
         let current_date = self.datetime.format("%Y%m%d").to_string();
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ").to_string();

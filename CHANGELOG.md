@@ -1,3 +1,6 @@
+## 0.8.1
+* Added option `-k/--kilobytes` to throttle the bandwidth in kilobytes per second
+
 ## 0.8.0 🚋
 * Added option `--no-sign-request` to support public buckets
 

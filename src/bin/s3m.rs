@@ -3,7 +3,7 @@ use s3m::cli::{actions, actions::Action, start};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (s3, action) = start()?;
+    let (s3, action, globals) = start()?;
 
     match action {
         Action::ACL { .. } => {
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
         }
 
         Action::GetObject { .. } => {
-            actions::object_get::handle(&s3, action).await?;
+            actions::object_get::handle(&s3, action, globals).await?;
         }
 
         Action::ShareObject { .. } => {
@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
         }
 
         Action::PutObject { .. } => {
-            actions::object_put::handle(&s3, action).await?;
+            actions::object_put::handle(&s3, action, globals).await?;
         }
     }
 

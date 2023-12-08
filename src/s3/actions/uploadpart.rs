@@ -1,4 +1,5 @@
 use crate::{
+    cli::globals::GlobalArgs,
     s3::actions::{response_error, Action},
     s3::{
         checksum::{sha256_md5_digest_multipart, Checksum},
@@ -60,7 +61,7 @@ impl<'a> UploadPart<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(mut self, s3: &S3) -> Result<String> {
+    pub async fn request(mut self, s3: &S3, globals: &GlobalArgs) -> Result<String> {
         let (sha256, md5, length, checksum) = sha256_md5_digest_multipart(
             self.file,
             self.seek,
@@ -103,6 +104,7 @@ impl<'a> UploadPart<'a> {
             self.file,
             self.seek,
             self.chunk,
+            globals.throttle,
         )
         .await?;
 

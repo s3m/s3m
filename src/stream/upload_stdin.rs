@@ -1,5 +1,5 @@
 use crate::{
-    cli::progressbar::Bar,
+    cli::{globals::GlobalArgs, progressbar::Bar},
     s3::{actions, S3},
 };
 use anyhow::Result;
@@ -27,9 +27,12 @@ struct Stream<'a> {
     md5: md5::Context,
     channel: Option<Sender<usize>>,
     tmp_dir: PathBuf,
+    throttle: Option<usize>,
 }
 
 /// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
+/// # Errors
+/// Will return an error if the upload fails
 pub async fn stream(
     s3: &S3,
     key: &str,
@@ -37,6 +40,7 @@ pub async fn stream(
     meta: Option<BTreeMap<String, String>>,
     quiet: bool,
     tmp_dir: PathBuf,
+    globals: GlobalArgs,
 ) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key, acl, meta, None);
@@ -81,6 +85,7 @@ pub async fn stream(
         md5: md5::Context::new(),
         channel,
         tmp_dir,
+        throttle: globals.throttle,
     };
 
     // try_fold will pass writer to fold_fn until there are no more bytes to read.
@@ -104,7 +109,7 @@ pub async fn stream(
         last_stream.channel,
     );
 
-    let etag = action.request(s3).await?;
+    let etag = action.request(s3, &globals).await?;
 
     last_stream.etags.push(etag);
 
@@ -154,8 +159,13 @@ async fn fold_fn(mut part: Stream<'_>, bytes: BytesMut) -> Result<Stream<'_>, Er
             part.channel.clone(),
         );
 
+        // Create globals only to pass the throttle
+        let globals = GlobalArgs {
+            throttle: part.throttle,
+        };
+
         let etag = action
-            .request(part.s3)
+            .request(part.s3, &globals)
             .await
             .map_err(|e| Error::new(ErrorKind::Other, format!("Error streaming part: {e}")))?;
 

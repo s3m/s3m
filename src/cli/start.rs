@@ -1,6 +1,7 @@
-use crate::cli::{actions::Action, commands, dispatch, matches, Config, Host};
+use crate::cli::{actions::Action, commands, dispatch, globals::GlobalArgs, matches, Config, Host};
 use crate::s3::{Credentials, S3};
 use anyhow::{anyhow, Context, Result};
+use clap::ArgMatches;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -26,7 +27,9 @@ pub fn get_config_path() -> Result<PathBuf> {
     Ok(config_path)
 }
 
-pub fn start() -> Result<(S3, Action)> {
+/// # Errors
+/// Will return an error if the config file is not found
+pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     let config_path = get_config_path()?;
 
     // start the command line interface
@@ -70,6 +73,23 @@ pub fn start() -> Result<(S3, Action)> {
 
     log::info!("buffer size: {}", buf_size);
 
+    // define global args
+    let mut global_args = GlobalArgs::new();
+
+    // define throttle
+    let throttle: usize = matches.get_one::<usize>("throttle").map_or(0, |size| *size);
+
+    if throttle > 0 {
+        global_args.set_throttle(throttle);
+    }
+
+    log::info!(
+        "throttle bandwidth: {}",
+        global_args
+            .throttle
+            .map_or_else(|| "disabled".to_string(), |t| format!("{t}KB/s"))
+    );
+
     // Config file is required
     let config_file: PathBuf = matches.get_one::<PathBuf>("config").map_or_else(
         || {
@@ -96,39 +116,74 @@ pub fn start() -> Result<(S3, Action)> {
     // create the action
     let mut hbp = matches::host_bucket_path(&matches)?;
 
-    log::info!("hbp: {:?}", hbp);
+    log::info!("hbp: {hbp:#?}");
 
     // HOST: get it from the config file
-    let host: &Host = match config.get_host(hbp[0]) {
-        Ok(h) => {
-            hbp.remove(0);
-            h
-        }
-        Err(e) => {
-            return Err(anyhow!(
-                "No \"host\" found, check config file {}/config.yml: {}",
-                config_path.display(),
-                e
-            ));
-        }
-    };
-
-    log::debug!("host: {:#?}", host);
+    let host = get_host_from_hbp(&config, &config_path, &mut hbp)?;
 
     // REGION
     let region = host.get_region()?;
 
-    log::debug!("region: {:#?}", region);
-
     // BUCKET
-    let bucket = if !hbp.is_empty() {
+    let bucket = get_bucket_from_hbp(&matches, &mut hbp)?;
+
+    // AUTH
+    let credentials = Credentials::new(&host.access_key, &host.secret_key);
+
+    // sign or not the request ( --no-sign-request )
+    let no_sign_request = matches
+        .get_one::<bool>("no-sign-request")
+        .copied()
+        .unwrap_or(false);
+
+    // create the S3 object
+    let s3 = S3::new(&credentials, &region, bucket.clone(), no_sign_request);
+
+    log::debug!("S3:\n{s3}");
+
+    // create the action
+    let action = dispatch::dispatch(hbp, bucket, buf_size, config_path, &matches)?;
+
+    log::debug!("action: {:#?}", action);
+
+    Ok((s3, action, global_args))
+}
+
+fn get_host_from_hbp<'a>(
+    config: &'a Config,
+    config_path: &Path,
+    hbp: &mut Vec<&str>,
+) -> Result<&'a Host> {
+    if hbp.is_empty() {
+        Err(anyhow!(
+            "No \"host\" found, check config file {}/config.yml",
+            config_path.display()
+        ))
+    } else {
+        config.get_host(hbp[0]).map_or_else(
+            |_| {
+                Err(anyhow!(
+                    "No \"host\" found, check config file {}/config.yml",
+                    config_path.display()
+                ))
+            },
+            |h| {
+                hbp.remove(0);
+                Ok(h)
+            },
+        )
+    }
+}
+
+fn get_bucket_from_hbp(matches: &ArgMatches, hbp: &mut Vec<&str>) -> Result<Option<String>> {
+    if !hbp.is_empty() {
         if matches.subcommand_matches("cb").is_some() {
-            Some(hbp[0].to_string())
+            Ok(Some(hbp[0].to_string()))
         } else {
-            Some(hbp.remove(0).to_string())
+            Ok(Some(hbp.remove(0).to_string()))
         }
     } else if matches.subcommand_matches("ls").is_some() {
-        None
+        Ok(None)
     } else {
         let delete_bucket = matches
             .subcommand_matches("rm")
@@ -144,39 +199,59 @@ pub fn start() -> Result<(S3, Action)> {
             "No \"bucket\" found, try: {} /path/to/file <s3 provider>/<bucket name>/file",
             me().unwrap_or_else(|| "s3m".to_string()),
         ));
-    };
-
-    log::debug!("bucket: {:#?}", bucket);
-
-    // AUTH
-    let credentials = Credentials::new(&host.access_key, &host.secret_key);
-
-    // sign or not the request ( --no-sign-request )
-    let no_sign_request = matches
-        .get_one::<bool>("no-sign-request")
-        .copied()
-        .unwrap_or(false);
-
-    // create the S3 object
-    let s3 = S3::new(&credentials, &region, bucket.clone(), no_sign_request);
-
-    log::debug!("s3: {:#?}", s3);
-
-    // create the action
-    let action = dispatch::dispatch(hbp, bucket, buf_size, config_path, &matches)?;
-
-    log::debug!("action: {:#?}", action);
-
-    Ok((s3, action))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::new;
+    use crate::cli::matches;
+    use crate::s3::Region;
+    use std::fs::File;
+    use std::io::Write;
+    use std::str::FromStr;
+    use tempfile::TempDir;
+
+    const CONF: &str = r#"---
+hosts:
+  aws:
+    region: us-east-1
+    access_key: XXX
+    secret_key: YYY"#;
 
     #[test]
     fn test_get_config_path() {
         let config_path = get_config_path();
         assert!(config_path.is_ok());
+    }
+
+    #[test]
+    fn test_get_host_from_hbp() {
+        let tmp_dir = TempDir::new().unwrap();
+        println!("tmp_dir: {:?}", tmp_dir.path());
+        let config_path = tmp_dir.path().join("config.yml");
+        let mut tmp_file = File::create(&config_path).unwrap();
+        tmp_file.write_all(CONF.as_bytes()).unwrap();
+        let cmd = new(&tmp_dir.path().to_path_buf());
+        let matches = cmd
+            .try_get_matches_from(vec!["s3m", "ls", "aws/bucket/x"])
+            .unwrap();
+        let mut hbp = matches::host_bucket_path(&matches).unwrap();
+        assert_eq!(hbp, vec!["aws", "bucket", "x"]);
+        let config = Config::new(config_path.clone()).unwrap();
+        let host = get_host_from_hbp(&config, &config_path, &mut hbp);
+        assert!(host.is_ok());
+        let host = host.unwrap();
+        assert_eq!(hbp, vec!["bucket", "x"]);
+        assert_eq!(
+            host.get_region().unwrap(),
+            Region::from_str("us-east-1").unwrap()
+        );
+        assert_eq!(
+            get_bucket_from_hbp(&matches, &mut hbp).unwrap(),
+            Some(String::from("bucket"))
+        );
+        assert_eq!(hbp, vec!["x"]);
     }
 }

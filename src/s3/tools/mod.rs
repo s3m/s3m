@@ -35,6 +35,9 @@ pub fn write_hex_bytes(bytes: &[u8]) -> String {
 
 // Calculate part size for multipart upload (max 5 GB)
 // <https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html>
+/// # Errors
+/// Will return `Err` if the file size exceeds 5 TB
+/// or if the part size exceeds 5 GB
 pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
     if file_size > MAX_FILE_SIZE {
         log::error!("object size limit 5 TB");

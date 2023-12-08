@@ -90,6 +90,8 @@ impl Checksum {
         hasher
     }
 
+    /// # Errors
+    /// Will return an error if the file cannot be opened
     pub async fn calculate(&mut self, file: &Path) -> Result<String> {
         let mut hasher: Box<dyn ChecksumHasher> = match self.algorithm {
             ChecksumAlgorithm::Crc32 => Box::new(Crc32Hasher::new()),
@@ -111,6 +113,8 @@ impl Checksum {
         Ok(self.checksum.clone())
     }
 
+    /// # Errors
+    /// Will return an error if the file cannot be opened
     pub fn digest(&mut self, data: &[u8]) -> Result<String> {
         let mut hasher: Box<dyn ChecksumHasher> = match self.algorithm {
             ChecksumAlgorithm::Crc32 => Box::new(Crc32Hasher::new()),
@@ -127,6 +131,8 @@ impl Checksum {
     }
 }
 
+/// # Errors
+/// Will return an error if the file cannot be opened
 pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)> {
     let mut md5hasher = Checksum::new(ChecksumAlgorithm::Md5).hasher();
     let mut sha256hasher = Checksum::new(ChecksumAlgorithm::Sha256).hasher();
@@ -146,6 +152,8 @@ pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)
     Ok((sha256hasher.finalize(), md5hasher.finalize(), length))
 }
 
+/// # Errors
+/// Will return an error if the file cannot be opened
 pub async fn sha256_md5_digest_multipart(
     file_path: &Path,
     seek: u64,

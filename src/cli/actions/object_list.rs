@@ -10,6 +10,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 
+/// # Errors
+/// Will return an error if the action fails
 pub async fn handle(s3: &S3, action: Action) -> Result<()> {
     if let Action::ListObjects {
         bucket,

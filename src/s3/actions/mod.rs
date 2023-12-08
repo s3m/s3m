@@ -80,6 +80,8 @@ pub trait Action {
     fn headers(&self) -> Option<BTreeMap<&str, &str>>;
 
     // HTTP method to use
+    /// # Errors
+    /// Will return an error if the HTTP method is not supported
     fn http_method(&self) -> Result<Method>;
 
     // URL query pairs
@@ -129,6 +131,8 @@ pub trait Action {
     }
 }
 
+/// # Errors
+/// Will return an error if can't add the headers to the request
 pub async fn response_error(response: Response) -> Result<String> {
     let mut error: BTreeMap<&str, String> = BTreeMap::new();
 
