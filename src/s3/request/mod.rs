@@ -1,7 +1,6 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
-// https://stackoverflow.com/a/63374116/1135424
 use anyhow::Result;
 use bytes::Bytes;
 use crossbeam::channel::Sender;
@@ -10,10 +9,10 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Response,
 };
-use std::{collections::BTreeMap, io::SeekFrom, path::Path};
+use std::{collections::BTreeMap, path::Path};
 use tokio::{
     fs::File,
-    io::{AsyncReadExt, AsyncSeekExt},
+    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
 };
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
@@ -33,10 +32,13 @@ pub async fn request(
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
         .collect::<Result<HeaderMap>>()?;
 
+    log::debug!("Headers: {:#?}", headers);
+
     let client = Client::new();
 
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
+
         let stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 128).inspect_ok(
             move |chunk| {
                 if let Some(tx) = &sender {
@@ -46,7 +48,9 @@ pub async fn request(
                 }
             },
         );
+
         let body = Body::wrap_stream(stream);
+
         client.request(method, url).headers(headers).body(body)
     } else {
         client.request(method, url).headers(headers)
@@ -71,15 +75,25 @@ pub async fn multipart_upload(
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
         .collect::<Result<HeaderMap>>()?;
 
+    log::debug!("Headers: {:#?}", headers);
+
     let client = Client::new();
 
     // async read
     let mut file = File::open(&file).await?;
+
     file.seek(SeekFrom::Start(seek)).await?;
+
     let file = file.take(chunk);
+
+    log::debug!("Chunk size: {}", chunk);
+
     let stream = FramedRead::with_capacity(file, BytesCodec::new(), 1024 * 128);
+
     let body = Body::wrap_stream(stream);
+
     let request = client.request(method, url).headers(headers).body(body);
+
     Ok(request.send().await?)
 }
 
@@ -97,7 +111,11 @@ pub async fn upload(
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
         .collect::<Result<HeaderMap>>()?;
 
+    log::debug!("Headers: {:#?}", headers);
+
     let client = Client::new();
+
     let request = client.request(method, url).headers(headers).body(body);
+
     Ok(request.send().await?)
 }

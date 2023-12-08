@@ -29,6 +29,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
         quiet,
         tmp_dir,
         checksum_algorithm,
+        number,
     } = action
     {
         if pipe {
@@ -111,6 +112,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                     meta,
                     quiet,
                     additional_checksum,
+                    number,
                 )
                 .await
                 .context("multipart upload failed")?;

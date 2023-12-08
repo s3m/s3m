@@ -72,6 +72,8 @@ pub fn new(config_path: &Path) -> Command {
         .literal(AnsiColor::Blue.on_default() | Effects::BOLD)
         .placeholder(AnsiColor::Green.on_default());
 
+    let num_threads = (num_cpus::get_physical() - 2).max(1).to_string();
+
     Command::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand_negates_reqs(true)
@@ -174,6 +176,16 @@ pub fn new(config_path: &Path) -> Command {
             .long("verbose")
             .global(true)
             .action(clap::ArgAction::Count)
+        )
+        .arg(
+            Arg::new("number")
+            .help("Number of max concurrent requests")
+            .short('n')
+            .long("number")
+            .default_value(num_threads)
+            .global(true)
+            .value_parser(clap::value_parser!(u16).range(1..=3500))
+            .num_args(1)
         )
         .subcommand(cmd_acl::command())
         .subcommand(cmd_get::command())
@@ -360,8 +372,8 @@ hosts:
 
     #[test]
     fn test_check_checksum() -> Result<()> {
-        let tets = vec!["crc32", "crc32c", "sha1", "sha256"];
-        for checksum in tets {
+        let tests = vec!["crc32", "crc32c", "sha1", "sha256"];
+        for checksum in tests {
             let config = get_config().unwrap();
             let cmd = new(&config);
             let m = cmd.try_get_matches_from(vec!["s3m", "test", "--checksum", checksum]);
@@ -373,6 +385,34 @@ hosts:
                 m.get_one::<String>("checksum").map(String::as_str),
                 Some(checksum)
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_number() -> Result<()> {
+        let tests = vec!["1", "3500"];
+        for n in tests {
+            let config = get_config().unwrap();
+            let cmd = new(&config);
+            let m = cmd.try_get_matches_from(vec!["s3m", "test", "--number", n]);
+            assert!(m.is_ok());
+
+            // get matches
+            let m = m.unwrap();
+            assert_eq!(m.get_one::<u16>("number").map(|s| *s), Some(n.parse()?));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_number_invalid() -> Result<()> {
+        let tests = vec!["0", "3501"];
+        for n in tests {
+            let config = get_config().unwrap();
+            let cmd = new(&config);
+            let m = cmd.try_get_matches_from(vec!["s3m", "test", "--number", n]);
+            assert!(m.is_err());
         }
         Ok(())
     }

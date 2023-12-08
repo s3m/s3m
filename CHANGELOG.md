@@ -1,3 +1,6 @@
+## 0.7.6
+* Added option `-n/--number` [1..3500] to specify the max number of concurrent requests
+
 ## 0.7.4
 * Added --verbose flag
 * Fixed bug potential to loop indefinitely while creating multi-parts
