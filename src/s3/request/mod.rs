@@ -21,6 +21,8 @@ use url::Url;
 
 const FRAMED_CHUNK_SIZE_BYTES: usize = 1024 * 128;
 
+static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+
 const fn calculate_duration_per_chunk(bandwidth_kb_per_sec: usize) -> Duration {
     let bandwidth_bytes_per_sec = bandwidth_kb_per_sec * 1024;
 
@@ -45,7 +47,7 @@ pub async fn request(
 
     log::debug!("HTTP method: {method}, Headers: {headers:#?}");
 
-    let client = Client::new();
+    let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
 
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
@@ -106,7 +108,7 @@ pub async fn multipart_upload(
 
     log::debug!("HTTP method: {method}, Headers: {headers:#?}");
 
-    let client = Client::new();
+    let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
 
     // async read
     let mut file = File::open(&file).await?;
@@ -158,7 +160,7 @@ pub async fn upload(
 
     log::debug!("HTTP method: {method}, Headers: {headers:#?}");
 
-    let client = Client::new();
+    let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
 
     let request = client.request(method, url).headers(headers).body(body);
 
