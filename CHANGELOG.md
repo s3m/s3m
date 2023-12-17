@@ -1,5 +1,7 @@
 ## 0.8.3
 * Added user-agent on the request
+* Implemented MAX_RETRIES when reading from STDIN
+* Fixed bug when chunk > 512MB (next 8192 bytes were not stored)
 
 ## 0.8.2
 * Using `openssl = { version = "0.10", optional = true, features = ["vendored"] }` to make FreeBSD Port and Linux package (musl)

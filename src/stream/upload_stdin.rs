@@ -9,11 +9,17 @@ use futures::stream::TryStreamExt;
 use ring::digest::{Context, SHA256};
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 use tempfile::{Builder, NamedTempFile};
-use tokio::io::{stdin, Error, ErrorKind};
+use tokio::{
+    io::{stdin, Error, ErrorKind},
+    time::{sleep, Duration},
+};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 // 512MB
 const BUFFER_SIZE: usize = 1_024 * 1_024 * 512;
+
+// 8 retries when streaming ~ 255 seconds
+const MAX_RETRIES: u32 = 8;
 
 struct Stream<'a> {
     tmp_file: NamedTempFile,
@@ -148,26 +154,61 @@ async fn fold_fn(mut part: Stream<'_>, bytes: BytesMut) -> Result<Stream<'_>, Er
         let digest_sha = part.sha.finish();
         let digest_md5 = part.md5.compute();
 
-        // upload a part
-        let action = actions::StreamPart::new(
-            part.key,
-            part.tmp_file.path(),
-            part.part_number,
-            part.upload_id,
-            part.count,
-            (digest_sha.as_ref(), digest_md5.as_ref()),
-            part.channel.clone(),
-        );
-
         // Create globals only to pass the throttle
         let globals = GlobalArgs {
             throttle: part.throttle,
         };
 
-        let etag = action
-            .request(part.s3, &globals)
-            .await
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Error streaming part: {e}")))?;
+        let mut etag: String = String::new();
+
+        for attempt in 1..=MAX_RETRIES {
+            let backoff_time = 2u64.pow(attempt - 1);
+            if attempt > 1 {
+                log::warn!("Error streaming part, retrying in {} seconds", backoff_time);
+
+                sleep(Duration::from_secs(backoff_time)).await;
+            }
+
+            // upload a part
+            let action = actions::StreamPart::new(
+                part.key,
+                part.tmp_file.path(),
+                part.part_number,
+                part.upload_id,
+                part.count,
+                (digest_sha.as_ref(), digest_md5.as_ref()),
+                part.channel.clone(),
+            );
+
+            match action.request(part.s3, &globals).await {
+                Ok(e) => {
+                    etag = e;
+
+                    log::info!("Uploaded part: {}, etag: {}", part.part_number, etag,);
+
+                    break;
+                }
+
+                Err(e) => {
+                    log::error!(
+                        "Error uploading part: {}, attempt {}/{} failed: {}",
+                        part.part_number,
+                        attempt,
+                        MAX_RETRIES,
+                        e
+                    );
+
+                    if attempt == MAX_RETRIES {
+                        return Err(Error::new(
+                            ErrorKind::Other,
+                            format!("Error streaming part: {e}"),
+                        ));
+                    }
+
+                    continue;
+                }
+            }
+        }
 
         // delete and create new tmp file
         part.etags.push(etag);
@@ -180,17 +221,18 @@ async fn fold_fn(mut part: Stream<'_>, bytes: BytesMut) -> Result<Stream<'_>, Er
             .tempfile_in(&part.tmp_dir)?;
 
         // reset counters
-        part.count = 0;
+        part.count = bytes.len();
         part.part_number += 1;
         part.sha = Context::new(&SHA256);
         part.md5 = md5::Context::new();
     } else {
         // update counters and write to tmp file
         part.count += bytes.len();
-        part.tmp_file.write_all(&bytes)?;
-        part.sha.update(&bytes);
-        part.md5.consume(&bytes);
     }
+
+    part.tmp_file.write_all(&bytes)?;
+    part.sha.update(&bytes);
+    part.md5.consume(&bytes);
 
     Ok(part)
 }
