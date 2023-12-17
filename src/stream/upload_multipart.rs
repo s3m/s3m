@@ -10,8 +10,6 @@ use sled::transaction::{TransactionError, Transactional};
 use std::{collections::BTreeMap, path::Path};
 use tokio::time::{sleep, Duration};
 
-const MAX_RETRIES: u32 = 3;
-
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
 // * Upload Part
@@ -202,7 +200,7 @@ async fn upload_part(
     let mut etag: String = String::new();
 
     // Retry with exponential backoff
-    for attempt in 1..=MAX_RETRIES {
+    for attempt in 1..=globals.retries {
         let backoff_time = 2u64.pow(attempt - 1);
         if attempt > 1 {
             log::warn!(
@@ -248,12 +246,12 @@ async fn upload_part(
                     "Error uploading part: {}, attempt {}/{} failed: {}",
                     part.get_number(),
                     attempt,
-                    MAX_RETRIES,
+                    globals.retries,
                     e
                 );
 
                 // Increment attempt after an error
-                if attempt == MAX_RETRIES {
+                if attempt == globals.retries {
                     // If it's the last attempt, return the error without incrementing attempt
                     return Err(e);
                 }

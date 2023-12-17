@@ -83,6 +83,10 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
         global_args.set_throttle(throttle);
     }
 
+    //  define retries
+    let retries: usize = matches.get_one::<usize>("retries").map_or(3, |size| *size);
+    global_args.set_retries(retries);
+
     log::info!(
         "throttle bandwidth: {}",
         global_args

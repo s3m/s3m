@@ -204,6 +204,15 @@ pub fn new(config_path: &Path) -> Command {
             .global(true)
             .num_args(1)
         )
+        .arg(
+            Arg::new("retries")
+            .help("Number of retries")
+            .long("retries")
+            .short('r')
+            .default_value("3")
+            .value_parser(validator_is_num())
+            .num_args(1)
+        )
         .subcommand(cmd_acl::command())
         .subcommand(cmd_get::command())
         .subcommand(cmd_ls::command())
@@ -257,6 +266,8 @@ hosts:
                 .map(|s| s.display().to_string()),
             Some(config.join("config.yml").display().to_string())
         );
+        assert_eq!(m.get_one::<usize>("throttle").map(|s| *s), Some(0));
+        assert_eq!(m.get_one::<usize>("retries").map(|s| *s), Some(3));
 
         Ok(())
     }
@@ -473,6 +484,22 @@ hosts:
             .collect();
         assert_eq!(args, vec!["/path/to/file", "s3/my-bucket/path/to/file"]);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_retries() -> Result<()> {
+        let tests = vec!["0", "10"];
+        for n in tests {
+            let config = get_config().unwrap();
+            let cmd = new(&config);
+            let m = cmd.try_get_matches_from(vec!["s3m", "test", "--retries", n]);
+            assert!(m.is_ok());
+
+            // get matches
+            let m = m.unwrap();
+            assert_eq!(m.get_one::<usize>("retries").map(|s| *s), Some(n.parse()?));
+        }
         Ok(())
     }
 }

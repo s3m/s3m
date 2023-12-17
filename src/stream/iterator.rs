@@ -179,6 +179,6 @@ mod tests {
 
         let (number, seek, chunk) = PartIterator::new(file_size, part_size).last().unwrap();
         assert_eq!(file_size, seek + chunk);
-        assert_eq!((file_size + part_size - 1) / part_size, number.into());
+        assert_eq!((file_size + part_size - 1) / part_size, number as u64)
     }
 }

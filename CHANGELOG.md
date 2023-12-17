@@ -1,3 +1,6 @@
+## 0.9.0 🚅
+* Added option `-r/--retries` defaults to 3 (exponential backoff 1 second)
+
 ## 0.8.3
 * Added user-agent on the request
 * Implemented MAX_RETRIES when reading from STDIN
