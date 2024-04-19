@@ -21,6 +21,10 @@ pub struct Host {
     pub secret_key: SecretKey,
 
     pub bucket: Option<String>,
+
+    pub enc_key: Option<String>,
+    pub enc_type: Option<String>,
+    pub compress: Option<bool>,
 }
 
 pub type SecretKey = Secret<String>;
@@ -84,7 +88,7 @@ mod tests {
     const CONF: &str = r#"---
 hosts:
   s3:
-    region: xx-region-y
+    region: xx-region-y.foo
     access_key: XXX
     secret_key: YYY
     bucket: my-bucket"#;
@@ -112,6 +116,14 @@ hosts:
     secret_key: YYY
     bucket: my-bucket"#;
 
+    const CONF_X_REGION: &str = r#"---
+hosts:
+  s3:
+    region: x
+    access_key: XXX
+    secret_key: YYY
+    bucket: my-bucket"#;
+
     #[test]
     fn test_config_get_host() {
         let mut tmp_file = NamedTempFile::new().unwrap();
@@ -128,7 +140,7 @@ hosts:
         );
         assert_eq!(
             c.hosts.get("s3").unwrap().region,
-            Some("xx-region-y".to_string())
+            Some("xx-region-y.foo".to_string())
         );
     }
 
@@ -204,6 +216,28 @@ hosts:
             Region::Custom {
                 name: String::new(),
                 endpoint: "s3.us-west-000.backblazeb2.com".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_config_get_x_region() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file.write_all(CONF_X_REGION.as_bytes()).unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf());
+        assert!(c.is_ok());
+        let c = c.unwrap();
+        let h = c.get_host("s3");
+        assert!(h.is_ok());
+        let h = h.unwrap();
+        let r = h.get_region();
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        assert_eq!(
+            r,
+            Region::Custom {
+                name: String::from("x"),
+                endpoint: "s3.x.amazonaws.com".to_string()
             }
         );
     }
@@ -350,6 +384,7 @@ hosts:
                 "us-gov-west-1",
                 "s3.us-gov-west-1.amazonaws.com",
             ),
+            ("new region", "new-region", "s3.new-region.amazonaws.com"),
         ];
 
         let mut yaml_content = String::from(format!("---\nhosts:\n"));

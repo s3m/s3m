@@ -1,3 +1,8 @@
+## 0.10.0 Unreleased
+* Accept new regions if any `s3.new-region.amazonaws.com`
+* Encryption support `enc_key` & `enc_type`
+* Compression support `compress` (using zstd)
+
 ## 0.9.0 🚅
 * Added option `-r/--retries` defaults to 3 (exponential backoff 1 second)
 

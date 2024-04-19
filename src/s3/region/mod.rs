@@ -5,6 +5,7 @@ use std::{
 };
 
 // https://docs.aws.amazon.com/general/latest/gr/rande.html#regional-endpoints
+// protocol://service-code.region-code.amazonaws.com
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Region {
     // Africa (Cape Town)           af-south-1
@@ -225,6 +226,13 @@ impl FromStr for Region {
             "cn-northwest-1" => Ok(Self::CnNorthwest1),
             "us-gov-east-1" => Ok(Self::UsGovEast1),
             "us-gov-west-1" => Ok(Self::UsGovWest1),
+            // Check if the input contains a period and handle it as custom region
+            _ if !v.contains('.') => {
+                let name = v.to_string();
+                let endpoint = format!("s3.{}.amazonaws.com", v);
+                Ok(Self::Custom { name, endpoint })
+            }
+            // Error handling for unrecognized regions
             _ => Err(ParseRegionError::new(s)),
         }
     }
@@ -272,11 +280,11 @@ mod tests {
     #[test]
     fn test_region_from_str() {
         assert_eq!(
-            "foo"
+            "foo.bar"
                 .parse::<Region>()
-                .expect_err("Parsing foo as a Region was not an error")
+                .expect_err("foo.bar is not a valida Region")
                 .to_string(),
-            "Not a valid AWS region: foo".to_owned()
+            "Not a valid AWS region: foo.bar".to_owned()
         );
         assert_eq!("af-south-1".parse(), Ok(Region::AfSouth1));
         assert_eq!("ap-east-1".parse(), Ok(Region::ApEast1));
@@ -310,5 +318,8 @@ mod tests {
         assert_eq!("cn-northwest-1".parse(), Ok(Region::CnNorthwest1));
         assert_eq!("us-gov-east-1".parse(), Ok(Region::UsGovEast1));
         assert_eq!("us-gov-west-1".parse(), Ok(Region::UsGovWest1));
+        let name = String::from("foo");
+        let endpoint = format!("s3.{}.amazonaws.com", name);
+        assert_eq!(name.parse(), Ok(Region::Custom { name, endpoint }));
     }
 }
