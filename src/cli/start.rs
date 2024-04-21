@@ -131,6 +131,8 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     // BUCKET
     let bucket = get_bucket_from_hbp(&matches, &mut hbp)?;
 
+    log::debug!("path: {hbp:#?}");
+
     // AUTH
     let credentials = Credentials::new(&host.access_key, &host.secret_key);
 
@@ -184,7 +186,14 @@ fn get_bucket_from_hbp(matches: &ArgMatches, hbp: &mut Vec<&str>) -> Result<Opti
         if matches.subcommand_matches("cb").is_some() {
             Ok(Some(hbp[0].to_string()))
         } else {
-            Ok(Some(hbp.remove(0).to_string()))
+            let bucket = hbp.remove(0).to_string();
+            if bucket.is_empty() {
+                Err(anyhow!(
+                    "No \"bucket\" found, try: <s3 provider>/<bucket name>/path"
+                ))
+            } else {
+                Ok(Some(bucket))
+            }
         }
     } else if matches.subcommand_matches("ls").is_some() {
         Ok(None)
@@ -257,5 +266,31 @@ hosts:
             Some(String::from("bucket"))
         );
         assert_eq!(hbp, vec!["x"]);
+    }
+
+    #[test]
+    fn test_get_bucket_from_hbp_leading_slash() {
+        let tmp_dir = TempDir::new().unwrap();
+        println!("tmp_dir: {:?}", tmp_dir.path());
+        let config_path = tmp_dir.path().join("config.yml");
+        let mut tmp_file = File::create(&config_path).unwrap();
+        tmp_file.write_all(CONF.as_bytes()).unwrap();
+        let cmd = new(&tmp_dir.path().to_path_buf());
+        let matches = cmd
+            .try_get_matches_from(vec!["s3m", "aws//bucket/x"])
+            .unwrap();
+        let mut hbp = matches::host_bucket_path(&matches).unwrap();
+        assert_eq!(hbp, vec!["aws", "", "bucket", "x"]);
+        let config = Config::new(config_path.clone()).unwrap();
+        let host = get_host_from_hbp(&config, &config_path, &mut hbp);
+        assert!(host.is_ok());
+        let host = host.unwrap();
+        assert_eq!(hbp, vec!["", "bucket", "x"]);
+        assert_eq!(
+            host.get_region().unwrap(),
+            Region::from_str("us-east-1").unwrap()
+        );
+        assert!(get_bucket_from_hbp(&matches, &mut hbp).is_err());
+        assert_eq!(hbp, vec!["bucket", "x"]);
     }
 }

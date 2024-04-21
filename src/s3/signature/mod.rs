@@ -8,7 +8,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use base64ct::{Base64, Encoding};
 use chrono::prelude::{DateTime, Utc};
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{percent_decode, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::Method;
 use ring::hmac;
 use std::collections::BTreeMap;
@@ -56,7 +56,7 @@ impl<'a> Signature<'a> {
         digest_md5: Option<&[u8]>,
         length: Option<usize>,
         custom_headers: Option<BTreeMap<&str, &str>>,
-    ) -> BTreeMap<String, String> {
+    ) -> Result<BTreeMap<String, String>> {
         let current_date = self.datetime.format("%Y%m%d").to_string();
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ").to_string();
 
@@ -95,7 +95,7 @@ impl<'a> Signature<'a> {
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             &self.http_method,
-            canonical_uri(url),
+            canonical_uri(url)?,
             canonical_query_string(url),
             canonical_headers(&self.headers),
             signed_headers,
@@ -139,8 +139,10 @@ impl<'a> Signature<'a> {
             signed_headers,
             write_hex_bytes(signature.as_ref())
         );
+
         self.add_header("Authorization", &authorization_header);
-        self.headers.clone()
+
+        Ok(self.headers.clone())
     }
 
     /// # Errors
@@ -151,10 +153,7 @@ impl<'a> Signature<'a> {
 
         let mut url = self.auth.endpoint()?;
 
-        let clean_path = key
-            .split('/')
-            .filter(|p| !p.is_empty())
-            .collect::<Vec<&str>>();
+        let clean_path = key.split('/').collect::<Vec<&str>>();
 
         for p in clean_path {
             url.path_segments_mut()
@@ -199,7 +198,7 @@ impl<'a> Signature<'a> {
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
             &self.http_method,
-            canonical_uri(&url),
+            canonical_uri(&url)?,
             canonical_query_string(&url),
             canonical_headers(&self.headers),
             signed_headers,
@@ -249,14 +248,17 @@ impl<'a> Signature<'a> {
 // URI encode every byte except the unreserved characters:
 // 'A'-'Z', 'a'-'z', '0'-'9', '-', '.', '_', and '~'.
 #[must_use]
-pub fn canonical_uri(uri: &Url) -> String {
+pub fn canonical_uri(uri: &Url) -> Result<String> {
+    let decode_url = percent_decode(uri.path().as_bytes()).decode_utf8()?;
+
     const FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
         .remove(b'/')
         .remove(b'-')
         .remove(b'.')
         .remove(b'_')
         .remove(b'~');
-    utf8_percent_encode(uri.path(), FRAGMENT).to_string()
+
+    Ok(utf8_percent_encode(&decode_url, FRAGMENT).to_string())
 }
 
 // CanonicalQueryString specifies the URI-encoded query string parameters. You URI-encode name and

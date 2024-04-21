@@ -229,7 +229,7 @@ impl FromStr for Region {
             // Check if the input contains a period and handle it as custom region
             _ if !v.contains('.') => {
                 let name = v.to_string();
-                let endpoint = format!("s3.{}.amazonaws.com", v);
+                let endpoint = format!("s3.{v}.amazonaws.com");
                 Ok(Self::Custom { name, endpoint })
             }
             // Error handling for unrecognized regions

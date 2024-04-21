@@ -191,13 +191,7 @@ impl<'a> Action for CompleteMultipartUpload<'a> {
     }
 
     fn path(&self) -> Option<Vec<&str>> {
-        // remove leading / or //
-        let clean_path = self
-            .key
-            .split('/')
-            .filter(|p| !p.is_empty())
-            .collect::<Vec<&str>>();
-        Some(clean_path)
+        Some(self.key.split('/').collect())
     }
 }
 

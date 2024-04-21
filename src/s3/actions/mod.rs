@@ -127,7 +127,7 @@ pub trait Action {
 
         let headers = signature.sign(&url, hash_payload, md5, content_length, self.headers());
 
-        Ok((url, headers))
+        Ok((url, headers?))
     }
 }
 

@@ -27,7 +27,7 @@ pub fn host_bucket_path(matches: &ArgMatches) -> Result<Vec<&str>> {
         // check bucket
         if v[1].is_empty() {
             return Err(anyhow!(
-                "Please provide a valid bucket name without leading or trailing slashes."
+                "No \"bucket\" found, try: <s3 provider>/<bucket name>/path"
             ));
         }
 
@@ -90,9 +90,9 @@ pub fn host_bucket_path(matches: &ArgMatches) -> Result<Vec<&str>> {
                 .collect();
 
             if args.len() == 2 {
-                hbp = args[1].split('/').filter(|s| !s.is_empty()).collect();
+                hbp = args[1].split('/').collect();
             } else if matches.contains_id("pipe") {
-                hbp = args[0].split('/').filter(|s| !s.is_empty()).collect();
+                hbp = args[0].split('/').collect();
             } else {
                 return Err(anyhow!(
                 "missing argument or use --pipe for standard input. For more information try: --help"
@@ -182,8 +182,20 @@ hosts:
                 hbp: vec!["host", "bucket", "file", "a", "b", "c.txt"],
             },
             Test {
+                args: vec!["s3m", "pipe", "host/bucket/file/"],
+                hbp: vec!["host", "bucket", "file", ""],
+            },
+            Test {
+                args: vec!["s3m", "pipe", "host/bucket/file//"],
+                hbp: vec!["host", "bucket", "file", "", ""],
+            },
+            Test {
                 args: vec!["s3m", "--pipe", "host/bucket/file/a/b/c.txt"],
                 hbp: vec!["host", "bucket", "file", "a", "b", "c.txt"],
+            },
+            Test {
+                args: vec!["s3m", "--pipe", "host/bucket/file//"],
+                hbp: vec!["host", "bucket", "file", "", ""],
             },
             Test {
                 args: vec!["s3m", "acl", "host/bucket/file"],
