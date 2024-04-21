@@ -247,7 +247,6 @@ impl<'a> Signature<'a> {
 //
 // URI encode every byte except the unreserved characters:
 // 'A'-'Z', 'a'-'z', '0'-'9', '-', '.', '_', and '~'.
-#[must_use]
 pub fn canonical_uri(uri: &Url) -> Result<String> {
     let decode_url = percent_decode(uri.path().as_bytes()).decode_utf8()?;
 
