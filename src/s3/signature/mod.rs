@@ -247,15 +247,17 @@ impl<'a> Signature<'a> {
 //
 // URI encode every byte except the unreserved characters:
 // 'A'-'Z', 'a'-'z', '0'-'9', '-', '.', '_', and '~'.
+/// # Errors
+/// Will return Err if can't `percent_decode` the path
 pub fn canonical_uri(uri: &Url) -> Result<String> {
-    let decode_url = percent_decode(uri.path().as_bytes()).decode_utf8()?;
-
     const FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
         .remove(b'/')
         .remove(b'-')
         .remove(b'.')
         .remove(b'_')
         .remove(b'~');
+
+    let decode_url = percent_decode(uri.path().as_bytes()).decode_utf8()?;
 
     Ok(utf8_percent_encode(&decode_url, FRAGMENT).to_string())
 }

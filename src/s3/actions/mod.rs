@@ -123,6 +123,8 @@ pub trait Action {
             return Ok((url, BTreeMap::new()));
         }
 
+        log::info!("URL to sign: {url}");
+
         let mut signature = Signature::new(s3, "s3", self.http_method()?)?;
 
         let headers = signature.sign(&url, hash_payload, md5, content_length, self.headers());
