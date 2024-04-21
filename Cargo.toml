@@ -41,13 +41,14 @@ secrecy = { version = "0.8.0", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.6"
 serde_yaml = "0.9"
-sled = { version = "0.34", features = ["compression"] }
+sled = "0.34"
 temp-env = "0.3.6"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1.15"
 tokio-util = { version = "0.7", features = ["codec"] }
 url = "2.5"
+zstd = { version = "0.13", features = ["zstdmt"] }
 
 [package.metadata.generate-rpm]
 assets = [

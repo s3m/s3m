@@ -15,7 +15,39 @@ pub fn host_bucket_path(matches: &ArgMatches) -> Result<Vec<&str>> {
             .map(String::as_str)
             .collect();
 
-        Ok(args[0].split('/').filter(|s| !s.is_empty()).collect())
+        let v: Vec<&str> = args[0].splitn(3, '/').collect();
+
+        // check host
+        if v[0].is_empty() {
+            return Err(anyhow!(
+                "Please provide a valid host name without leading or trailing slashes."
+            ));
+        }
+
+        // check bucket
+        if v[1].is_empty() {
+            return Err(anyhow!(
+                "Please provide a valid bucket name without leading or trailing slashes."
+            ));
+        }
+
+        // build hbp
+        let mut hbp = vec![v[0], v[1]];
+
+        if v.len() > 2 {
+            // check path
+            if v[2].starts_with('/') {
+                return Err(anyhow!("Please remove leading slashes from path."));
+            }
+
+            // Split v[2] by '/' and collect into a vector of &str
+            let split_v2: Vec<&str> = v[2].split('/').collect();
+
+            // Extend hbp with the split_v2 vector
+            hbp.extend(split_v2);
+        }
+
+        Ok(hbp)
     };
 
     match matches.subcommand_name() {
@@ -180,6 +212,14 @@ hosts:
             Test {
                 args: vec!["s3m", "share", "host/bucket/file"],
                 hbp: vec!["host", "bucket", "file"],
+            },
+            Test {
+                args: vec!["s3m", "rm", "host/bucket/file/"],
+                hbp: vec!["host", "bucket", "file", ""],
+            },
+            Test {
+                args: vec!["s3m", "rm", "host/bucket/file//"],
+                hbp: vec!["host", "bucket", "file", "", ""],
             },
         ];
         for test in tests.iter() {

@@ -26,7 +26,7 @@ impl Db {
 
         let db = sled::Config::new()
             .path(format!("{}/streams/{}", path.display(), checksum))
-            .use_compression(true)
+            .use_compression(false)
             .mode(sled::Mode::LowSpace)
             .open()?;
         Ok(Self { db, key })
