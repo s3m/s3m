@@ -47,7 +47,6 @@ impl<'a> Signature<'a> {
     /// Need the the HexEncode(Hash(RequestPayload))
     ///
     /// # Errors
-    ///
     /// Will return `Err` if can not make the request
     pub fn sign(
         &mut self,
@@ -229,6 +228,7 @@ impl<'a> Signature<'a> {
 
         url.query_pairs_mut()
             .append_pair("X-Amz-Signature", &signature);
+
         Ok(url.to_string())
     }
 
@@ -238,19 +238,17 @@ impl<'a> Signature<'a> {
     }
 }
 
-// CanonicalURI is the URI-encoded version of the absolute path component of the URI—everything
-// starting with the "/" that follows the domain name and up to the end of the string or to the
-// question mark character ('?') if you have query string parameters. The URI in the following
-// example, /examplebucket/myphoto.jpg, is the absolute path and you don't encode the "/" in the
-// absolute path:
-// http://s3.amazonaws.com/examplebucket/myphoto.jpg
+// https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
 //
-// URI encode every byte except the unreserved characters:
-// 'A'-'Z', 'a'-'z', '0'-'9', '-', '.', '_', and '~'.
+// The standard UriEncode functions provided by your development platform may
+// not work because of differences in implementation and related ambiguity in the
+// underlying RFCs. We recommend that you write your own custom UriEncode function
+// to ensure that your encoding will work.
+//
 /// # Errors
 /// Will return Err if can't `percent_decode` the path
 pub fn canonical_uri(uri: &Url) -> Result<String> {
-    const FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
+    const URLENCODE_PATH_FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
         .remove(b'/')
         .remove(b'-')
         .remove(b'.')
@@ -259,30 +257,34 @@ pub fn canonical_uri(uri: &Url) -> Result<String> {
 
     let decode_url = percent_decode(uri.path().as_bytes()).decode_utf8()?;
 
-    Ok(utf8_percent_encode(&decode_url, FRAGMENT).to_string())
+    Ok(utf8_percent_encode(&decode_url, URLENCODE_PATH_FRAGMENT).to_string())
 }
 
-// CanonicalQueryString specifies the URI-encoded query string parameters. You URI-encode name and
-// values individually. You must also sort the parameters in the canonical query string
-// alphabetically by key name. The sorting occurs after encoding.
+// CanonicalQueryString specifies the URI-encoded query string parameters.
 #[must_use]
 pub fn canonical_query_string(uri: &Url) -> String {
-    const FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
+    const URLENCODE_QUERY_FRAGMENT: &AsciiSet = &NON_ALPHANUMERIC
         .remove(b'-')
         .remove(b'.')
         .remove(b'_')
         .remove(b'~');
+
+    // You URI-encode name and values individually.
     let mut pairs = uri
         .query_pairs()
         .map(|(key, value)| {
             format!(
                 "{}={}",
-                utf8_percent_encode(&key, FRAGMENT),
-                utf8_percent_encode(&value, FRAGMENT)
+                utf8_percent_encode(&key, URLENCODE_QUERY_FRAGMENT),
+                utf8_percent_encode(&value, URLENCODE_QUERY_FRAGMENT)
             )
         })
         .collect::<Vec<String>>();
+
+    // You must also sort the parameters in the canonical query string
+    // alphabetically by key name. The sorting occurs after encoding.
     pairs.sort();
+
     pairs.join("&")
 }
 
