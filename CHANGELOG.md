@@ -3,6 +3,9 @@
 * Encryption support `enc_key` & `enc_type`
 * Compression support `compress` (using zstd)
 
+## 0.9.3
+Allow path(key) names ending with `/` fixes #57
+
 ## 0.9.0 🚅
 * Added option `-r/--retries` defaults to 3 (exponential backoff 1 second)
 
