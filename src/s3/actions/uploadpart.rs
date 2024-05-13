@@ -75,7 +75,9 @@ impl<'a> UploadPart<'a> {
             if let Some(ref new_checksum) = checksum {
                 // Update the fields of additional_checksum with the modified values
                 additional_checksum.algorithm = new_checksum.algorithm.clone();
-                additional_checksum.checksum = new_checksum.checksum.clone();
+                additional_checksum
+                    .checksum
+                    .clone_from(&new_checksum.checksum);
             }
         }
 

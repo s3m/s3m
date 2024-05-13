@@ -191,7 +191,7 @@ pub async fn sha256_md5_digest_multipart(
     if let Some(checksum) = algorithm {
         // Modify the contents of the Checksum struct with the output of the hash
         if let Some(d) = digest.as_ref() {
-            checksum.checksum = d.clone();
+            checksum.checksum.clone_from(d);
         }
 
         return Ok((
