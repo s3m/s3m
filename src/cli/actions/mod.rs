@@ -46,7 +46,7 @@ pub enum Action {
         quiet: bool,
         s3m_dir: PathBuf,
         tmp_dir: PathBuf,
-        number: u16,
+        number: u8,
     },
     ShareObject {
         expire: usize,

@@ -28,7 +28,7 @@ pub async fn upload_multipart(
     meta: Option<BTreeMap<String, String>>,
     quiet: bool,
     additional_checksum: Option<Checksum>,
-    max_requests: u16,
+    max_requests: u8,
     globals: GlobalArgs,
 ) -> Result<String> {
     log::debug!(

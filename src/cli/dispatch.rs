@@ -174,7 +174,7 @@ pub fn dispatch(
                     ToOwned::to_owned,
                 ),
                 checksum_algorithm: matches.get_one("checksum").map(|s: &String| s.to_string()),
-                number: matches.get_one::<u16>("number").copied().unwrap_or(1),
+                number: matches.get_one::<u8>("number").copied().unwrap_or(1),
             })
         }
     }
@@ -188,6 +188,7 @@ mod tests {
         commands::{cmd_acl, cmd_cb, cmd_get, cmd_ls, cmd_rm, cmd_share, new},
     };
     use clap::Command;
+    use std::cmp;
     use std::fs::File;
     use std::io::Write;
     use tempfile::Builder;
@@ -410,7 +411,10 @@ hosts:
                 assert_eq!(quiet, false);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
-                assert_eq!(number, (num_cpus::get_physical() - 2).max(1) as u16);
+                assert_eq!(
+                    number,
+                    cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
+                )
             }
             _ => panic!("wrong action"),
         }

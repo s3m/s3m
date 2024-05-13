@@ -12,7 +12,7 @@ use clap::{
     Arg, ColorChoice, Command,
 };
 use std::{
-    env, fs,
+    cmp, env, fs,
     path::{Path, PathBuf},
 };
 
@@ -72,7 +72,8 @@ pub fn new(config_path: &Path) -> Command {
         .literal(AnsiColor::Blue.on_default() | Effects::BOLD)
         .placeholder(AnsiColor::Green.on_default());
 
-    let num_threads = (num_cpus::get_physical() - 2).max(1).to_string();
+    // num_cpus::get_physical() - 2 returns at least 1 type usize
+    let num_threads = cmp::min((num_cpus::get_physical() - 2).max(1), u8::MAX as usize).to_string();
 
     Command::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
@@ -183,7 +184,7 @@ pub fn new(config_path: &Path) -> Command {
             .short('n')
             .long("number")
             .default_value(num_threads)
-            .value_parser(clap::value_parser!(u16).range(1..=3500))
+            .value_parser(clap::value_parser!(u8).range(1..=255))
             .num_args(1)
         )
         .arg(
@@ -419,7 +420,7 @@ hosts:
 
     #[test]
     fn test_check_number() -> Result<()> {
-        let tests = vec!["1", "3500"];
+        let tests = vec!["1", "255"];
         for n in tests {
             let config = get_config().unwrap();
             let cmd = new(&config);
@@ -428,14 +429,14 @@ hosts:
 
             // get matches
             let m = m.unwrap();
-            assert_eq!(m.get_one::<u16>("number").map(|s| *s), Some(n.parse()?));
+            assert_eq!(m.get_one::<u8>("number").map(|s| *s), Some(n.parse()?));
         }
         Ok(())
     }
 
     #[test]
     fn test_check_number_invalid() -> Result<()> {
-        let tests = vec!["0", "3501"];
+        let tests = vec!["0", "256"];
         for n in tests {
             let config = get_config().unwrap();
             let cmd = new(&config);
