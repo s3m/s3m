@@ -9,6 +9,12 @@ use std::collections::BTreeMap;
 #[derive(Debug)]
 pub struct DeleteBucket {}
 
+impl Default for DeleteBucket {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeleteBucket {
     #[must_use]
     pub const fn new() -> Self {
