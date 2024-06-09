@@ -7,6 +7,8 @@ pub fn host_bucket_path(matches: &ArgMatches) -> Result<Vec<&str>> {
     let hbp: Vec<&str>;
 
     let parse_args = |subcommand| -> Result<Vec<&str>> {
+        log::debug!("subcommand: {}", subcommand);
+
         let args: Vec<&str> = matches
             .subcommand_matches(subcommand)
             .context("arguments missing")?
@@ -17,15 +19,12 @@ pub fn host_bucket_path(matches: &ArgMatches) -> Result<Vec<&str>> {
 
         let v: Vec<&str> = args[0].splitn(3, '/').collect();
 
-        // check host
-        if v[0].is_empty() {
-            return Err(anyhow!(
-                "Please provide a valid host name without leading or trailing slashes."
-            ));
+        if subcommand == "ls" {
+            return Ok(v);
         }
 
         // check bucket
-        if v[1].is_empty() {
+        if v.get(1).is_none() {
             return Err(anyhow!(
                 "No \"bucket\" found, try: <s3 provider>/<bucket name>/path"
             ));
@@ -204,6 +203,14 @@ hosts:
             Test {
                 args: vec!["s3m", "get", "host/bucket/file"],
                 hbp: vec!["host", "bucket", "file"],
+            },
+            Test {
+                args: vec!["s3m", "ls", "host"],
+                hbp: vec!["host"],
+            },
+            Test {
+                args: vec!["s3m", "ls", "host/bucket"],
+                hbp: vec!["host", "bucket"],
             },
             Test {
                 args: vec!["s3m", "ls", "host/bucket/file"],
