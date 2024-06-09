@@ -5,7 +5,7 @@ pub fn command() -> Command {
         .about("List objects and in-progress multipart uploads")
         .arg(
             Arg::new("arguments")
-                .help("\"host\" to list buckets or \"host/bucket\" to list bucket contents")
+                .help("<s3 provider> (referred to as 'host') to list all buckets, or \"host/bucket\" to list the contents of a specific bucket")
                 .required(true)
                 .num_args(1),
         )

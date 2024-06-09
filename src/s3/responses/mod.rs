@@ -45,7 +45,7 @@ pub struct Object {
     /// Date and time the object was last modified.
     pub last_modified: String,
     #[serde(rename = "ETag")]
-    /// The entity tag is an MD5 hash of the object. The ETag only reflects changes to the
+    /// The entity tag is an MD5 hash of the object. The `ETag` only reflects changes to the
     /// contents of an object, not its metadata.
     pub e_tag: String,
     #[serde(rename = "StorageClass")]
@@ -69,7 +69,7 @@ pub struct ListBucketResult {
     /// Name of the bucket.
     pub name: String,
     #[serde(rename = "NextMarker")]
-    /// When the response is truncated (that is, the IsTruncated element value in the response
+    /// When the response is truncated (that is, the `IsTruncated` element value in the response
     /// is true), you can use the key name in this field as a marker in the subsequent request
     /// to get next set of objects. Amazon S3 lists objects in UTF-8 character encoding in
     /// lexicographical order.
@@ -92,7 +92,7 @@ pub struct ListBucketResult {
     pub encoding_type: Option<String>,
     #[serde(rename = "IsTruncated", deserialize_with = "bool_deserializer")]
     ///  Specifies whether (true) or not (false) all of the results were returned.
-    ///  If the number of results exceeds that specified by MaxKeys, all of the results
+    ///  If the number of results exceeds that specified by `MaxKeys`, all of the results
     ///  might not be returned.
     pub is_truncated: bool,
     #[serde(rename = "NextContinuationToken", default)]
