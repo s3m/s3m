@@ -2,6 +2,9 @@
 * Encryption support `enc_key` & `enc_type`
 * Compression support `compress` (using zstd)
 
+## 0.9.5
+* Fixed a regression that prevented listing buckets when only a host is defined. Added a test case to cover this scenario.
+
 ## 0.9.4
 * Accept new regions if any `s3.new-region.amazonaws.com`
 * fixes #58 ensure min(1)/max(255) when using num_cpus
