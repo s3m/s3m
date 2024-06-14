@@ -50,7 +50,7 @@ impl Config {
     /// # Errors
     /// Will return an error if the host is not found
     pub fn get_host(&self, name: &str) -> Result<&Host> {
-        self.hosts.get(name).with_context(|| format!("{name}"))
+        self.hosts.get(name).with_context(|| name.to_string())
     }
 }
 
