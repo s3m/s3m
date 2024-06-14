@@ -89,6 +89,8 @@ pub fn host_bucket_path(matches: &ArgMatches) -> Result<Vec<&str>> {
                 .collect();
 
             if args.len() == 2 {
+                // When not using pipe the format is:
+                // s3m /path/to/file host/bucket/file
                 hbp = args[1].split('/').collect();
             } else if matches.contains_id("pipe") {
                 hbp = args[0].split('/').collect();
@@ -155,6 +157,10 @@ hosts:
             Test {
                 args: vec!["s3m", "foo", "bar"],
                 hbp: vec!["bar"],
+            },
+            Test {
+                args: vec!["s3m", "/path/to/file", "host/bucket/file"],
+                hbp: vec!["host", "bucket", "file"],
             },
             Test {
                 args: vec!["s3m", "foo", "host/bucket"],

@@ -2,6 +2,7 @@ use crate::cli::{actions::Action, commands, dispatch, globals::GlobalArgs, match
 use crate::s3::{Credentials, S3};
 use anyhow::{anyhow, Context, Result};
 use clap::ArgMatches;
+use colored::Colorize;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -162,15 +163,18 @@ fn get_host_from_hbp<'a>(
 ) -> Result<&'a Host> {
     if hbp.is_empty() {
         Err(anyhow!(
-            "No \"host\" found, check config file {}/config.yml",
-            config_path.display()
+            "No \"host\" found, check config file {}/config.yml, For more information try {}",
+            config_path.display(),
+            "--help".green()
         ))
     } else {
         config.get_host(hbp[0]).map_or_else(
-            |_| {
+            |h| {
                 Err(anyhow!(
-                    "No \"host\" found, check config file {}/config.yml",
-                    config_path.display()
+                    "Could not find host: \"{}\". Check config file {}/config.yml, For more information try {}",
+                    h.to_string().red(),
+                    config_path.display(),
+                    "--help".green()
                 ))
             },
             |h| {
