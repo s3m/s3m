@@ -126,6 +126,11 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     // HOST: get it from the config file
     let host = get_host_from_hbp(&config, &config_path, &mut hbp)?;
 
+    // check if compression is enabled
+    if host.compress.is_some() {
+        global_args.compress = true;
+    }
+
     // REGION
     let region = host.get_region()?;
 

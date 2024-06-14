@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 pub struct GlobalArgs {
     pub throttle: Option<usize>,
     pub retries: u32,
+    pub compress: bool,
 }
 
 impl GlobalArgs {
@@ -13,6 +14,7 @@ impl GlobalArgs {
         Self {
             throttle: None,
             retries: 3,
+            compress: false,
         }
     }
 
@@ -40,5 +42,7 @@ mod tests {
 
         global_args.set_retries(5);
         assert_eq!(global_args.retries, 5);
+
+        assert_eq!(global_args.compress, false);
     }
 }

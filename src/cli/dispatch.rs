@@ -175,6 +175,7 @@ pub fn dispatch(
                 ),
                 checksum_algorithm: matches.get_one("checksum").map(|s: &String| s.to_string()),
                 number: matches.get_one::<u8>("number").copied().unwrap_or(1),
+                compress: matches.get_one("compress").copied().unwrap_or(false),
             })
         }
     }
@@ -400,6 +401,7 @@ hosts:
                 tmp_dir,
                 checksum_algorithm,
                 number,
+                compress,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
@@ -414,7 +416,8 @@ hosts:
                 assert_eq!(
                     number,
                     cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
-                )
+                );
+                assert_eq!(compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -454,6 +457,7 @@ hosts:
                 tmp_dir,
                 checksum_algorithm,
                 number,
+                compress,
             } => {
                 assert_eq!(acl, Some("public-read".to_string()));
                 assert_eq!(meta, None);
@@ -466,6 +470,7 @@ hosts:
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(number, 32);
+                assert_eq!(compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -507,6 +512,7 @@ hosts:
                 tmp_dir,
                 checksum_algorithm,
                 number,
+                compress,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(
@@ -530,6 +536,113 @@ hosts:
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, Some("sha256".to_string()));
                 assert_eq!(number, 4);
+                assert_eq!(compress, false);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_put_x() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+        let cmd = new(&tmp_dir.into_path());
+        let matches = cmd.try_get_matches_from(vec![
+            "test",
+            "--config",
+            config_path.as_os_str().to_str().unwrap(),
+            "path/to/file",
+            "h/b/f",
+            "-x",
+        ]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::PutObject {
+                acl,
+                meta,
+                buf_size,
+                file,
+                s3m_dir,
+                key,
+                pipe,
+                quiet,
+                tmp_dir,
+                checksum_algorithm,
+                number,
+                compress,
+            } => {
+                assert_eq!(acl, None);
+                assert_eq!(meta, None);
+                assert_eq!(buf_size, 0);
+                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(s3m_dir, PathBuf::new());
+                assert_eq!(key, "h/b/f");
+                assert_eq!(pipe, false);
+                assert_eq!(quiet, false);
+                assert_eq!(tmp_dir, std::env::temp_dir());
+                assert_eq!(checksum_algorithm, None);
+                assert_eq!(
+                    number,
+                    cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
+                );
+                assert_eq!(compress, true);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_put_compress() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+        let cmd = new(&tmp_dir.into_path());
+        let matches = cmd.try_get_matches_from(vec![
+            "test",
+            "--config",
+            config_path.as_os_str().to_str().unwrap(),
+            "path/to/file",
+            "h/b/f",
+            "--compress",
+        ]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        match action {
+            Action::PutObject {
+                acl,
+                meta,
+                buf_size,
+                file,
+                s3m_dir,
+                key,
+                pipe,
+                quiet,
+                tmp_dir,
+                checksum_algorithm,
+                number,
+                compress,
+            } => {
+                assert_eq!(acl, None);
+                assert_eq!(meta, None);
+                assert_eq!(buf_size, 0);
+                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(s3m_dir, PathBuf::new());
+                assert_eq!(key, "h/b/f");
+                assert_eq!(pipe, false);
+                assert_eq!(quiet, false);
+                assert_eq!(tmp_dir, std::env::temp_dir());
+                assert_eq!(checksum_algorithm, None);
+                assert_eq!(
+                    number,
+                    cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
+                );
+                assert_eq!(compress, true);
             }
             _ => panic!("wrong action"),
         }

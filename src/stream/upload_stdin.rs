@@ -211,6 +211,7 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     let globals = GlobalArgs {
         throttle: part.throttle,
         retries: part.retries,
+        compress: false,
     };
 
     for attempt in 1..=part.retries {

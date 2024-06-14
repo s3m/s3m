@@ -219,7 +219,6 @@ pub fn new(config_path: &Path) -> Command {
             .help("Compress")
             .long("compress")
             .short('x')
-            .env("S3M_COMPRESS")
             .num_args(0)
         )
         .subcommand(cmd_acl::command())

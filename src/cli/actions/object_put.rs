@@ -32,6 +32,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         tmp_dir,
         checksum_algorithm,
         number,
+        compress: _,
     } = action
     {
         if pipe {

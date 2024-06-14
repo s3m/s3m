@@ -50,7 +50,7 @@ impl Config {
     /// # Errors
     /// Will return an error if the host is not found
     pub fn get_host(&self, name: &str) -> Result<&Host> {
-        self.hosts.get(name).with_context(|| format!("{name}"))
+        self.hosts.get(name).with_context(|| name.to_string())
     }
 }
 
@@ -121,6 +121,14 @@ hosts:
     access_key: XXX
     secret_key: YYY
     bucket: my-bucket"#;
+
+    const CONF_COMPRESS: &str = r#"---
+hosts:
+  s3:
+    region: us-east-2
+    access_key: XXX
+    secret_ke: YYY
+    compress: true"#;
 
     #[test]
     fn test_config_get_host() {
@@ -238,6 +246,23 @@ hosts:
                 endpoint: "s3.x.amazonaws.com".to_string()
             }
         );
+    }
+
+    #[test]
+    fn test_config_get_compress() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file.write_all(CONF_COMPRESS.as_bytes()).unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf());
+        assert!(c.is_ok());
+        let c = c.unwrap();
+        let h = c.get_host("s3");
+        assert!(h.is_ok());
+        let h = h.unwrap();
+        let r = h.get_region();
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        assert_eq!(r, Region::UsEast2);
+        assert_eq!(h.compress, Some(true));
     }
 
     #[test]
