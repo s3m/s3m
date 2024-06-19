@@ -38,6 +38,7 @@ struct Stream<'a> {
 /// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
 /// # Errors
 /// Will return an error if the upload fails
+#[allow(clippy::too_many_arguments)]
 pub async fn stream(
     s3: &S3,
     key: &str,

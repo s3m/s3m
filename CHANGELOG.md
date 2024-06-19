@@ -1,6 +1,5 @@
-## 0.10.0 Unreleased
-* Encryption support `enc_key` & `enc_type`
-* Compression support `compress` (using zstd)
+## 0.10.0 🛶 Unreleased
+* Compression support `-x/--compress` (using zstd)
 
 ## 0.9.5
 * Fixed a regression that prevented listing buckets when only a host is defined. Added a test case to cover this scenario.
