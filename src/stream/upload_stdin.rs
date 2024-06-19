@@ -41,7 +41,7 @@ struct Stream<'a> {
 #[allow(clippy::too_many_arguments)]
 pub async fn stream(
     s3: &S3,
-    key: &str,
+    object_key: &str,
     acl: Option<String>,
     meta: Option<BTreeMap<String, String>>,
     quiet: bool,
@@ -49,6 +49,13 @@ pub async fn stream(
     globals: GlobalArgs,
     compress: bool,
 ) -> Result<String> {
+    // use .zst extension if compress option is set
+    let key = if compress && !object_key.ends_with(".zst") {
+        &format!("{}.zst", object_key)
+    } else {
+        object_key
+    };
+
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key, acl, meta, None);
     let response = action.request(s3).await?;
