@@ -98,6 +98,7 @@ pub fn new(config_path: &Path) -> Command {
             ])
             .value_name("algorithm")
             .num_args(1)
+            .conflicts_with("pipe")
         )
         .arg(
             Arg::new("quiet")
@@ -220,6 +221,7 @@ pub fn new(config_path: &Path) -> Command {
             .long("compress")
             .short('x')
             .num_args(0)
+            .conflicts_with("checksum")
         )
         .subcommand(cmd_acl::command())
         .subcommand(cmd_get::command())
@@ -509,5 +511,21 @@ hosts:
             assert_eq!(m.get_one::<usize>("retries").map(|s| *s), Some(n.parse()?));
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_conflicts_pipe_checksum() {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--pipe", "--checksum"]);
+        assert!(!m.is_ok());
+    }
+
+    #[test]
+    fn test_conflicts_compress_checksum() {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--compress", "--checksum"]);
+        assert!(!m.is_ok());
     }
 }

@@ -154,7 +154,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     log::debug!("S3:\n{s3}");
 
     // create the action
-    let action = dispatch::dispatch(hbp, bucket, buf_size, config_path, &matches)?;
+    let action = dispatch::dispatch(hbp, bucket, buf_size, config_path, &matches, &global_args)?;
 
     log::debug!("action: {:#?}", action);
 

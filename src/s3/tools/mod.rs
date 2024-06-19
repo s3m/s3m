@@ -4,7 +4,6 @@ use ring::{digest, hmac};
 use std::{fmt::Write, io::prelude::*, path::Path};
 
 const MAX_PART_SIZE: u64 = 5_368_709_120;
-const MAX_FILE_SIZE: u64 = 5_497_558_138_880;
 const MAX_PARTS_PER_UPLOAD: usize = 10_000;
 
 #[must_use]
@@ -39,11 +38,6 @@ pub fn write_hex_bytes(bytes: &[u8]) -> String {
 /// Will return `Err` if the file size exceeds 5 TB
 /// or if the part size exceeds 5 GB
 pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
-    if file_size > MAX_FILE_SIZE {
-        log::error!("object size limit 5 TB");
-        return Err(anyhow!("object size limit 5 TB"));
-    }
-
     log::info!("file size: {}, buf size: {}", file_size, buf_size);
 
     let mut part_size = buf_size.max(1);
@@ -95,6 +89,8 @@ mod tests {
     use crate::stream::iterator::PartIterator;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    const MAX_FILE_SIZE: u64 = 5_497_558_138_880;
 
     #[test]
     fn test_sha256_digest() {
@@ -161,13 +157,6 @@ mod tests {
     fn test_calculate_part_size_within_limits() {
         let result = calculate_part_size(1_000_000, 1_000);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_calculate_part_size_exceeds_file_size_limit() {
-        let result = calculate_part_size(MAX_FILE_SIZE + 1, 1_000);
-        assert!(result.is_err());
-        assert_eq!(result.err().unwrap().to_string(), "object size limit 5 TB");
     }
 
     #[test]

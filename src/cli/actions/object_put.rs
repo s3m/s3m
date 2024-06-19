@@ -5,7 +5,8 @@ use crate::{
         tools, S3,
     },
     stream::{
-        db::Db, upload_default::upload, upload_multipart::upload_multipart, upload_stdin::stream,
+        db::Db, upload_compressed::stream_compressed, upload_default::upload,
+        upload_multipart::upload_multipart, upload_stdin::stream,
     },
 };
 use anyhow::{anyhow, Context, Result};
@@ -16,6 +17,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::oneshot;
+
+const MAX_FILE_SIZE: u64 = 5_497_558_138_880;
 
 /// # Errors
 /// Will return an error if the action fails
@@ -63,101 +66,107 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                     ))
                 })?;
 
-            // get the part/chunk size
-            let part_size = tools::calculate_part_size(file_size, buf_size as u64)?;
+            if file_size > MAX_FILE_SIZE {
+                log::error!("object size limit 5 TB");
+                return Err(anyhow!("object size limit 5 TB"));
+            }
 
             // file_path
             let file_path = Path::new(file);
 
-            log::info!(
+            // if compress is set, stream the compressed file
+            if compress {
+                let etag =
+                    stream_compressed(s3, &key, acl, meta, quiet, tmp_dir, globals, file_path)
+                        .await?;
+                if !quiet {
+                    println!("ETag: {etag}");
+                }
+            } else {
+                // get the part/chunk size
+                let part_size = tools::calculate_part_size(file_size, buf_size as u64)?;
+
+                log::info!(
                 "file path: {}\nfile size: {file_size}\nlast modified time: {file_mtime}\npart size: {part_size}",
                 file_path.display()
             );
 
-            // get the checksum with progress bar
-            let blake3_checksum = blake3_checksum(file_path, quiet)?;
+                // get the checksum with progress bar
+                let blake3_checksum = blake3_checksum(file_path, quiet)?;
 
-            log::info!("checksum: {}", &blake3_checksum);
+                log::info!("checksum: {}", &blake3_checksum);
 
-            // keep track of the uploaded parts
-            let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
-                .context("could not create stream tree, try option \"--clean\"")?;
+                // keep track of the uploaded parts
+                let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
+                    .context("could not create stream tree, try option \"--clean\"")?;
 
-            // check if file has been uploaded already
-            let etag = &db
-                .check()?
-                .context("could not query db, try option \"--clean\", to clean it");
+                // check if file has been uploaded already
+                let etag = &db
+                    .check()?
+                    .context("could not query db, try option \"--clean\", to clean it");
 
-            // if file has been uploaded already, return the etag
-            if let Ok(etag) = etag {
-                if !quiet {
-                    println!("{etag}");
-                }
-                return Ok(());
-            };
+                // if file has been uploaded already, return the etag
+                if let Ok(etag) = etag {
+                    if !quiet {
+                        println!("{etag}");
+                    }
+                    return Ok(());
+                };
 
-            // compress the file if the option is set
-            if compress {
-                let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals, true).await?;
-                if !quiet {
-                    println!("ETag: {etag}");
-                }
-                return Ok(());
-            }
+                // upload the file in parts if it is bigger than the chunk size (buf_size)
+                if file_size > part_size as u64 {
+                    // return only the the additional checksum algorithm if the option is set
+                    let additional_checksum =
+                        calculate_additional_checksum(file_path, checksum_algorithm, false).await;
 
-            // upload the file in parts if it is bigger than the chunk size (buf_size)
-            if file_size > part_size as u64 {
-                // return only the the additional checksum algorithm if the option is set
-                let additional_checksum =
-                    calculate_additional_checksum(file_path, checksum_algorithm, false).await;
+                    log::debug!("additional checksum: {:#?}", &additional_checksum);
 
-                log::debug!("additional checksum: {:#?}", &additional_checksum);
+                    let rs = upload_multipart(
+                        s3,
+                        &key,
+                        file_path,
+                        file_size,
+                        part_size,
+                        &db,
+                        acl,
+                        meta,
+                        quiet,
+                        additional_checksum,
+                        number,
+                        globals,
+                    )
+                    .await
+                    .context("multipart upload failed")?;
 
-                let rs = upload_multipart(
-                    s3,
-                    &key,
-                    file_path,
-                    file_size,
-                    part_size,
-                    &db,
-                    acl,
-                    meta,
-                    quiet,
-                    additional_checksum,
-                    number,
-                    globals,
-                )
-                .await
-                .context("multipart upload failed")?;
+                    if !quiet {
+                        println!("{rs}");
+                    }
 
-                if !quiet {
-                    println!("{rs}");
-                }
+                // upload the file as a whole if it is smaller than the chunk size (buf_size)
+                } else {
+                    // calculate the additional checksum if the option is set
+                    let additional_checksum =
+                        calculate_additional_checksum(file_path, checksum_algorithm, true).await;
 
-            // upload the file as a whole if it is smaller than the chunk size (buf_size)
-            } else {
-                // calculate the additional checksum if the option is set
-                let additional_checksum =
-                    calculate_additional_checksum(file_path, checksum_algorithm, true).await;
+                    log::debug!("additional checksum: {:?}", &additional_checksum);
 
-                log::debug!("additional checksum: {:?}", &additional_checksum);
+                    let rs = upload(
+                        s3,
+                        &key,
+                        file_path,
+                        file_size,
+                        &db,
+                        acl,
+                        meta,
+                        quiet,
+                        additional_checksum,
+                        globals,
+                    )
+                    .await?;
 
-                let rs = upload(
-                    s3,
-                    &key,
-                    file_path,
-                    file_size,
-                    &db,
-                    acl,
-                    meta,
-                    quiet,
-                    additional_checksum,
-                    globals,
-                )
-                .await?;
-
-                if !quiet {
-                    println!("{rs}");
+                    if !quiet {
+                        println!("{rs}");
+                    }
                 }
             }
         }

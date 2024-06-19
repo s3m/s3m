@@ -8,17 +8,24 @@ use bytes::BytesMut;
 use crossbeam::channel::unbounded;
 use futures::stream::TryStreamExt;
 use ring::digest::{Context, SHA256};
-use std::{collections::BTreeMap, io::Write, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    path::{Path, PathBuf},
+};
 use tempfile::Builder;
-use tokio::io::{stdin, Error, ErrorKind};
+use tokio::{
+    fs::File,
+    io::{Error, ErrorKind},
+};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use zstd::stream::encode_all;
 
-/// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
+/// Read file in chunks of 512MB
 /// # Errors
 /// Will return an error if the upload fails
 #[allow(clippy::too_many_arguments)]
-pub async fn stream(
+pub async fn stream_compressed(
     s3: &S3,
     object_key: &str,
     acl: Option<String>,
@@ -26,10 +33,10 @@ pub async fn stream(
     quiet: bool,
     tmp_dir: PathBuf,
     globals: GlobalArgs,
-    compress: bool,
+    file_path: &Path,
 ) -> Result<String> {
     // use .zst extension if compress option is set
-    let key = get_key(object_key, compress);
+    let key = get_key(object_key, true);
 
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(&key, acl, meta, None);
@@ -78,11 +85,13 @@ pub async fn stream(
         retries: globals.retries,
     };
 
+    let file = File::open(file_path).await?;
+
     // try_fold will pass writer to fold_fn until there are no more bytes to read.
     // FrameRead return a stream of Result<BytesMut, io::Error>.
-    let mut last_stream = FramedRead::new(stdin(), BytesCodec::new())
+    let mut last_stream = FramedRead::new(file, BytesCodec::new())
         .try_fold(first_stream, |part, bytes| {
-            fold_fn(part, bytes, STDIN_BUFFER_SIZE, compress)
+            fold_fn(part, bytes, STDIN_BUFFER_SIZE)
         })
         .await?;
 
@@ -135,15 +144,10 @@ async fn fold_fn(
     mut part: Stream<'_>,
     bytes: BytesMut,
     buffer_size: usize,
-    compress: bool,
 ) -> Result<Stream, Error> {
-    // compress data using zstd if option is set
-    let data = if compress {
-        encode_all(&*bytes, 0)
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Error compressing data: {e}")))?
-    } else {
-        bytes.to_vec()
-    };
+    // compress data using zstd
+    let data = encode_all(&*bytes, 0)
+        .map_err(|e| Error::new(ErrorKind::Other, format!("Error compressing data: {e}")))?;
 
     // when data is bigger than 512MB, upload a part
     if part.count >= buffer_size {
@@ -188,90 +192,4 @@ async fn fold_fn(
     part.md5.consume(&data);
 
     Ok(part)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::s3::{
-        checksum::{Checksum, ChecksumAlgorithm},
-        {Credentials, Region, S3},
-    };
-    use base64ct::{Base64, Encoding};
-    use secrecy::Secret;
-    use std::io::Write;
-    use tempfile::{tempdir, Builder};
-    use tokio::fs::File;
-
-    #[tokio::test]
-    async fn test_fold_fn() -> Result<()> {
-        // env_logger::init();
-        // TODO need to refactor to test StreamPart and Stream
-        let mut tmp_file = Builder::new().prefix("test").suffix(".s3m").tempfile()?;
-        let chunk_size_bytes = 1 * 1024 * 1024;
-        let total_size_bytes = 10 * 1024 * 1024;
-        let buffer: Vec<u8> = vec![0; chunk_size_bytes];
-        let num_chunks = total_size_bytes / chunk_size_bytes;
-        for _ in 0..num_chunks {
-            // Write the buffer to the file for each chunk
-            tmp_file.write_all(&buffer)?;
-        }
-        let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
-        let hash = checksum.calculate(tmp_file.path()).await?;
-        let decoded = Base64::decode_vec(&hash)
-            .unwrap()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>();
-
-        let s3 = S3::new(
-            &Credentials::new(
-                "AKIAIOSFODNN7EXAMPLE",
-                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
-            ),
-            &"us-west-1".parse::<Region>().unwrap(),
-            Some("awsexamplebucket1".to_string()),
-            false,
-        );
-
-        let tmp_dir = tempdir()?;
-
-        let first_stream = Stream {
-            tmp_file: Builder::new().prefix("test").suffix(".s3m").tempfile()?,
-            count: 0,
-            etags: Vec::new(),
-            key: "test",
-            part_number: 1,
-            s3: &s3,
-            upload_id: "test",
-            sha: Context::new(&SHA256),
-            md5: md5::Context::new(),
-            channel: None,
-            tmp_dir: tmp_dir.path().to_path_buf(),
-            throttle: None,
-            retries: 0,
-        };
-
-        let file = File::open(tmp_file).await?;
-
-        let last_stream = FramedRead::new(file, BytesCodec::new())
-            .try_fold(first_stream, |part, bytes| {
-                fold_fn(part, bytes, STDIN_BUFFER_SIZE, false)
-            })
-            .await?;
-
-        assert_eq!(last_stream.count, total_size_bytes);
-
-        let digest_sha1 = last_stream
-            .sha
-            .finish()
-            .as_ref()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>();
-
-        assert_eq!(decoded, digest_sha1);
-
-        Ok(())
-    }
 }
