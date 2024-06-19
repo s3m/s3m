@@ -14,6 +14,7 @@ use tokio::{
     time::{sleep, Duration},
 };
 use tokio_util::codec::{BytesCodec, FramedRead};
+use zstd::stream::encode_all;
 
 // 512MB
 const STDIN_BUFFER_SIZE: usize = 1_024 * 1_024 * 512;
@@ -45,6 +46,7 @@ pub async fn stream(
     quiet: bool,
     tmp_dir: PathBuf,
     globals: GlobalArgs,
+    compress: bool,
 ) -> Result<String> {
     // Initiate Multipart Upload - request an Upload ID
     let action = actions::CreateMultipartUpload::new(key, acl, meta, None);
@@ -95,12 +97,9 @@ pub async fn stream(
 
     // try_fold will pass writer to fold_fn until there are no more bytes to read.
     // FrameRead return a stream of Result<BytesMut, io::Error>.
-    // let mut last_stream = FramedRead::new(stdin(), BytesCodec::new())
-    //     .try_fold(first_stream, fold_fn)
-    //     .await?;
     let mut last_stream = FramedRead::new(stdin(), BytesCodec::new())
         .try_fold(first_stream, |part, bytes| {
-            fold_fn(part, bytes, STDIN_BUFFER_SIZE)
+            fold_fn(part, bytes, STDIN_BUFFER_SIZE, compress)
         })
         .await?;
 
@@ -147,15 +146,22 @@ pub async fn stream(
     Ok(rs.e_tag)
 }
 
-// try to read/parse only once on the same, so in the loop calculate the sha256, md5 and get the
+// read/parse only once in the loop, calculate the sha256, md5 and get the
 // length, this should speed up things and consume less resources
-// TODO crossbeam channel to get progress bar but for now pv could be used, for example:
-// cat file | pv | s3m
 async fn fold_fn(
     mut part: Stream<'_>,
     bytes: BytesMut,
     buffer_size: usize,
+    compress: bool,
 ) -> Result<Stream, Error> {
+    // compress data using zstd if option is set
+    let data = if compress {
+        encode_all(&*bytes, 0)
+            .map_err(|e| Error::new(ErrorKind::Other, format!("Error compressing data: {e}")))?
+    } else {
+        bytes.to_vec()
+    };
+
     // when data is bigger than 512MB, upload a part
     if part.count >= buffer_size {
         let etag = try_stream_part(&part)
@@ -173,7 +179,7 @@ async fn fold_fn(
             .tempfile_in(&part.tmp_dir)?;
 
         // set count to the current bytes len and increment part number
-        part.count = bytes.len();
+        part.count = data.len();
         part.part_number += 1;
         part.sha = Context::new(&SHA256);
         part.md5 = md5::Context::new();
@@ -185,18 +191,18 @@ async fn fold_fn(
         );
     } else {
         // increment the count
-        part.count += bytes.len();
+        part.count += data.len();
 
         log::debug!(
             "Adding {} bytes to part number {}",
-            bytes.len(),
+            data.len(),
             part.part_number
         );
     }
 
-    part.tmp_file.write_all(&bytes)?;
-    part.sha.update(&bytes);
-    part.md5.consume(&bytes);
+    part.tmp_file.write_all(&data)?;
+    part.sha.update(&data);
+    part.md5.consume(&data);
 
     Ok(part)
 }
@@ -336,7 +342,7 @@ mod tests {
 
         let last_stream = FramedRead::new(file, BytesCodec::new())
             .try_fold(first_stream, |part, bytes| {
-                fold_fn(part, bytes, STDIN_BUFFER_SIZE)
+                fold_fn(part, bytes, STDIN_BUFFER_SIZE, false)
             })
             .await?;
 

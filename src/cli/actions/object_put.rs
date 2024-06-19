@@ -32,11 +32,11 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         tmp_dir,
         checksum_algorithm,
         number,
-        compress: _,
+        compress,
     } = action
     {
         if pipe {
-            let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals).await?;
+            let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals, compress).await?;
             if !quiet {
                 println!("ETag: {etag}");
             }
@@ -95,6 +95,15 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 }
                 return Ok(());
             };
+
+            // compress the file if the option is set
+            if compress {
+                let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals, true).await?;
+                if !quiet {
+                    println!("ETag: {etag}");
+                }
+                return Ok(());
+            }
 
             // upload the file in parts if it is bigger than the chunk size (buf_size)
             if file_size > part_size as u64 {
