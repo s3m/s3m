@@ -1,4 +1,4 @@
-use crate::cli::actions::Action;
+use crate::cli::{actions::Action, globals::GlobalArgs};
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use std::{borrow::ToOwned, collections::BTreeMap, path::PathBuf, string::String};
@@ -10,6 +10,7 @@ pub fn dispatch(
     buf_size: usize,
     s3m_dir: PathBuf,
     matches: &clap::ArgMatches,
+    global_args: &GlobalArgs,
 ) -> Result<Action> {
     // Closure to return subcommand_matches
     let sub_m = |subcommand| -> Result<&clap::ArgMatches> {
@@ -175,7 +176,11 @@ pub fn dispatch(
                 ),
                 checksum_algorithm: matches.get_one("checksum").map(|s: &String| s.to_string()),
                 number: matches.get_one::<u8>("number").copied().unwrap_or(1),
-                compress: matches.get_one("compress").copied().unwrap_or(false),
+                compress: if global_args.compress {
+                    true
+                } else {
+                    matches.get_one("compress").copied().unwrap_or(false)
+                },
             })
         }
     }
@@ -187,6 +192,7 @@ mod tests {
     use crate::cli::{
         actions::Action,
         commands::{cmd_acl, cmd_cb, cmd_get, cmd_ls, cmd_rm, cmd_share, new},
+        globals::GlobalArgs,
     };
     use clap::Command;
     use std::cmp;
@@ -208,7 +214,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "acl", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::ACL { key, acl } => {
                 assert_eq!(key, "h/b/f");
@@ -224,7 +238,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::GetObject {
                 key,
@@ -249,7 +271,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f", "-q", "-f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::GetObject {
                 key,
@@ -274,7 +304,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "ls", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::ListObjects {
                 bucket,
@@ -303,6 +341,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
+            &GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -319,7 +358,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "rm", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::DeleteObject {
                 key,
@@ -340,7 +387,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::DeleteObject {
                 key,
@@ -361,7 +416,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "share", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::ShareObject { key, expire } => {
                 assert_eq!(key, "h/b/f");
@@ -387,7 +450,15 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -443,7 +514,15 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -498,7 +577,15 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -559,7 +646,15 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -612,7 +707,15 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
-        let action = dispatch(vec!["h/b/f"], None, 0, PathBuf::new(), &matches).unwrap();
+        let action = dispatch(
+            vec!["h/b/f"],
+            None,
+            0,
+            PathBuf::new(),
+            &matches,
+            &GlobalArgs::new(),
+        )
+        .unwrap();
         match action {
             Action::PutObject {
                 acl,

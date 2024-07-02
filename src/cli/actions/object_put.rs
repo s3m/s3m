@@ -98,11 +98,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
 
             // compress the file if the option is set
             if compress {
-                let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals, true).await?;
-                if !quiet {
-                    println!("ETag: {etag}");
-                }
-                return Ok(());
+                todo!();
             }
 
             // upload the file in parts if it is bigger than the chunk size (buf_size)
