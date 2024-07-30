@@ -31,8 +31,14 @@ pub async fn stream(
     // use .zst extension if compress option is set
     let key = get_key(object_key, compress);
 
+    let mut meta = meta.unwrap_or_default();
+
+    if compress {
+        meta.insert("Content-Type".to_string(), "application/zstd".to_string());
+    }
+
     // Initiate Multipart Upload - request an Upload ID
-    let action = actions::CreateMultipartUpload::new(&key, acl, meta, None);
+    let action = actions::CreateMultipartUpload::new(&key, acl, Some(meta), None);
     let response = action.request(s3).await?;
     let upload_id = response.upload_id;
     let (sender, receiver) = unbounded::<usize>();
