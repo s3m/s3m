@@ -66,11 +66,6 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                     ))
                 })?;
 
-            if file_size > MAX_FILE_SIZE {
-                log::error!("object size limit 5 TB");
-                return Err(anyhow!("object size limit 5 TB"));
-            }
-
             // file_path
             let file_path = Path::new(file);
 
@@ -83,6 +78,12 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                     println!("ETag: {etag}");
                 }
             } else {
+                // we check here and not before because compressing the file changes the file size
+                if file_size > MAX_FILE_SIZE {
+                    log::error!("object size limit 5 TB");
+                    return Err(anyhow!("object size limit 5 TB"));
+                }
+
                 // get the part/chunk size
                 let part_size = tools::calculate_part_size(file_size, buf_size as u64)?;
 
