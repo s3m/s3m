@@ -1,4 +1,4 @@
-## 0.10.0 🛶 Unreleased
+## 0.10.0 🛶
 * Compression support `-x/--compress` (using zstd)
 
 ## 0.9.5
