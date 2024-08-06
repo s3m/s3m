@@ -81,8 +81,8 @@ jobs:
 
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Coveralls GitHub Action
         uses: coverallsapp/github-action@v2
