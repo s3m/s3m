@@ -119,6 +119,8 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{Credentials, Region, S3};
+    use secrecy::Secret;
 
     #[test]
     fn test_get_key() {
@@ -134,5 +136,38 @@ mod tests {
         for (key, compress, expected) in test_cases {
             assert_eq!(get_key(key, compress), expected);
         }
+    }
+
+    #[test]
+    fn test_try_stream_part() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let part = Stream {
+            tmp_file: NamedTempFile::new().unwrap(),
+            count: 0,
+            etags: Vec::new(),
+            key: "test",
+            part_number: 1,
+            s3: &s3,
+            upload_id: "test",
+            sha: ring::digest::Context::new(&ring::digest::SHA256),
+            md5: md5::Context::new(),
+            channel: None,
+            tmp_dir: PathBuf::new(),
+            throttle: None,
+            retries: 1,
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(try_stream_part(&part));
+        assert!(result.is_err());
     }
 }
