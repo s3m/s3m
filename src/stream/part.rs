@@ -12,7 +12,7 @@ pub struct Part {
 
 impl Part {
     #[must_use]
-    pub fn new(number: u16, seek: u64, chunk: u64, checksum: Option<Checksum>) -> Self {
+    pub const fn new(number: u16, seek: u64, chunk: u64, checksum: Option<Checksum>) -> Self {
         Self {
             number,
             seek,

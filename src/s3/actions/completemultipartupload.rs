@@ -71,7 +71,7 @@ impl Serialize for Part {
 
 impl<'a> CompleteMultipartUpload<'a> {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         key: &'a str,
         upload_id: &'a str,
         parts: BTreeMap<u16, Part>,
