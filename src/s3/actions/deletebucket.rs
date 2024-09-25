@@ -60,7 +60,7 @@ impl Action for DeleteBucket {
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region, S3};
-    use secrecy::Secret;
+    use secrecy::SecretString;
 
     #[test]
     fn test_method() {
@@ -91,7 +91,7 @@ mod tests {
         let s3 = S3::new(
             &Credentials::new(
                 "AKIAIOSFODNN7EXAMPLE",
-                &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
             ),
             &"us-west-1".parse::<Region>().unwrap(),
             Some("awsexamplebucket1".to_string()),

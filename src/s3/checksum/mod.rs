@@ -79,6 +79,7 @@ impl Checksum {
         }
     }
 
+    #[must_use]
     pub fn hasher(&self) -> Box<dyn ChecksumHasher> {
         let hasher: Box<dyn ChecksumHasher> = match self.algorithm {
             ChecksumAlgorithm::Crc32 => Box::new(Crc32Hasher::new()),

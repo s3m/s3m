@@ -1,6 +1,6 @@
 use crate::s3::Region;
 use anyhow::{Context, Result};
-use secrecy::Secret;
+use secrecy::SecretString;
 use serde::Deserialize;
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
 
@@ -27,10 +27,10 @@ pub struct Host {
     pub compress: Option<bool>,
 }
 
-pub type SecretKey = Secret<String>;
+pub type SecretKey = SecretString;
 
 pub fn default_secret_key() -> SecretKey {
-    Secret::new(String::new())
+    SecretString::new(String::new().into())
 }
 
 impl Config {

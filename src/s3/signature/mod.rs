@@ -333,14 +333,14 @@ fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &st
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region};
-    use secrecy::Secret;
+    use secrecy::SecretString;
 
     #[test]
     fn test_presigned_url() {
         // https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
         let credentials = Credentials::new(
             "AKIAIOSFODNN7EXAMPLE",
-            &Secret::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
+            &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
         );
         let region = Region::Custom {
             name: "us-east-1".to_string(),
