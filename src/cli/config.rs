@@ -17,7 +17,7 @@ pub struct Host {
     #[serde(default)]
     pub access_key: String,
 
-    #[serde(default = "default_secret_key")]
+    #[serde(default)]
     pub secret_key: SecretKey,
 
     pub bucket: Option<String>,
@@ -28,10 +28,6 @@ pub struct Host {
 }
 
 pub type SecretKey = SecretString;
-
-pub fn default_secret_key() -> SecretKey {
-    SecretString::new(String::new().into())
-}
 
 impl Config {
     /// Create a new config from a config.yml file
