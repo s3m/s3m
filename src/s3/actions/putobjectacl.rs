@@ -51,7 +51,7 @@ impl<'a> PutObjectAcl<'a> {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectAcl.html>
-impl<'a> Action for PutObjectAcl<'a> {
+impl Action for PutObjectAcl<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"PUT")?)
     }

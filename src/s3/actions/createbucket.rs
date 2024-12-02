@@ -47,7 +47,7 @@ impl<'a> CreateBucket<'a> {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html>
-impl<'a> Action for CreateBucket<'a> {
+impl Action for CreateBucket<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"PUT")?)
     }

@@ -34,7 +34,7 @@ impl<'a> GetObjectAcl<'a> {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
-impl<'a> Action for GetObjectAcl<'a> {
+impl Action for GetObjectAcl<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"GET")?)
     }

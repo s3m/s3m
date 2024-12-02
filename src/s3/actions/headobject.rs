@@ -44,7 +44,7 @@ impl<'a> HeadObject<'a> {
 }
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
-impl<'a> Action for HeadObject<'a> {
+impl Action for HeadObject<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"HEAD")?)
     }

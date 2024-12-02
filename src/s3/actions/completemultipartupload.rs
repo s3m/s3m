@@ -25,7 +25,7 @@ pub struct CompleteMultipartUpload<'a> {
     headers: Option<BTreeMap<String, String>>,
 }
 
-impl<'a> Serialize for CompleteMultipartUpload<'a> {
+impl Serialize for CompleteMultipartUpload<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -171,7 +171,7 @@ impl<'a> CompleteMultipartUpload<'a> {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html>
-impl<'a> Action for CompleteMultipartUpload<'a> {
+impl Action for CompleteMultipartUpload<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"POST")?)
     }

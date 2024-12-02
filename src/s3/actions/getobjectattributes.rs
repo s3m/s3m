@@ -33,7 +33,7 @@ impl<'a> GetObjectAttributes<'a> {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectAttributes.html>
-impl<'a> Action for GetObjectAttributes<'a> {
+impl Action for GetObjectAttributes<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"GET")?)
     }

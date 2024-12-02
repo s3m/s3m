@@ -71,7 +71,7 @@ impl<'a> StreamPart<'a> {
 }
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-impl<'a> Action for StreamPart<'a> {
+impl Action for StreamPart<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"PUT")?)
     }

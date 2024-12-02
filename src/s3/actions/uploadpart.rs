@@ -123,7 +123,7 @@ impl<'a> UploadPart<'a> {
 }
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-impl<'a> Action for UploadPart<'a> {
+impl Action for UploadPart<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"PUT")?)
     }

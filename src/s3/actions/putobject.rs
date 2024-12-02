@@ -85,7 +85,7 @@ impl<'a> PutObject<'a> {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
-impl<'a> Action for PutObject<'a> {
+impl Action for PutObject<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"PUT")?)
     }

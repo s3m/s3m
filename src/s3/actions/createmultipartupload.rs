@@ -56,7 +56,7 @@ impl<'a> CreateMultipartUpload<'a> {
 }
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
-impl<'a> Action for CreateMultipartUpload<'a> {
+impl Action for CreateMultipartUpload<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"POST")?)
     }

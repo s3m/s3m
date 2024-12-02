@@ -39,7 +39,7 @@ impl<'a> DeleteObject<'a> {
 }
 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html
-impl<'a> Action for DeleteObject<'a> {
+impl Action for DeleteObject<'_> {
     fn http_method(&self) -> Result<Method> {
         Ok(Method::from_bytes(b"DELETE")?)
     }
