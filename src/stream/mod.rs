@@ -40,7 +40,7 @@ fn get_key(key: &str, compress: bool) -> String {
     if compress
         && !Path::new(key)
             .extension()
-            .map_or(false, |ext| ext.eq_ignore_ascii_case("zst"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zst"))
     {
         return format!("{key}.zst");
     }

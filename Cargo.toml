@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.10.1"
+version = "0.11.0"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -21,11 +21,11 @@ bytes = "1"
 bytesize = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["env", "string"] }
-colored = "2"
+colored = "3"
 crc32c = "0.6"
 crc32fast = "1.4"
 crossbeam = "0.8"
-dirs = "5"
+dirs = "6"
 env_logger = "0.11"
 futures = "0.3"
 http = "1"

@@ -3,6 +3,7 @@ use crate::{
     s3::{actions, S3},
 };
 use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
 use colored::Colorize;
 use std::{
     cmp::min,
@@ -24,6 +25,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         dest,
         quiet,
         force,
+        versions,
     } = action
     {
         if metadata {
@@ -39,6 +41,29 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
             i += 1;
             for (k, v) in headers {
                 println!("{:<width$} {}", format!("{k}:").green(), v, width = i);
+            }
+        } else if versions {
+            let action = actions::ListObjectVersions::new(&key);
+            let result = action.request(s3).await?;
+
+            if result.versions.is_empty() {
+                println!("No versions found for key: {}", key);
+                return Ok(());
+            }
+
+            for version in result.versions {
+                let dt = DateTime::parse_from_rfc3339(&version.last_modified)?;
+                let last_modified: DateTime<Utc> = DateTime::from(dt);
+                println!(
+                    "{} {:>10} {:<}",
+                    format!("[{}]", last_modified.format("%F %T %Z")).green(),
+                    bytesize::to_string(version.size, true).yellow(),
+                    if version.is_latest {
+                        format!("{} (latest)", version.key)
+                    } else {
+                        version.key.to_string()
+                    }
+                );
             }
         } else {
             let file_name = Path::new(&key)

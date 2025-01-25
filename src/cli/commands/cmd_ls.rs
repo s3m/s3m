@@ -30,6 +30,15 @@ pub fn command() -> Command {
                 .short('a')
                 .num_args(1),
         )
+        .arg(
+            Arg::new("max-kub")
+                .help("Limits the number of keys, uploads or buckets returned in the response")
+                .long("number")
+                .short('n')
+                .value_name("NUMBER")
+                .value_parser(clap::value_parser!(usize))
+                .num_args(1),
+        )
 }
 
 #[cfg(test)]
@@ -95,6 +104,18 @@ mod tests {
             m.get_one::<String>("start-after").map(String::as_str),
             Some("test")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_max_keys() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--number", "10"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<usize>("max-kub").map_or_else(|| 0, |v| *v), 10);
         Ok(())
     }
 }

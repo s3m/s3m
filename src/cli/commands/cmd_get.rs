@@ -30,6 +30,12 @@ pub fn command() -> Command {
                 .help("Force overwrite")
                 .num_args(0),
         )
+        .arg(
+            Arg::new("versions")
+                .long("versions")
+                .help("List all versions of an object (key will be used as prefix)")
+                .num_args(0),
+        )
 }
 
 #[cfg(test)]
@@ -108,6 +114,18 @@ mod tests {
         // get matches
         let m = m.unwrap();
         assert_eq!(m.get_one::<bool>("force").copied(), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_versions() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--versions"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<bool>("versions").copied(), Some(true));
         Ok(())
     }
 }

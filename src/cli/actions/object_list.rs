@@ -16,6 +16,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
     if let Action::ListObjects {
         bucket,
         list_multipart_uploads,
+        max_kub,
         prefix,
         start_after,
     } = action
@@ -23,15 +24,16 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
         match (bucket, list_multipart_uploads) {
             // list objects
             (Some(_), false) => {
-                let action = actions::ListObjectsV2::new(prefix, start_after);
+                let action = actions::ListObjectsV2::new(prefix, start_after, max_kub);
                 let rs = action.request(s3).await?;
                 for object in rs.contents {
                     print_object_info(&object)?;
                 }
             }
+
             // list multipart uploads
             (Some(_), true) => {
-                let action = actions::ListMultipartUploads::new();
+                let action = actions::ListMultipartUploads::new(max_kub);
                 let rs = action.request(s3).await?;
                 if let Some(uploads) = rs.upload {
                     for upload in uploads {
@@ -39,9 +41,10 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                     }
                 }
             }
+
             // list buckets
             (None, _) => {
-                let action = actions::ListBuckets::new();
+                let action = actions::ListBuckets::new(max_kub);
                 let rs = action.request(s3).await?;
                 for bucket in rs.buckets.bucket {
                     print_bucket_info(&bucket)?;

@@ -52,6 +52,7 @@ pub fn dispatch(
                 .collect();
             let quiet = sub_m.get_one("quiet").copied().unwrap_or(false);
             let force = sub_m.get_one("force").copied().unwrap_or(false);
+            let versions = sub_m.get_one("versions").copied().unwrap_or(false);
 
             // get destination file/path
             let dest = if args.len() == 2 {
@@ -66,6 +67,7 @@ pub fn dispatch(
                 key,
                 metadata,
                 quiet,
+                versions,
             })
         }
 
@@ -74,12 +76,15 @@ pub fn dispatch(
             let sub_m = sub_m("ls")?;
             let prefix = sub_m.get_one("prefix").map(|s: &String| s.to_string());
             let start_after = sub_m.get_one("start-after").map(|s: &String| s.to_string());
+            // convert max_keys to string and default to None
+            let max_kub = sub_m.get_one::<usize>("max-kub").map(|s| s.to_string());
             Ok(Action::ListObjects {
                 bucket,
                 list_multipart_uploads: sub_m
                     .get_one("ListMultipartUploads")
                     .copied()
                     .unwrap_or(false),
+                max_kub,
                 prefix,
                 start_after,
             })
@@ -254,12 +259,14 @@ hosts:
                 dest,
                 quiet,
                 force,
+                versions,
             } => {
                 assert_eq!(key, "h/b/f");
                 assert_eq!(metadata, false);
                 assert_eq!(dest, None);
                 assert_eq!(quiet, false);
                 assert_eq!(force, false);
+                assert_eq!(versions, false);
             }
             _ => panic!("wrong action"),
         }
@@ -287,12 +294,14 @@ hosts:
                 dest,
                 quiet,
                 force,
+                versions,
             } => {
                 assert_eq!(key, "h/b/f");
                 assert_eq!(metadata, false);
                 assert_eq!(dest, None);
                 assert_eq!(quiet, true);
                 assert_eq!(force, true);
+                assert_eq!(versions, false);
             }
             _ => panic!("wrong action"),
         }
@@ -317,6 +326,7 @@ hosts:
             Action::ListObjects {
                 bucket,
                 list_multipart_uploads,
+                max_kub,
                 prefix,
                 start_after,
             } => {
@@ -324,6 +334,7 @@ hosts:
                 assert_eq!(list_multipart_uploads, false);
                 assert_eq!(prefix, None);
                 assert_eq!(start_after, None);
+                assert_eq!(max_kub, None);
             }
             _ => panic!("wrong action"),
         }

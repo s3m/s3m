@@ -15,14 +15,20 @@ pub struct ListObjectsV2 {
     pub fetch_owner: Option<bool>,
     pub prefix: Option<String>,
     pub start_after: Option<String>,
+    pub max_keys: Option<String>,
 }
 
 impl ListObjectsV2 {
     #[must_use]
-    pub fn new(prefix: Option<String>, start_after: Option<String>) -> Self {
+    pub fn new(
+        prefix: Option<String>,
+        start_after: Option<String>,
+        max_keys: Option<String>,
+    ) -> Self {
         Self {
             prefix,
             start_after,
+            max_keys,
             ..Self::default()
         }
     }
@@ -67,6 +73,10 @@ impl Action for ListObjectsV2 {
         // list-type parameter that indicates version 2 of the API
         map.insert("list-type", "2");
 
+        if let Some(max_keys) = &self.max_keys {
+            map.insert("max-keys", max_keys);
+        }
+
         if let Some(token) = &self.continuation_token {
             map.insert("continuation-token", token);
         }
@@ -104,6 +114,7 @@ mod tests {
         let action = ListObjectsV2::new(
             Some(String::from("prefix")),
             Some(String::from("start-after")),
+            None,
         );
         assert_eq!(Method::GET, action.http_method().unwrap());
     }
@@ -120,12 +131,39 @@ mod tests {
             false,
         );
 
-        let action = ListObjectsV2::new(None, None);
+        let action = ListObjectsV2::new(None, None, None);
         let (url, headers) = action
             .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
             .unwrap();
         assert_eq!(
             "https://s3.us-west-1.amazonaws.com/awsexamplebucket1?list-type=2",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn test_max_keys() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let action = ListObjectsV2::new(None, None, Some("10".to_string()));
+        println!("{:?}", action.query_pairs());
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1?list-type=2&max-keys=10",
             url.as_str()
         );
         assert!(headers

@@ -1,3 +1,7 @@
+## 0.11.0 🚆
+* Added option `--versions` to command `get` to list object versions
+* Added option `--number` to command `ls` to limit list to a number of objects, upload or buckets
+
 ## 0.10.0 🛶
 * Compression support `-x/--compress` (using zstd)
 

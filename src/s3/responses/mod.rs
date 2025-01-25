@@ -270,3 +270,54 @@ pub struct Grantee {
     #[serde(rename = "URI")]
     pub uri: Option<String>,
 }
+
+/// ListVersionsResult
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListVersionsResult {
+    pub name: String,
+    pub prefix: Option<String>,
+    pub key_marker: String,
+    pub version_id_marker: Option<String>,
+    pub max_keys: i32,
+    pub is_truncated: bool,
+    #[serde(rename = "Version", default)]
+    pub versions: Vec<Version>,
+    // Include these if you expect delete markers in other responses
+    #[serde(rename = "DeleteMarker", default)]
+    pub delete_markers: Vec<DeleteMarker>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Version {
+    pub key: String,
+    pub version_id: String,
+    pub is_latest: bool,
+
+    #[serde(rename = "LastModified")]
+    pub last_modified: String,
+
+    pub e_tag: String,
+
+    #[serde(default)]
+    pub checksum_algorithm: Option<String>,
+
+    #[serde(default)]
+    pub checksum_type: Option<String>,
+
+    pub size: u64,
+    pub owner: Owner,
+    pub storage_class: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DeleteMarker {
+    pub key: String,
+    pub version_id: String,
+    pub is_latest: bool,
+    #[serde(rename = "LastModified")]
+    pub last_modified: String,
+    pub owner: Owner,
+}

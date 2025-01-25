@@ -9,12 +9,14 @@ use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
-pub struct ListMultipartUploads {}
+pub struct ListMultipartUploads {
+    pub max_uploads: Option<String>,
+}
 
 impl ListMultipartUploads {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new(max_uploads: Option<String>) -> Self {
+        Self { max_uploads }
     }
 
     /// # Errors
@@ -56,6 +58,10 @@ impl Action for ListMultipartUploads {
         // uploads
         map.insert("uploads", "");
 
+        if let Some(max_uploads) = &self.max_uploads {
+            map.insert("max-uploads", max_uploads);
+        }
+
         Some(map)
     }
 }
@@ -63,10 +69,41 @@ impl Action for ListMultipartUploads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{
+        tools, {Credentials, Region, S3},
+    };
+    use secrecy::SecretString;
 
     #[test]
     fn test_method() {
-        let action = ListMultipartUploads::new();
+        let action = ListMultipartUploads::new(None);
         assert_eq!(Method::GET, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_max_uploads() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let action = ListMultipartUploads::new(Some("10".to_string()));
+        println!("{:?}", action.query_pairs());
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1?max-uploads=10&uploads=",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
     }
 }

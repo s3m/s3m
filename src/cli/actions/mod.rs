@@ -25,6 +25,8 @@ pub enum Action {
     ListObjects {
         bucket: Option<String>,
         list_multipart_uploads: bool,
+        // max keys,uploads,buckets
+        max_kub: Option<String>,
         prefix: Option<String>,
         start_after: Option<String>,
     },
@@ -34,6 +36,7 @@ pub enum Action {
         key: String,
         quiet: bool,
         force: bool,
+        versions: bool,
     },
     PutObject {
         acl: Option<String>,
