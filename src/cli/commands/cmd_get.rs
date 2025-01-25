@@ -33,7 +33,7 @@ pub fn command() -> Command {
         .arg(
             Arg::new("versions")
                 .long("versions")
-                .help("List all versions of an object (key will be used as prefix)")
+                .help("List all versions of an object (path/file will be used as prefix)")
                 .num_args(0),
         )
 }
