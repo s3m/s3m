@@ -141,7 +141,7 @@ async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) {
     let bandwidth_bytes_per_sec = bandwidth_kb * 1024;
 
     let duration_per_chunk =
-        Duration::from_secs(chunk_size as u64 / bandwidth_bytes_per_sec as u64);
+        Duration::from_secs_f64(chunk_size as f64 / bandwidth_bytes_per_sec as f64);
 
     sleep(duration_per_chunk).await;
 
@@ -260,5 +260,20 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_throttle_download() {
+        // Test 1: Exact division (1024 bytes / 1024 bytes/sec = 1 sec)
+        let start = std::time::Instant::now();
+        throttle_download(1, 1024).await;
+        let duration = start.elapsed();
+        assert!(duration.as_millis() >= 1);
+
+        // Test 2: Fractional seconds (512 bytes / 1024 bytes/sec = 0.5 sec)
+        let start = std::time::Instant::now();
+        throttle_download(1, 512).await;
+        let duration = start.elapsed();
+        assert!(duration.as_secs_f64() >= 0.5);
     }
 }

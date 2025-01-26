@@ -114,10 +114,12 @@ mod tests {
         let (url, headers) = action
             .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
             .unwrap();
+
         assert_eq!(
             "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key",
             url.as_str()
         );
+
         assert!(headers
             .get("authorization")
             .unwrap()
@@ -140,10 +142,12 @@ mod tests {
         let (url, headers) = action
             .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
             .unwrap();
+
         assert_eq!(
             "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?versionId=123",
             url.as_str()
         );
+
         assert!(headers
             .get("authorization")
             .unwrap()
