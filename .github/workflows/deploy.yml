@@ -49,6 +49,10 @@ jobs:
       - run: sudo apt -y install musl-dev musl-tools
         if: matrix.build == 'linux'
 
+      - name: Install `cargo-generate-rpm`
+        if: matrix.build == 'linux'
+        run: cargo install cargo-generate-rpm
+
       - run: choco install openssl
         if: matrix.build == 'windows'
 
@@ -60,6 +64,17 @@ jobs:
         run: |
           cargo build --release --locked --target ${{ matrix.target }} --features "openssl/vendored"
         if: matrix.build == 'linux'
+
+      - name: Generate RPM
+        if: matrix.build == 'linux'
+        run: |
+          ls -alR target/${{ matrix.target }}/release/s3m
+          mv target/${{ matrix.target }}/release/s3m ./target/release/s3m
+          strip -s ./target/release/s3m
+          cargo generate-rpm
+          ls -alR target/generate-rpm  # Check where the RPM is generated
+          RPM_PATH=$(find target/generate-rpm/ -name "*.rpm" -print -quit)
+          echo "RPM_ASSET=$RPM_PATH" >> $GITHUB_ENV
 
       - name: Build
         run: |
@@ -93,6 +108,7 @@ jobs:
         with:
           files: |-
             ${{ env.ASSET }}
+            ${{ env.RPM_ASSET }}
 
   publish:
     name: Publish
