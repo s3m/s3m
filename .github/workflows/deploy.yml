@@ -69,7 +69,7 @@ jobs:
         if: matrix.build == 'linux'
         run: |
           ls -alR target/${{ matrix.target }}/release/s3m
-          mv target/${{ matrix.target }}/release/s3m ./target/release/s3m
+          cp target/${{ matrix.target }}/release/s3m ./target/release/s3m
           strip -s ./target/release/s3m
           cargo generate-rpm
           ls -alR target/generate-rpm  # Check where the RPM is generated
