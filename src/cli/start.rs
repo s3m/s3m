@@ -78,15 +78,14 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     let mut global_args = GlobalArgs::new();
 
     // define throttle
-    let throttle: usize = matches.get_one::<usize>("throttle").map_or(0, |size| *size);
+    let throttle =
+        matches
+            .get_one::<usize>("throttle")
+            .and_then(|n| if *n > 0 { Some(*n) } else { None });
 
-    if throttle > 0 {
+    if let Some(throttle) = throttle {
         global_args.set_throttle(throttle);
     }
-
-    //  define retries
-    let retries: usize = matches.get_one::<usize>("retries").map_or(3, |size| *size);
-    global_args.set_retries(retries);
 
     log::info!(
         "throttle bandwidth: {}",
@@ -94,6 +93,10 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
             .throttle
             .map_or_else(|| "disabled".to_string(), |t| format!("{t}KB/s"))
     );
+
+    //  define retries
+    let retries: usize = matches.get_one::<usize>("retries").map_or(3, |size| *size);
+    global_args.set_retries(retries);
 
     // Config file is required
     let config_file: PathBuf = matches.get_one::<PathBuf>("config").map_or_else(

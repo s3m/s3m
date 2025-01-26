@@ -1,6 +1,6 @@
 use crate::{
     cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
-    s3::{actions, S3},
+    s3::{actions, tools::throttle_download, S3},
 };
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
@@ -10,11 +10,7 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
 };
-use tokio::{
-    fs::OpenOptions,
-    io::AsyncWriteExt,
-    time::{sleep, Duration},
-};
+use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 
 /// # Errors
 /// Will return an error if the action fails
@@ -120,7 +116,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
 
                 // throttle bandwidth
                 if let Some(bandwidth_kb) = globals.throttle {
-                    throttle_download(bandwidth_kb, bytes.len()).await;
+                    throttle_download(bandwidth_kb, bytes.len()).await?;
                 }
             }
 
@@ -135,22 +131,6 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
     }
 
     Ok(())
-}
-
-async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) {
-    let bandwidth_bytes_per_sec = bandwidth_kb * 1024;
-
-    let duration_per_chunk =
-        Duration::from_secs_f64(chunk_size as f64 / bandwidth_bytes_per_sec as f64);
-
-    sleep(duration_per_chunk).await;
-
-    log::info!(
-        "Throttling to {} KB/s (duration per chunk: {}, chunk size: {})",
-        bandwidth_kb,
-        duration_per_chunk.as_secs_f64(),
-        chunk_size
-    );
 }
 
 fn get_dest(dest: Option<String>, file_name: &OsStr) -> Result<PathBuf> {
@@ -260,20 +240,5 @@ mod tests {
         }
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_throttle_download() {
-        // Test 1: Exact division (1024 bytes / 1024 bytes/sec = 1 sec)
-        let start = std::time::Instant::now();
-        throttle_download(1, 1024).await;
-        let duration = start.elapsed();
-        assert!(duration.as_millis() >= 1);
-
-        // Test 2: Fractional seconds (512 bytes / 1024 bytes/sec = 0.5 sec)
-        let start = std::time::Instant::now();
-        throttle_download(1, 512).await;
-        let duration = start.elapsed();
-        assert!(duration.as_secs_f64() >= 0.5);
     }
 }

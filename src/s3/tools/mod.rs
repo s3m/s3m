@@ -1,7 +1,12 @@
 use anyhow::{anyhow, Result};
 use base64ct::{Base64, Encoding};
 use ring::{digest, hmac};
-use std::{fmt::Write, io::prelude::*, path::Path};
+use std::{
+    fmt::Write,
+    io::{prelude::*, Error, ErrorKind},
+    path::Path,
+};
+use tokio::time::{sleep, Duration};
 
 const MAX_PART_SIZE: u64 = 5_368_709_120;
 const MAX_PARTS_PER_UPLOAD: usize = 10_000;
@@ -81,6 +86,60 @@ pub fn blake3(file: &Path) -> Result<String> {
     }
 
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Throttle downloads by introducing a delay based on bandwidth and chunk size.
+///
+/// # Arguments
+/// - `bandwidth_kb`: Bandwidth in kilobytes per second (must be > 0).
+/// - `chunk_size`: Size of the data chunk in bytes (must be > 0).
+///
+/// # Returns
+/// - `Ok(())` if throttling is successful.
+/// - `Err(Error)` if inputs are invalid or calculations overflow.
+pub async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) -> Result<(), Error> {
+    if bandwidth_kb == 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Bandwidth cannot be 0 KB/s",
+        ));
+    }
+
+    if chunk_size == 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Chunk size cannot be 0 bytes",
+        ));
+    }
+
+    // Calculate bandwidth in bytes per second
+    let bandwidth_bytes = bandwidth_kb
+        .checked_mul(1024)
+        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Bandwidth value too large"))?;
+
+    // Calculate the duration for the chunk
+    let duration_seconds = chunk_size as f64 / bandwidth_bytes as f64;
+    if duration_seconds.is_nan() || duration_seconds.is_infinite() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Invalid duration calculation",
+        ));
+    }
+
+    let duration = Duration::from_secs_f64(duration_seconds);
+
+    // Introduce the delay for throttling
+    sleep(duration).await;
+
+    // Log the throttling details
+    log::debug!(
+        "Throttling download: Bandwidth = {} KB/s, Chunk size = {} bytes, Sleep duration = {:.3} seconds",
+        bandwidth_kb,
+        chunk_size,
+        duration_seconds
+    );
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -282,5 +341,55 @@ mod tests {
         assert_eq!(MAX_FILE_SIZE, seek + chunk);
         assert!(usize::from(number) <= MAX_PARTS_PER_UPLOAD);
         assert!((MAX_FILE_SIZE + part_size - 1) / part_size < 10_000);
+    }
+
+    #[tokio::test]
+    async fn test_throttle_download_valid() {
+        let bandwidth_kb = 1; // 1 KB/s
+        let chunk_size = 1024; // 1 KB
+
+        // Test 1: Exact division (1024 bytes / 1024 bytes/sec = 1 sec)
+        let start = std::time::Instant::now();
+        let result = throttle_download(bandwidth_kb, chunk_size).await;
+
+        assert!(result.is_ok());
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_secs_f64() >= 1.0);
+
+        // Test 2: Fractional seconds (512 bytes / 1024 bytes/sec = 0.5 sec)
+        let start = std::time::Instant::now();
+        let result = throttle_download(1, 512).await;
+
+        assert!(result.is_ok());
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_secs_f64() >= 0.5);
+    }
+
+    #[tokio::test]
+    async fn test_throttle_download_zero_bandwidth() {
+        let result = throttle_download(0, 1024).await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Bandwidth cannot be 0 KB/s"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_throttle_download_zero_chunk_size() {
+        let result = throttle_download(1, 0).await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Chunk size cannot be 0 bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_throttle_download_large_bandwidth() {
+        let bandwidth_kb = usize::MAX / 1024 + 1; // Exceeds usize when multiplied by 1024
+        let result = throttle_download(bandwidth_kb, 1024).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Bandwidth value too large");
     }
 }

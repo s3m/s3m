@@ -1,6 +1,6 @@
 use crate::{
     cli::{globals::GlobalArgs, progressbar::Bar},
-    s3::{actions, S3},
+    s3::{actions, tools::throttle_download, S3},
     stream::{get_key, try_stream_part, Stream, STDIN_BUFFER_SIZE},
 };
 use anyhow::Result;
@@ -8,8 +8,12 @@ use bytes::BytesMut;
 use crossbeam::channel::unbounded;
 use futures::stream::TryStreamExt;
 use ring::digest::{Context, SHA256};
-use std::{collections::BTreeMap, io::Write, path::PathBuf};
-use tempfile::Builder;
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    path::{Path, PathBuf},
+};
+use tempfile::{Builder, NamedTempFile};
 use tokio::io::{stdin, Error, ErrorKind};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use zstd::stream::encode_all;
@@ -66,10 +70,7 @@ pub async fn stream(
     };
 
     let first_stream = Stream {
-        tmp_file: Builder::new()
-            .prefix(&upload_id)
-            .suffix(".s3m")
-            .tempfile_in(&tmp_dir)?,
+        tmp_file: create_temp_file(&upload_id, &tmp_dir)?,
         count: 0,
         etags: Vec::new(),
         key: &key,
@@ -145,11 +146,27 @@ async fn fold_fn(
 ) -> Result<Stream, Error> {
     // compress data using zstd if option is set
     let data = if compress {
-        encode_all(&*bytes, 0)
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Error compressing data: {e}")))?
+        let bytes_clone = bytes.clone();
+        match tokio::task::spawn_blocking(move || encode_all(&*bytes_clone, 0)).await {
+            Ok(Ok(data)) => data,
+            Ok(Err(e)) => {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("Compression error: {}", e),
+                ))
+            }
+            Err(e) => return Err(Error::new(ErrorKind::Other, format!("Thread error: {}", e))),
+        }
     } else {
         bytes.to_vec()
     };
+
+    // Throttling implementation
+    if let Some(bandwidth_kb) = part.throttle {
+        throttle_download(bandwidth_kb, data.len())
+            .await
+            .map_err(|e| Error::new(ErrorKind::Other, format!("Throttling failed: {}", e)))?;
+    }
 
     // when data is bigger than 512MB, upload a part
     if part.count >= buffer_size {
@@ -162,10 +179,7 @@ async fn fold_fn(
 
         // close, delete tmp file and create a new one
         part.tmp_file.close()?;
-        part.tmp_file = Builder::new()
-            .prefix(part.upload_id)
-            .suffix(".s3m")
-            .tempfile_in(&part.tmp_dir)?;
+        part.tmp_file = create_temp_file(part.upload_id, &part.tmp_dir)?;
 
         // set count to the current bytes len and increment part number
         part.count = data.len();
@@ -194,6 +208,13 @@ async fn fold_fn(
     part.md5.consume(&data);
 
     Ok(part)
+}
+
+fn create_temp_file(upload_id: &str, tmp_dir: &Path) -> Result<NamedTempFile, Error> {
+    Builder::new()
+        .prefix(upload_id)
+        .suffix(".s3m")
+        .tempfile_in(tmp_dir)
 }
 
 #[cfg(test)]
@@ -277,6 +298,83 @@ mod tests {
             .collect::<String>();
 
         assert_eq!(decoded, digest_sha1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fold_fn_compressed() -> Result<()> {
+        let mut tmp_file = Builder::new().prefix("test").suffix(".s3m").tempfile()?;
+        let chunk_size_bytes = 1 * 1024 * 1024;
+        let total_size_bytes = 10 * 1024 * 1024;
+        let buffer: Vec<u8> = vec![0; chunk_size_bytes];
+        let num_chunks = total_size_bytes / chunk_size_bytes;
+        for _ in 0..num_chunks {
+            // Write the buffer to the file for each chunk
+            tmp_file.write_all(&buffer)?;
+        }
+        tmp_file.flush()?;
+
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let tmp_dir = tempdir()?;
+
+        // Get original file size and checksum
+        let original_size = tmp_file.as_file().metadata()?.len();
+
+        let first_stream = Stream {
+            tmp_file: Builder::new().prefix("test").suffix(".s3m").tempfile()?,
+            count: 0,
+            etags: Vec::new(),
+            key: "test",
+            part_number: 1,
+            s3: &s3,
+            upload_id: "test",
+            sha: Context::new(&SHA256),
+            md5: md5::Context::new(),
+            channel: None,
+            tmp_dir: tmp_dir.path().to_path_buf(),
+            throttle: None,
+            retries: 0,
+        };
+
+        let file = File::open(tmp_file).await?;
+
+        let mut last_stream = FramedRead::new(file, BytesCodec::new())
+            .try_fold(first_stream, |part, bytes| {
+                fold_fn(part, bytes, STDIN_BUFFER_SIZE, true)
+            })
+            .await?;
+
+        // Get final compressed data
+        last_stream.tmp_file.flush()?;
+        let final_size = last_stream.tmp_file.as_file().metadata()?.len();
+
+        assert_eq!(original_size, total_size_bytes.try_into().unwrap());
+        assert!(last_stream.count < total_size_bytes);
+        assert_eq!(final_size, last_stream.count.try_into().unwrap());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_temp_file() -> Result<()> {
+        let tmp_dir = tempdir()?;
+        let upload_id = "test";
+        let tmp_file = create_temp_file(upload_id, tmp_dir.path())?;
+        assert!(tmp_file.path().exists());
+        // test prefix
+        assert!(tmp_file.path().to_str().unwrap().contains(upload_id));
+        // test extension
+        assert!(tmp_file.path().to_str().unwrap().contains(".s3m"));
 
         Ok(())
     }

@@ -1,5 +1,6 @@
 ## 0.11.1
 * Added option `--version` to command `get` to download a specific object version
+* Fix missing bandwithd throttle when using `--pipe` or `--compress` option
 
 ## 0.11.0 🚆
 * Added option `--versions` to command `get` to list object versions
