@@ -36,6 +36,12 @@ pub fn command() -> Command {
                 .help("List all versions of an object (path/file will be used as prefix)")
                 .num_args(0),
         )
+        .arg(
+            Arg::new("version")
+                .long("version")
+                .help("Get a specific version of an object")
+                .num_args(1),
+        )
 }
 
 #[cfg(test)]
@@ -126,6 +132,21 @@ mod tests {
         // get matches
         let m = m.unwrap();
         assert_eq!(m.get_one::<bool>("versions").copied(), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_version() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--version", "1"]);
+        assert!(m.is_ok());
+
+        // get matches
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<String>("version").map(String::as_str),
+            Some("1")
+        );
         Ok(())
     }
 }

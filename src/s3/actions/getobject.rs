@@ -17,9 +17,10 @@ pub struct GetObject<'a> {
 
 impl<'a> GetObject<'a> {
     #[must_use]
-    pub fn new(key: &'a str) -> Self {
+    pub fn new(key: &'a str, version_id: Option<String>) -> Self {
         Self {
             key,
+            version_id,
             ..Self::default()
         }
     }
@@ -86,10 +87,66 @@ impl Action for GetObject<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::{
+        tools, {Credentials, Region, S3},
+    };
+    use secrecy::SecretString;
 
     #[test]
     fn test_method() {
-        let action = GetObject::new("key");
+        let action = GetObject::new("key", None);
         assert_eq!(Method::GET, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let action = GetObject::new("key", None);
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn test_version_id() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let action = GetObject::new("key", Some("123".to_string()));
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?versionId=123",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
     }
 }

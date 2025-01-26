@@ -37,6 +37,7 @@ pub enum Action {
         quiet: bool,
         force: bool,
         versions: bool,
+        version: Option<String>,
     },
     PutObject {
         acl: Option<String>,

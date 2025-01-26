@@ -15,9 +15,10 @@ pub struct HeadObject<'a> {
 
 impl<'a> HeadObject<'a> {
     #[must_use]
-    pub fn new(key: &'a str) -> Self {
+    pub fn new(key: &'a str, version_id: Option<String>) -> Self {
         Self {
             key,
+            version_id,
             ..Self::default()
         }
     }
@@ -88,13 +89,13 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = HeadObject::new("key");
+        let action = HeadObject::new("key", None);
         assert_eq!(Method::HEAD, action.http_method().unwrap());
     }
 
     #[test]
     fn test_headers() {
-        let action = HeadObject::new("key");
+        let action = HeadObject::new("key", None);
         let mut headers = BTreeMap::new();
         headers.insert("x-amz-checksum-mode", "ENABLED");
         assert_eq!(headers, action.headers().unwrap());
@@ -112,12 +113,38 @@ mod tests {
             false,
         );
 
-        let action = HeadObject::new("key");
+        let action = HeadObject::new("key", None);
         let (url, headers) = action
             .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
             .unwrap();
         assert_eq!(
             "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key",
+            url.as_str()
+        );
+        assert!(headers
+            .get("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn test_version_id() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let action = HeadObject::new("key", Some("123".to_string()));
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?versionId=123",
             url.as_str()
         );
         assert!(headers

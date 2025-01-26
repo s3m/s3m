@@ -26,10 +26,11 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         quiet,
         force,
         versions,
+        version,
     } = action
     {
         if metadata {
-            let action = actions::HeadObject::new(&key);
+            let action = actions::HeadObject::new(&key, version);
             let headers = action.request(s3).await?;
 
             let mut i = 0;
@@ -55,14 +56,15 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 let dt = DateTime::parse_from_rfc3339(&version.last_modified)?;
                 let last_modified: DateTime<Utc> = DateTime::from(dt);
                 println!(
-                    "{} {:>10} {:<}",
+                    "{} {:>10} {:<} ID: {}",
                     format!("[{}]", last_modified.format("%F %T %Z")).green(),
                     bytesize::to_string(version.size, true).yellow(),
                     if version.is_latest {
                         format!("{} (latest)", version.key)
                     } else {
                         version.key.to_string()
-                    }
+                    },
+                    version.version_id
                 );
             }
         } else {
@@ -87,7 +89,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
             }
 
             // do the request
-            let action = actions::GetObject::new(&key);
+            let action = actions::GetObject::new(&key, version);
             let mut res = action.request(s3, &globals).await?;
 
             // Open the file with the specified options
