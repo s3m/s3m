@@ -84,7 +84,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
             .and_then(|n| if *n > 0 { Some(*n) } else { None });
 
     if let Some(throttle) = throttle {
-        global_args.set_throttle(throttle);
+        global_args.throttle = Some(throttle);
     }
 
     log::info!(
@@ -157,7 +157,14 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     log::debug!("S3:\n{s3}");
 
     // create the action
-    let action = dispatch::dispatch(hbp, bucket, buf_size, config_path, &matches, &global_args)?;
+    let action = dispatch::dispatch(
+        hbp,
+        bucket,
+        buf_size,
+        config_path,
+        &matches,
+        &mut global_args,
+    )?;
 
     log::debug!("action: {:#?}", action);
 

@@ -10,7 +10,7 @@ pub fn dispatch(
     buf_size: usize,
     s3m_dir: PathBuf,
     matches: &clap::ArgMatches,
-    global_args: &GlobalArgs,
+    global_args: &mut GlobalArgs,
 ) -> Result<Action> {
     // Closure to return subcommand_matches
     let sub_m = |subcommand| -> Result<&clap::ArgMatches> {
@@ -168,6 +168,12 @@ pub fn dispatch(
                 None
             };
 
+            // set compress
+            global_args.compress = matches.contains_id("compress");
+
+            // set encrypt
+            // TODO: implement encrypt
+
             Ok(Action::PutObject {
                 acl,
                 meta,
@@ -183,11 +189,6 @@ pub fn dispatch(
                 ),
                 checksum_algorithm: matches.get_one("checksum").map(|s: &String| s.to_string()),
                 number: matches.get_one::<u8>("number").copied().unwrap_or(1),
-                compress: if global_args.compress {
-                    true
-                } else {
-                    matches.get_one("compress").copied().unwrap_or(false)
-                },
             })
         }
     }
@@ -227,7 +228,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -251,7 +252,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -288,7 +289,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -325,7 +326,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -358,7 +359,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -381,7 +382,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -410,7 +411,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -439,7 +440,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -473,7 +474,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -489,7 +490,6 @@ hosts:
                 tmp_dir,
                 checksum_algorithm,
                 number,
-                compress,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
@@ -505,7 +505,6 @@ hosts:
                     number,
                     cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
                 );
-                assert_eq!(compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -537,7 +536,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -553,7 +552,6 @@ hosts:
                 tmp_dir,
                 checksum_algorithm,
                 number,
-                compress,
             } => {
                 assert_eq!(acl, Some("public-read".to_string()));
                 assert_eq!(meta, None);
@@ -566,7 +564,6 @@ hosts:
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(number, 32);
-                assert_eq!(compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -600,7 +597,7 @@ hosts:
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut GlobalArgs::new(),
         )
         .unwrap();
         match action {
@@ -616,7 +613,6 @@ hosts:
                 tmp_dir,
                 checksum_algorithm,
                 number,
-                compress,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(
@@ -640,7 +636,6 @@ hosts:
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, Some("sha256".to_string()));
                 assert_eq!(number, 4);
-                assert_eq!(compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -663,13 +658,15 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -685,7 +682,6 @@ hosts:
                 tmp_dir,
                 checksum_algorithm,
                 number,
-                compress,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
@@ -701,7 +697,7 @@ hosts:
                     number,
                     cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
                 );
-                assert_eq!(compress, true);
+                assert_eq!(globals.compress, true);
             }
             _ => panic!("wrong action"),
         }
@@ -724,13 +720,14 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -746,7 +743,6 @@ hosts:
                 tmp_dir,
                 checksum_algorithm,
                 number,
-                compress,
             } => {
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
@@ -762,7 +758,7 @@ hosts:
                     number,
                     cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
                 );
-                assert_eq!(compress, true);
+                assert_eq!(globals.compress, true);
             }
             _ => panic!("wrong action"),
         }

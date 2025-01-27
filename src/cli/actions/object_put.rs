@@ -35,11 +35,10 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         tmp_dir,
         checksum_algorithm,
         number,
-        compress,
     } = action
     {
         if pipe {
-            let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals, compress).await?;
+            let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals).await?;
             if !quiet {
                 println!("ETag: {etag}");
             }
@@ -70,7 +69,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
             let file_path = Path::new(file);
 
             // if compress is set, stream the compressed file
-            if compress {
+            if globals.compress {
                 let etag =
                     stream_compressed(s3, &key, acl, meta, quiet, tmp_dir, globals, file_path)
                         .await?;

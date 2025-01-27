@@ -7,7 +7,7 @@ use anyhow::Result;
 use bytes::BytesMut;
 use crossbeam::channel::unbounded;
 use futures::stream::TryStreamExt;
-use ring::digest::{Context, SHA256};
+use ring::digest::{Context as DigestContext, SHA256};
 use std::{
     collections::BTreeMap,
     io::Write,
@@ -18,10 +18,59 @@ use tokio::io::{stdin, Error, ErrorKind};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use zstd::stream::encode_all;
 
+/// Compresses data if `compress` is set, otherwise returns uncompressed data.
+async fn compress_data(bytes: BytesMut, compress: bool) -> Result<Vec<u8>, Error> {
+    if compress {
+        match tokio::task::spawn_blocking(move || encode_all(&*bytes, 0)).await {
+            Ok(Ok(data)) => Ok(data),
+            Ok(Err(e)) => Err(Error::new(
+                ErrorKind::Other,
+                format!("Compression error: {}", e),
+            )),
+            Err(e) => Err(Error::new(ErrorKind::Other, format!("Thread error: {}", e))),
+        }
+    } else {
+        Ok(bytes.to_vec())
+    }
+}
+
+/// Creates a new temporary file in the specified directory.
+fn create_temp_file(upload_id: &str, tmp_dir: &Path) -> Result<NamedTempFile, Error> {
+    Builder::new()
+        .prefix(upload_id)
+        .suffix(".s3m")
+        .tempfile_in(tmp_dir)
+}
+
+/// Initializes a new `Stream` for handling multipart uploads.
+fn initialize_stream<'a>(
+    s3: &'a S3,
+    key: &'a str,
+    upload_id: &'a str,
+    tmp_dir: PathBuf,
+    globals: &GlobalArgs,
+    channel: Option<crossbeam::channel::Sender<usize>>,
+) -> Result<Stream<'a>, Error> {
+    Ok(Stream {
+        tmp_file: create_temp_file(upload_id, &tmp_dir)?,
+        count: 0,
+        etags: Vec::new(),
+        key,
+        part_number: 1,
+        s3,
+        upload_id,
+        sha: DigestContext::new(&SHA256),
+        md5: md5::Context::new(),
+        channel,
+        tmp_dir,
+        throttle: globals.throttle,
+        retries: globals.retries,
+    })
+}
+
 /// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
 /// # Errors
 /// Will return an error if the upload fails
-#[allow(clippy::too_many_arguments)]
 pub async fn stream(
     s3: &S3,
     object_key: &str,
@@ -30,20 +79,20 @@ pub async fn stream(
     quiet: bool,
     tmp_dir: PathBuf,
     globals: GlobalArgs,
-    compress: bool,
 ) -> Result<String> {
     // use .zst extension if compress option is set
-    let key = get_key(object_key, compress);
+    let key = get_key(object_key, globals.compress);
 
     let mut meta = meta.unwrap_or_default();
 
-    if compress {
+    if globals.compress {
         meta.insert("Content-Type".to_string(), "application/zstd".to_string());
     }
 
     // Initiate Multipart Upload - request an Upload ID
-    let action = actions::CreateMultipartUpload::new(&key, acl, Some(meta), None);
-    let response = action.request(s3).await?;
+    let response = actions::CreateMultipartUpload::new(&key, acl, Some(meta), None)
+        .request(s3)
+        .await?;
     let upload_id = response.upload_id;
     let (sender, receiver) = unbounded::<usize>();
     let channel = if quiet { None } else { Some(sender) };
@@ -69,51 +118,37 @@ pub async fn stream(
         }
     };
 
-    let first_stream = Stream {
-        tmp_file: create_temp_file(&upload_id, &tmp_dir)?,
-        count: 0,
-        etags: Vec::new(),
-        key: &key,
-        part_number: 1,
-        s3,
-        upload_id: &upload_id,
-        sha: Context::new(&SHA256),
-        md5: md5::Context::new(),
-        channel,
-        tmp_dir,
-        throttle: globals.throttle,
-        retries: globals.retries,
-    };
+    let mut stream = initialize_stream(s3, &key, &upload_id, tmp_dir, &globals, channel)?;
 
     // try_fold will pass writer to fold_fn until there are no more bytes to read.
     // FrameRead return a stream of Result<BytesMut, io::Error>.
-    let mut last_stream = FramedRead::new(stdin(), BytesCodec::new())
-        .try_fold(first_stream, |part, bytes| {
-            fold_fn(part, bytes, STDIN_BUFFER_SIZE, compress)
+    stream = FramedRead::new(stdin(), BytesCodec::new())
+        .try_fold(stream, |part, bytes| {
+            fold_fn(part, bytes, STDIN_BUFFER_SIZE, globals.compress)
         })
         .await?;
 
     // Calculate sha256 and md5 for the last part
-    let digest_sha = last_stream.sha.finish();
-    let digest_md5 = last_stream.md5.compute();
+    let digest_sha = stream.sha.finish();
+    let digest_md5 = stream.md5.compute();
 
     // upload last part
     let action = actions::StreamPart::new(
         &key,
-        last_stream.tmp_file.path(),
-        last_stream.part_number,
+        stream.tmp_file.path(),
+        stream.part_number,
         &upload_id,
-        last_stream.count,
+        stream.count,
         (digest_sha.as_ref(), digest_md5.as_ref()),
-        last_stream.channel,
+        stream.channel,
     );
 
     let etag = action.request(s3, &globals).await?;
 
-    last_stream.etags.push(etag);
+    stream.etags.push(etag);
 
     // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html
-    let uploaded: BTreeMap<u16, actions::Part> = last_stream
+    let uploaded: BTreeMap<u16, actions::Part> = stream
         .etags
         .into_iter()
         .zip(1..)
@@ -129,11 +164,10 @@ pub async fn stream(
         })
         .collect();
 
-    let action = actions::CompleteMultipartUpload::new(&key, &upload_id, uploaded, None);
-
-    let rs = action.request(s3).await?;
-
-    Ok(rs.e_tag)
+    actions::CompleteMultipartUpload::new(&key, &upload_id, uploaded, None)
+        .request(s3)
+        .await
+        .map(|rs| rs.e_tag)
 }
 
 // read/parse only once in the loop, calculate the sha256, md5 and get the
@@ -145,21 +179,7 @@ async fn fold_fn(
     compress: bool,
 ) -> Result<Stream, Error> {
     // compress data using zstd if option is set
-    let data = if compress {
-        let bytes_clone = bytes.clone();
-        match tokio::task::spawn_blocking(move || encode_all(&*bytes_clone, 0)).await {
-            Ok(Ok(data)) => data,
-            Ok(Err(e)) => {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("Compression error: {}", e),
-                ))
-            }
-            Err(e) => return Err(Error::new(ErrorKind::Other, format!("Thread error: {}", e))),
-        }
-    } else {
-        bytes.to_vec()
-    };
+    let data = compress_data(bytes, compress).await?;
 
     // Throttling implementation
     if let Some(bandwidth_kb) = part.throttle {
@@ -184,7 +204,7 @@ async fn fold_fn(
         // set count to the current bytes len and increment part number
         part.count = data.len();
         part.part_number += 1;
-        part.sha = Context::new(&SHA256);
+        part.sha = DigestContext::new(&SHA256);
         part.md5 = md5::Context::new();
 
         log::debug!(
@@ -210,16 +230,10 @@ async fn fold_fn(
     Ok(part)
 }
 
-fn create_temp_file(upload_id: &str, tmp_dir: &Path) -> Result<NamedTempFile, Error> {
-    Builder::new()
-        .prefix(upload_id)
-        .suffix(".s3m")
-        .tempfile_in(tmp_dir)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::globals::GlobalArgs;
     use crate::s3::{
         checksum::{Checksum, ChecksumAlgorithm},
         {Credentials, Region, S3},
@@ -263,21 +277,16 @@ mod tests {
 
         let tmp_dir = tempdir()?;
 
-        let first_stream = Stream {
-            tmp_file: Builder::new().prefix("test").suffix(".s3m").tempfile()?,
-            count: 0,
-            etags: Vec::new(),
-            key: "test",
-            part_number: 1,
-            s3: &s3,
-            upload_id: "test",
-            sha: Context::new(&SHA256),
-            md5: md5::Context::new(),
-            channel: None,
-            tmp_dir: tmp_dir.path().to_path_buf(),
-            throttle: None,
-            retries: 0,
-        };
+        let global_args = GlobalArgs::new();
+
+        let first_stream = initialize_stream(
+            &s3,
+            "test",
+            "test",
+            tmp_dir.path().to_path_buf(),
+            &global_args,
+            None,
+        )?;
 
         let file = File::open(tmp_file).await?;
 
@@ -330,21 +339,16 @@ mod tests {
         // Get original file size and checksum
         let original_size = tmp_file.as_file().metadata()?.len();
 
-        let first_stream = Stream {
-            tmp_file: Builder::new().prefix("test").suffix(".s3m").tempfile()?,
-            count: 0,
-            etags: Vec::new(),
-            key: "test",
-            part_number: 1,
-            s3: &s3,
-            upload_id: "test",
-            sha: Context::new(&SHA256),
-            md5: md5::Context::new(),
-            channel: None,
-            tmp_dir: tmp_dir.path().to_path_buf(),
-            throttle: None,
-            retries: 0,
-        };
+        let global_args = GlobalArgs::new();
+
+        let first_stream = initialize_stream(
+            &s3,
+            "test",
+            "test",
+            tmp_dir.path().to_path_buf(),
+            &global_args,
+            None,
+        )?;
 
         let file = File::open(tmp_file).await?;
 

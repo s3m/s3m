@@ -6,6 +6,7 @@ pub struct GlobalArgs {
     pub throttle: Option<usize>,
     pub retries: u32,
     pub compress: bool,
+    pub encrypt: bool,
 }
 
 impl GlobalArgs {
@@ -15,11 +16,8 @@ impl GlobalArgs {
             throttle: None,
             retries: 3,
             compress: false,
+            encrypt: false,
         }
-    }
-
-    pub fn set_throttle(&mut self, throttle: usize) {
-        self.throttle = Some(throttle);
     }
 
     pub fn set_retries(&mut self, retries: usize) {
@@ -36,13 +34,19 @@ mod tests {
         let mut global_args = GlobalArgs::new();
         assert_eq!(global_args.throttle, None);
         assert_eq!(global_args.retries, 3);
+        assert_eq!(global_args.compress, false);
+        assert_eq!(global_args.encrypt, false);
 
-        global_args.set_throttle(10);
+        global_args.throttle = Some(10);
         assert_eq!(global_args.throttle, Some(10));
 
         global_args.set_retries(5);
         assert_eq!(global_args.retries, 5);
 
-        assert_eq!(global_args.compress, false);
+        global_args.compress = true;
+        assert_eq!(global_args.compress, true);
+
+        global_args.encrypt = true;
+        assert_eq!(global_args.encrypt, true);
     }
 }

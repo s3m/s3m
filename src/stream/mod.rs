@@ -58,6 +58,7 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
         throttle: part.throttle,
         retries: part.retries,
         compress: false,
+        encrypt: false,
     };
 
     for attempt in 1..=part.retries {
