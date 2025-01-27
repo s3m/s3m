@@ -19,14 +19,22 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use url::Url;
 
-const FRAMED_CHUNK_SIZE_BYTES: usize = 1024 * 128;
+const DEFAULT_FRAMED_CHUNK_SIZE_BYTES: usize = 1024 * 128;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
-const fn calculate_duration_per_chunk(bandwidth_kb_per_sec: usize) -> Duration {
+/// Calculate the duration per chunk to achieve the desired bandwidth
+///
+/// # Parameters
+/// - `bandwidth_kb_per_sec`: Throttle limit in KB/s
+/// - `chunk_size`: Size of the data chunk in bytes
+///
+/// # Returns
+/// Duration to wait after processing each chunk
+fn calculate_duration_per_chunk(bandwidth_kb_per_sec: usize, chunk_size: usize) -> Duration {
     let bandwidth_bytes_per_sec = bandwidth_kb_per_sec * 1024;
-
-    Duration::from_secs(FRAMED_CHUNK_SIZE_BYTES as u64 / bandwidth_bytes_per_sec as u64)
+    let duration_secs = chunk_size as f64 / bandwidth_bytes_per_sec as f64;
+    Duration::from_secs_f64(duration_secs)
 }
 
 /// # Errors
@@ -52,22 +60,24 @@ pub async fn request(
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
 
-        let stream = FramedRead::with_capacity(file, BytesCodec::new(), FRAMED_CHUNK_SIZE_BYTES)
-            .inspect_ok(move |chunk| {
-                if let Some(tx) = &sender {
-                    log::debug!("Sending {} bytes", chunk.len());
+        let stream =
+            FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES)
+                .inspect_ok(move |chunk| {
+                    if let Some(tx) = &sender {
+                        log::debug!("Sending {} bytes", chunk.len());
 
-                    if let Err(e) = tx.send(chunk.len()) {
-                        eprintln!("{} - {}", e, chunk.len());
+                        if let Err(e) = tx.send(chunk.len()) {
+                            eprintln!("{} - {}", e, chunk.len());
+                        }
                     }
-                }
-            });
+                });
 
         if let Some(bandwidth_kb) = throttle {
-            let duration_per_chunk = calculate_duration_per_chunk(bandwidth_kb);
+            let duration_per_chunk =
+                calculate_duration_per_chunk(bandwidth_kb, DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
 
             log::info!(
-                "Throttling to {} KB/s (duration per chunk: {})",
+                "Throttling enabled: {} KB/s (duration per chunk: {:.3}s)",
                 bandwidth_kb,
                 duration_per_chunk.as_secs_f64()
             );
@@ -119,13 +129,15 @@ pub async fn multipart_upload(
 
     log::debug!("Chunk size: {}", chunk);
 
-    let stream = FramedRead::with_capacity(file, BytesCodec::new(), FRAMED_CHUNK_SIZE_BYTES);
+    let stream =
+        FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
 
     let request = if let Some(bandwidth_kb) = throttle {
-        let duration_per_chunk = calculate_duration_per_chunk(bandwidth_kb);
+        let duration_per_chunk =
+            calculate_duration_per_chunk(bandwidth_kb, DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
 
         log::info!(
-            "Throttling to {} KB/s (duration per chunk: {})",
+            "Throttling enabled: {} KB/s (duration per chunk: {:.3}s)",
             bandwidth_kb,
             duration_per_chunk.as_secs_f64()
         );
@@ -165,4 +177,19 @@ pub async fn upload(
     let request = client.request(method, url).headers(headers).body(body);
 
     Ok(request.send().await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_duration_per_chunk() {
+        let bandwidth_kb_per_sec = 1024;
+        let chunk_size = 1024 * 128;
+
+        let duration = calculate_duration_per_chunk(bandwidth_kb_per_sec, chunk_size);
+
+        assert_eq!(duration.as_secs_f64(), 0.125);
+    }
 }
