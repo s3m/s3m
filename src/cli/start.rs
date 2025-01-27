@@ -122,7 +122,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     let host = get_host_from_hbp(&config, &config_path, &mut hbp)?;
 
     // check if compression is enabled
-    if host.compress.is_some() {
+    if host.compress.unwrap_or(false) {
         global_args.compress = true;
     }
 
