@@ -169,7 +169,9 @@ pub fn dispatch(
             };
 
             // set compress
-            global_args.compress = matches.contains_id("compress");
+            if !global_args.compress {
+                global_args.compress = matches.get_one("compress").copied().unwrap_or(false);
+            }
 
             // set encrypt
             // TODO: implement encrypt

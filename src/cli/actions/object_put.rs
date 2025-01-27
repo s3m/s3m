@@ -38,7 +38,10 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
     } = action
     {
         if pipe {
+            log::debug!("PIPE - streaming from stdin");
+
             let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals).await?;
+
             if !quiet {
                 println!("ETag: {etag}");
             }

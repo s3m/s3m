@@ -78,21 +78,11 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     let mut global_args = GlobalArgs::new();
 
     // define throttle
-    let throttle =
-        matches
-            .get_one::<usize>("throttle")
-            .and_then(|n| if *n > 0 { Some(*n) } else { None });
+    if let Some(throttle) = matches.get_one::<usize>("throttle").filter(|&n| *n > 0) {
+        global_args.throttle = Some(*throttle);
 
-    if let Some(throttle) = throttle {
-        global_args.throttle = Some(throttle);
+        log::info!("throttle bandwidth: {}", format!("{throttle}KB/s"));
     }
-
-    log::info!(
-        "throttle bandwidth: {}",
-        global_args
-            .throttle
-            .map_or_else(|| "disabled".to_string(), |t| format!("{t}KB/s"))
-    );
 
     //  define retries
     let retries: usize = matches.get_one::<usize>("retries").map_or(3, |size| *size);
@@ -109,6 +99,8 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
 
     // load the config file
     let config = Config::new(config_file)?;
+
+    log::debug!("config: {:#?}", config);
 
     // show config
     if matches.subcommand_matches("show").is_some() {
@@ -166,7 +158,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
         &mut global_args,
     )?;
 
-    log::debug!("action: {:#?}", action);
+    log::debug!("globals: {:#?}, action: {:#?}", global_args, action);
 
     Ok((s3, action, global_args))
 }
