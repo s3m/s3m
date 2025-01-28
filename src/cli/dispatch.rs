@@ -224,19 +224,21 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "acl", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
             Action::ACL { key, acl } => {
                 assert_eq!(key, "h/b/f");
                 assert_eq!(acl, None);
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -248,13 +250,14 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -274,6 +277,7 @@ hosts:
                 assert_eq!(force, false);
                 assert_eq!(versions, false);
                 assert_eq!(version, None);
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -285,13 +289,14 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f", "-q", "-f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -311,6 +316,7 @@ hosts:
                 assert_eq!(force, true);
                 assert_eq!(versions, false);
                 assert_eq!(version, None);
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -322,13 +328,14 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "ls", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -344,6 +351,7 @@ hosts:
                 assert_eq!(prefix, None);
                 assert_eq!(start_after, None);
                 assert_eq!(max_kub, None);
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -355,18 +363,20 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "cb", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             Some("bucket-required".to_string()),
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
             Action::CreateBucket { acl } => {
                 assert_eq!(acl, "private");
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -378,13 +388,14 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "rm", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -396,6 +407,7 @@ hosts:
                 assert_eq!(key, "h/b/f");
                 assert_eq!(upload_id, "");
                 assert_eq!(bucket, false);
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -407,13 +419,14 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -425,6 +438,7 @@ hosts:
                 assert_eq!(key, "");
                 assert_eq!(upload_id, "");
                 assert_eq!(bucket, true);
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -470,13 +484,14 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -507,6 +522,7 @@ hosts:
                     number,
                     cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
                 );
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -532,13 +548,14 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -566,6 +583,7 @@ hosts:
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(number, 32);
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
@@ -639,7 +657,7 @@ hosts:
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, Some("sha256".to_string()));
                 assert_eq!(number, 4);
-                assert_eq!(globals.compress, true);
+                assert_eq!(globals.compress, false);
             }
             _ => panic!("wrong action"),
         }
