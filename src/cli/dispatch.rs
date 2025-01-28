@@ -593,13 +593,14 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
         let action = dispatch(
             vec!["h/b/f"],
             None,
             0,
             PathBuf::new(),
             &matches,
-            &mut GlobalArgs::new(),
+            &mut globals,
         )
         .unwrap();
         match action {
@@ -638,6 +639,7 @@ hosts:
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, Some("sha256".to_string()));
                 assert_eq!(number, 4);
+                assert_eq!(globals.compress, true);
             }
             _ => panic!("wrong action"),
         }
