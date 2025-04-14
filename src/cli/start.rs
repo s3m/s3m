@@ -81,7 +81,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     if let Some(throttle) = matches.get_one::<usize>("throttle").filter(|&n| *n > 0) {
         global_args.throttle = Some(*throttle);
 
-        log::info!("throttle bandwidth: {}", format!("{throttle}KB/s"));
+        log::info!("throttle bandwidth: {throttle}KB/s");
     }
 
     //  define retries
@@ -257,7 +257,7 @@ hosts:
         let config_path = tmp_dir.path().join("config.yml");
         let mut tmp_file = File::create(&config_path).unwrap();
         tmp_file.write_all(CONF.as_bytes()).unwrap();
-        let cmd = new(&tmp_dir.path().to_path_buf());
+        let cmd = new(tmp_dir.path());
         let matches = cmd
             .try_get_matches_from(vec!["s3m", "ls", "aws/bucket/x"])
             .unwrap();
@@ -286,7 +286,7 @@ hosts:
         let config_path = tmp_dir.path().join("config.yml");
         let mut tmp_file = File::create(&config_path).unwrap();
         tmp_file.write_all(CONF.as_bytes()).unwrap();
-        let cmd = new(&tmp_dir.path().to_path_buf());
+        let cmd = new(tmp_dir.path());
         let matches = cmd
             .try_get_matches_from(vec!["s3m", "aws//bucket/x"])
             .unwrap();

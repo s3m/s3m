@@ -269,15 +269,15 @@ hosts:
             m.get_one::<String>("arguments").map(String::as_str),
             Some("test")
         );
-        assert_eq!(m.get_one::<usize>("buffer").map(|s| *s), Some(10485760));
+        assert_eq!(m.get_one::<usize>("buffer").copied(), Some(10485760));
         assert_eq!(m.get_one::<bool>("clean").copied(), Some(false));
         assert_eq!(
             m.get_one::<PathBuf>("config")
                 .map(|s| s.display().to_string()),
             Some(config.join("config.yml").display().to_string())
         );
-        assert_eq!(m.get_one::<usize>("throttle").map(|s| *s), Some(0));
-        assert_eq!(m.get_one::<usize>("retries").map(|s| *s), Some(3));
+        assert_eq!(m.get_one::<usize>("throttle").copied(), Some(0));
+        assert_eq!(m.get_one::<usize>("retries").copied(), Some(3));
 
         Ok(())
     }
@@ -305,7 +305,7 @@ hosts:
 
         // get matches
         let m = m.unwrap();
-        assert_eq!(m.get_one::<usize>("buffer").map(|s| *s), Some(123));
+        assert_eq!(m.get_one::<usize>("buffer").copied(), Some(123));
 
         Ok(())
     }
@@ -438,7 +438,7 @@ hosts:
 
             // get matches
             let m = m.unwrap();
-            assert_eq!(m.get_one::<u8>("number").map(|s| *s), Some(n.parse()?));
+            assert_eq!(m.get_one::<u8>("number").copied(), Some(n.parse()?));
         }
         Ok(())
     }
@@ -464,12 +464,12 @@ hosts:
 
         // get matches
         let m = m.unwrap();
-        assert_eq!(
-            m.get_one::<bool>("no-sign-request")
-                .copied()
-                .unwrap_or(false),
-            true
-        );
+
+        assert!(m
+            .get_one::<bool>("no-sign-request")
+            .copied()
+            .unwrap_or(false));
+
         Ok(())
     }
 
@@ -508,7 +508,7 @@ hosts:
 
             // get matches
             let m = m.unwrap();
-            assert_eq!(m.get_one::<usize>("retries").map(|s| *s), Some(n.parse()?));
+            assert_eq!(m.get_one::<usize>("retries").copied(), Some(n.parse()?));
         }
         Ok(())
     }
@@ -518,7 +518,7 @@ hosts:
         let config = get_config().unwrap();
         let cmd = new(&config);
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--pipe", "--checksum"]);
-        assert!(!m.is_ok());
+        assert!(m.is_err());
     }
 
     #[test]
@@ -526,6 +526,6 @@ hosts:
         let config = get_config().unwrap();
         let cmd = new(&config);
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--compress", "--checksum"]);
-        assert!(!m.is_ok());
+        assert!(m.is_err());
     }
 }

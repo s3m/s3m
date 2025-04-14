@@ -5,6 +5,7 @@ use crate::{
 };
 use anyhow::Result;
 use bytes::BytesMut;
+use bytesize::ByteSize;
 use crossbeam::channel::unbounded;
 use futures::stream::TryStreamExt;
 use ring::digest::{Context, SHA256};
@@ -63,7 +64,7 @@ pub async fn stream_compressed(
                 let mut uploaded = 0;
                 while let Ok(i) = receiver.recv() {
                     uploaded += i;
-                    pb.set_message(bytesize::to_string(uploaded as u64, true));
+                    pb.set_message(ByteSize(uploaded as u64).to_string());
                 }
                 pb.finish();
             });

@@ -178,7 +178,7 @@ mod tests {
     async fn test_sha256_md5_digest() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
-        let (sha256, md5, length) = sha256_md5_digest(&file.path()).await.unwrap();
+        let (sha256, md5, length) = sha256_md5_digest(file.path()).await.unwrap();
         assert_eq!(
             sha256
                 .iter()
@@ -197,7 +197,7 @@ mod tests {
     async fn test_sha256_md5_digest_multipart() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
-        let (sha256, md5, length, _) = sha256_md5_digest_multipart(&file.path(), 0, 5, None)
+        let (sha256, md5, length, _) = sha256_md5_digest_multipart(file.path(), 0, 5, None)
             .await
             .unwrap();
         assert_eq!(
@@ -220,7 +220,7 @@ mod tests {
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
         let (sha256, md5, length, _) =
-            sha256_md5_digest_multipart(&file.path(), 0, 5, Some(&mut checksum))
+            sha256_md5_digest_multipart(file.path(), 0, 5, Some(&mut checksum))
                 .await
                 .unwrap();
         assert_eq!(
@@ -289,7 +289,7 @@ mod tests {
             file.write_all(b"hello world").unwrap();
             let mut checksum = Checksum::new(test.algorithm.clone());
             let (sha256, md5, length, r_checksum) =
-                sha256_md5_digest_multipart(&file.path(), 0, 5, Some(&mut checksum))
+                sha256_md5_digest_multipart(file.path(), 0, 5, Some(&mut checksum))
                     .await
                     .unwrap();
             let get_hex = |bytes: Bytes| {

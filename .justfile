@@ -2,7 +2,7 @@ test: clippy
   cargo test
 
 clippy:
-  cargo clippy --all -- -W clippy::all -W clippy::nursery -D warnings
+  cargo clippy --all-targets --all-features -- -D warnings
 
 coverage:
   CARGO_INCREMENTAL=0 RUSTFLAGS='-Cinstrument-coverage' LLVM_PROFILE_FILE='coverage-%p-%m.profraw' cargo test

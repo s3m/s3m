@@ -406,7 +406,7 @@ hosts:
             ("new region", "new-region", "s3.new-region.amazonaws.com"),
         ];
 
-        let mut yaml_content = String::from(format!("---\nhosts:\n"));
+        let mut yaml_content = "---\nhosts:\n".to_string();
         for (name, region, _) in &aws_s3_regions {
             let formatted_name = name.replace(" ", "_");
             yaml_content.push_str(&format!(

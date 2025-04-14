@@ -69,11 +69,11 @@ mod tests {
 
         // get matches
         let m = m.unwrap();
-        assert_eq!(
-            m.get_one::<bool>("ListMultipartUploads")
-                .map_or_else(|| false, |v| *v),
-            true
-        );
+
+        assert!(m
+            .get_one::<bool>("ListMultipartUploads")
+            .map_or_else(|| false, |v| *v));
+
         Ok(())
     }
 

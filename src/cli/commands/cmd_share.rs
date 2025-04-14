@@ -36,7 +36,7 @@ mod tests {
         let m = m.unwrap();
         assert_eq!(
             m.get_one::<usize>("expire").map_or_else(|| 0, |v| *v),
-            604800 as usize
+            604800_usize
         );
         Ok(())
     }

@@ -1,16 +1,17 @@
 use criterion::{
-    async_executor::FuturesExecutor,
     BenchmarkId, Criterion, {criterion_group, criterion_main},
 };
 use s3m::s3::checksum::digest::sha256_md5_digest;
 use std::path::Path;
+use tokio::runtime::Runtime;
 
 async fn bench_sha256_md5_digest(path: &Path) {
     let _ = async {
         sha256_md5_digest(path)
             .await
             .expect("Failed to compute hash");
-    };
+    }
+    .await;
 }
 
 pub fn from_elem(c: &mut Criterion) {
@@ -20,14 +21,18 @@ pub fn from_elem(c: &mut Criterion) {
         panic!("File does not exist");
     }
 
+    // Create a Tokio runtime manually
+    let rt = Runtime::new().expect("Failed to create Tokio runtime");
+
     c.bench_with_input(
         BenchmarkId::new("input", file.display().to_string()),
         &file,
         |b, file| {
-            b.to_async(FuturesExecutor).iter(move || async move {
-                for _ in 0..1_000_000 {
-                    bench_sha256_md5_digest(file).await;
-                }
+            b.iter(|| {
+                rt.block_on(async {
+                    // Call the async function within the runtime
+                    bench_sha256_md5_digest(file).await
+                });
             });
         },
     );

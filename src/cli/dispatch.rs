@@ -238,7 +238,7 @@ hosts:
             Action::ACL { key, acl } => {
                 assert_eq!(key, "h/b/f");
                 assert_eq!(acl, None);
-                assert_eq!(globals.compress, false);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -271,13 +271,13 @@ hosts:
                 version,
             } => {
                 assert_eq!(key, "h/b/f");
-                assert_eq!(metadata, false);
+                assert!(!metadata);
                 assert_eq!(dest, None);
-                assert_eq!(quiet, false);
-                assert_eq!(force, false);
-                assert_eq!(versions, false);
+                assert!(!quiet);
+                assert!(!force);
+                assert!(!versions);
                 assert_eq!(version, None);
-                assert_eq!(globals.compress, false);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -310,13 +310,13 @@ hosts:
                 version,
             } => {
                 assert_eq!(key, "h/b/f");
-                assert_eq!(metadata, false);
+                assert!(!metadata);
                 assert_eq!(dest, None);
-                assert_eq!(quiet, true);
-                assert_eq!(force, true);
-                assert_eq!(versions, false);
+                assert!(quiet);
+                assert!(force);
+                assert!(!versions);
                 assert_eq!(version, None);
-                assert_eq!(globals.compress, false);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -347,11 +347,11 @@ hosts:
                 start_after,
             } => {
                 assert_eq!(bucket, None);
-                assert_eq!(list_multipart_uploads, false);
+                assert!(!list_multipart_uploads);
                 assert_eq!(prefix, None);
                 assert_eq!(start_after, None);
                 assert_eq!(max_kub, None);
-                assert_eq!(globals.compress, false);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -376,7 +376,7 @@ hosts:
         match action {
             Action::CreateBucket { acl } => {
                 assert_eq!(acl, "private");
-                assert_eq!(globals.compress, false);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -406,8 +406,8 @@ hosts:
             } => {
                 assert_eq!(key, "h/b/f");
                 assert_eq!(upload_id, "");
-                assert_eq!(bucket, false);
-                assert_eq!(globals.compress, false);
+                assert!(!bucket);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -437,8 +437,8 @@ hosts:
             } => {
                 assert_eq!(key, "");
                 assert_eq!(upload_id, "");
-                assert_eq!(bucket, true);
-                assert_eq!(globals.compress, false);
+                assert!(bucket);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -514,15 +514,15 @@ hosts:
                 assert_eq!(file, Some("path/to/file".to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "h/b/f");
-                assert_eq!(pipe, false);
-                assert_eq!(quiet, false);
+                assert!(!pipe);
+                assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
                     cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
                 );
-                assert_eq!(globals.compress, false);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -578,12 +578,12 @@ hosts:
                 assert_eq!(file, Some("path/to/file".to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "h/b/f");
-                assert_eq!(pipe, false);
-                assert_eq!(quiet, false);
+                assert!(!pipe);
+                assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(number, 32);
-                assert_eq!(globals.compress, false);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -652,12 +652,12 @@ hosts:
                 assert_eq!(file, Some("path/to/file".to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "h/b/f");
-                assert_eq!(pipe, false);
-                assert_eq!(quiet, false);
+                assert!(!pipe);
+                assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, Some("sha256".to_string()));
                 assert_eq!(number, 4);
-                assert_eq!(globals.compress, false);
+                assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -711,15 +711,15 @@ hosts:
                 assert_eq!(file, Some("path/to/file".to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "h/b/f");
-                assert_eq!(pipe, false);
-                assert_eq!(quiet, false);
+                assert!(!pipe);
+                assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
                     cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
                 );
-                assert_eq!(globals.compress, true);
+                assert!(globals.compress);
             }
             _ => panic!("wrong action"),
         }
@@ -772,15 +772,15 @@ hosts:
                 assert_eq!(file, Some("path/to/file".to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "h/b/f");
-                assert_eq!(pipe, false);
-                assert_eq!(quiet, false);
+                assert!(!pipe);
+                assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
                     cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
                 );
-                assert_eq!(globals.compress, true);
+                assert!(globals.compress);
             }
             _ => panic!("wrong action"),
         }

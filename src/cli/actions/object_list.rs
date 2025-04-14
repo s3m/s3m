@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use anyhow::Result;
+use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 
@@ -62,7 +63,7 @@ fn print_object_info(object: &Object) -> Result<()> {
     println!(
         "{} {:>10} {:<}",
         format!("[{}]", last_modified.format("%F %T %Z")).green(),
-        bytesize::to_string(object.size, true).yellow(),
+        ByteSize(object.size).to_string().yellow(),
         object.key
     );
     Ok(())

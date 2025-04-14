@@ -3,6 +3,7 @@ use crate::{
     s3::{actions, tools::throttle_download, S3},
 };
 use anyhow::{anyhow, Context, Result};
+use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use std::{
@@ -54,7 +55,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 println!(
                     "{} {:>10} {:<} ID: {}",
                     format!("[{}]", last_modified.format("%F %T %Z")).green(),
-                    bytesize::to_string(version.size, true).yellow(),
+                    ByteSize(version.size).to_string().yellow(),
                     if version.is_latest {
                         format!("{} (latest)", version.key)
                     } else {
@@ -178,43 +179,43 @@ mod tests {
         let tests = vec![
             Test {
                 dest: None,
-                file_name: &OsStr::new("key.json"),
+                file_name: OsStr::new("key.json"),
                 expected: Some(Path::new(".").join("key.json")),
                 error_expected: false,
             },
             Test {
                 dest: Some("./file.txt".to_string()),
-                file_name: &OsStr::new("key.json"),
+                file_name: OsStr::new("key.json"),
                 expected: Some(Path::new(".").join("file.txt")),
                 error_expected: false,
             },
             Test {
                 dest: Some(".".to_string()),
-                file_name: &OsStr::new("key.json"),
+                file_name: OsStr::new("key.json"),
                 expected: Some(Path::new(".").join("key.json")),
                 error_expected: false,
             },
             Test {
                 dest: Some("file.txt".to_string()),
-                file_name: &OsStr::new("key.json"),
+                file_name: OsStr::new("key.json"),
                 expected: Some(Path::new(".").join("file.txt")),
                 error_expected: false,
             },
             Test {
                 dest: Some("/file.txt".to_string()),
-                file_name: &OsStr::new("key.json"),
+                file_name: OsStr::new("key.json"),
                 expected: Some(Path::new("/").join("file.txt")),
                 error_expected: false,
             },
             Test {
                 dest: Some("tmp/file.txt".to_string()),
-                file_name: &OsStr::new("key.json"),
+                file_name: OsStr::new("key.json"),
                 expected: None,
                 error_expected: true,
             },
             Test {
                 dest: Some("a/b/cfile.txt".to_string()),
-                file_name: &OsStr::new("key.json"),
+                file_name: OsStr::new("key.json"),
                 expected: None,
                 error_expected: true,
             },

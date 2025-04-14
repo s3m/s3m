@@ -5,6 +5,7 @@ use crate::{
 };
 use anyhow::Result;
 use bytes::BytesMut;
+use bytesize::ByteSize;
 use crossbeam::channel::unbounded;
 use futures::stream::TryStreamExt;
 use ring::digest::{Context as DigestContext, SHA256};
@@ -111,7 +112,7 @@ pub async fn stream(
                 let mut uploaded = 0;
                 while let Ok(i) = receiver.recv() {
                     uploaded += i;
-                    pb.set_message(bytesize::to_string(uploaded as u64, true));
+                    pb.set_message(ByteSize(uploaded as u64).to_string());
                 }
                 pb.finish();
             });
@@ -249,7 +250,7 @@ mod tests {
         // env_logger::init();
         // TODO need to refactor to test StreamPart and Stream
         let mut tmp_file = Builder::new().prefix("test").suffix(".s3m").tempfile()?;
-        let chunk_size_bytes = 1 * 1024 * 1024;
+        let chunk_size_bytes = 1024 * 1024;
         let total_size_bytes = 10 * 1024 * 1024;
         let buffer: Vec<u8> = vec![0; chunk_size_bytes];
         let num_chunks = total_size_bytes / chunk_size_bytes;
@@ -314,7 +315,7 @@ mod tests {
     #[tokio::test]
     async fn test_fold_fn_compressed() -> Result<()> {
         let mut tmp_file = Builder::new().prefix("test").suffix(".s3m").tempfile()?;
-        let chunk_size_bytes = 1 * 1024 * 1024;
+        let chunk_size_bytes = 1024 * 1024;
         let total_size_bytes = 10 * 1024 * 1024;
         let buffer: Vec<u8> = vec![0; chunk_size_bytes];
         let num_chunks = total_size_bytes / chunk_size_bytes;

@@ -34,8 +34,8 @@ mod tests {
         let mut global_args = GlobalArgs::new();
         assert_eq!(global_args.throttle, None);
         assert_eq!(global_args.retries, 3);
-        assert_eq!(global_args.compress, false);
-        assert_eq!(global_args.encrypt, false);
+        assert!(!global_args.compress);
+        assert!(!global_args.encrypt);
 
         global_args.throttle = Some(10);
         assert_eq!(global_args.throttle, Some(10));
@@ -44,9 +44,9 @@ mod tests {
         assert_eq!(global_args.retries, 5);
 
         global_args.compress = true;
-        assert_eq!(global_args.compress, true);
+        assert!(global_args.compress);
 
         global_args.encrypt = true;
-        assert_eq!(global_args.encrypt, true);
+        assert!(global_args.encrypt);
     }
 }

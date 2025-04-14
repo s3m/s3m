@@ -187,7 +187,7 @@ mod tests {
     fn test_blake3() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
-        let hash = blake3(&file.path()).unwrap();
+        let hash = blake3(file.path()).unwrap();
         assert_eq!(
             hash,
             "d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24"
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn test_calculate_part_size_5tb_part_1gb() {
         let file_size = 5 * 1024 * 1024 * 1000 * 1000;
-        let buf_size = 1 * 1024 * 1024 * 1024;
+        let buf_size = 1024 * 1024 * 1024;
         let result = calculate_part_size(file_size, buf_size).unwrap();
         assert_eq!(result, MAX_PART_SIZE / 5);
     }
@@ -319,7 +319,7 @@ mod tests {
         let part_size = calculate_part_size(file_size, buf_size).unwrap();
 
         // Ensure that the calculated part size leads to exactly 10,000 parts
-        assert_eq!((file_size + part_size - 1) / part_size, 10_000);
+        assert_eq!(file_size.div_ceil(part_size), 10_000);
     }
 
     #[test]
@@ -331,7 +331,7 @@ mod tests {
         let part_size = calculate_part_size(file_size, buf_size).unwrap();
 
         // Ensure that the calculated part size results in less than 10,000 parts
-        assert!((file_size + part_size - 1) / part_size < 10_000);
+        assert!(file_size.div_ceil(part_size) < 10_000);
     }
 
     #[test]
@@ -340,7 +340,7 @@ mod tests {
         let (number, seek, chunk) = PartIterator::new(MAX_FILE_SIZE, part_size).last().unwrap();
         assert_eq!(MAX_FILE_SIZE, seek + chunk);
         assert!(usize::from(number) <= MAX_PARTS_PER_UPLOAD);
-        assert!((MAX_FILE_SIZE + part_size - 1) / part_size < 10_000);
+        assert!((MAX_FILE_SIZE.div_ceil(part_size)) < 10_000);
     }
 
     #[tokio::test]

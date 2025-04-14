@@ -218,7 +218,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Crc32);
-        let result = checksum.calculate(&file.path()).await.unwrap();
+        let result = checksum.calculate(file.path()).await.unwrap();
         assert_eq!(result, "DUoRhQ==");
     }
 
@@ -227,7 +227,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Crc32c);
-        let result = checksum.calculate(&file.path()).await.unwrap();
+        let result = checksum.calculate(file.path()).await.unwrap();
         assert_eq!(result, "yZRlqg==");
     }
 
@@ -236,7 +236,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Md5);
-        let result = checksum.calculate(&file.path()).await.unwrap();
+        let result = checksum.calculate(file.path()).await.unwrap();
         assert_eq!(result, "XrY7u+Ae7tCTyyK7j1rNww==");
     }
 
@@ -245,7 +245,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Sha1);
-        let result = checksum.calculate(&file.path()).await.unwrap();
+        let result = checksum.calculate(file.path()).await.unwrap();
         assert_eq!(result, "Kq5sNclPz7QV2+lfQIuc6R7oRu0=");
     }
 
@@ -254,7 +254,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
         let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
-        let result = checksum.calculate(&file.path()).await.unwrap();
+        let result = checksum.calculate(file.path()).await.unwrap();
         assert_eq!(result, "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=");
     }
 
@@ -332,7 +332,7 @@ mod tests {
     async fn test_sha256_md5_digest() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
-        let (sha256, md5, length) = sha256_md5_digest(&file.path()).await.unwrap();
+        let (sha256, md5, length) = sha256_md5_digest(file.path()).await.unwrap();
         assert_eq!(
             Base64::encode_string(&sha256),
             "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
@@ -345,10 +345,9 @@ mod tests {
     async fn test_sha256_md5_digest_multipart() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"hello world").unwrap();
-        let (sha256, md5, length, checksum) =
-            sha256_md5_digest_multipart(&file.path(), 0, 11, None)
-                .await
-                .unwrap();
+        let (sha256, md5, length, checksum) = sha256_md5_digest_multipart(file.path(), 0, 11, None)
+            .await
+            .unwrap();
         assert_eq!(
             Base64::encode_string(&sha256),
             "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
@@ -364,7 +363,7 @@ mod tests {
         file.write_all(b"hello world").unwrap();
         let mut checksum = Some(Checksum::new(ChecksumAlgorithm::Sha256));
         let (sha256, md5, length, checksum) =
-            sha256_md5_digest_multipart(&file.path(), 0, 11, checksum.as_mut())
+            sha256_md5_digest_multipart(file.path(), 0, 11, checksum.as_mut())
                 .await
                 .unwrap();
         assert_eq!(
