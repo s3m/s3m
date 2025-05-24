@@ -15,10 +15,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use tempfile::Builder;
-use tokio::{
-    fs::File,
-    io::{Error, ErrorKind},
-};
+use tokio::{fs::File, io::Error};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use zstd::stream::encode_all;
 
@@ -151,14 +148,14 @@ async fn fold_fn(
     buffer_size: usize,
 ) -> Result<Stream, Error> {
     // compress data using zstd
-    let data = encode_all(&*bytes, 0)
-        .map_err(|e| Error::new(ErrorKind::Other, format!("Error compressing data: {e}")))?;
+    let data =
+        encode_all(&*bytes, 0).map_err(|e| Error::other(format!("Error compressing data: {e}")))?;
 
     // when data is bigger than 512MB, upload a part
     if part.count >= buffer_size {
         let etag = try_stream_part(&part)
             .await
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Error streaming part: {e}")))?;
+            .map_err(|e| Error::other(format!("Error streaming part: {e}")))?;
 
         // delete and create new tmp file
         part.etags.push(etag);

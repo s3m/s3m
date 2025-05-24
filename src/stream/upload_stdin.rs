@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use tempfile::{Builder, NamedTempFile};
-use tokio::io::{stdin, Error, ErrorKind};
+use tokio::io::{stdin, Error};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use zstd::stream::encode_all;
 
@@ -24,11 +24,8 @@ async fn compress_data(bytes: BytesMut, compress: bool) -> Result<Vec<u8>, Error
     if compress {
         match tokio::task::spawn_blocking(move || encode_all(&*bytes, 0)).await {
             Ok(Ok(data)) => Ok(data),
-            Ok(Err(e)) => Err(Error::new(
-                ErrorKind::Other,
-                format!("Compression error: {}", e),
-            )),
-            Err(e) => Err(Error::new(ErrorKind::Other, format!("Thread error: {}", e))),
+            Ok(Err(e)) => Err(Error::other(format!("Compression error: {}", e))),
+            Err(e) => Err(Error::other(format!("Thread error: {}", e))),
         }
     } else {
         Ok(bytes.to_vec())
@@ -186,14 +183,14 @@ async fn fold_fn(
     if let Some(bandwidth_kb) = part.throttle {
         throttle_download(bandwidth_kb, data.len())
             .await
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Throttling failed: {}", e)))?;
+            .map_err(|e| Error::other(format!("Throttling failed: {}", e)))?;
     }
 
     // when data is bigger than 512MB, upload a part
     if part.count >= buffer_size {
         let etag = try_stream_part(&part)
             .await
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Error streaming part: {e}")))?;
+            .map_err(|e| Error::other(format!("Error streaming part: {e}")))?;
 
         // delete and create new tmp file
         part.etags.push(etag);

@@ -3,7 +3,7 @@ use crate::{
     stream::part::Part,
 };
 use anyhow::Result;
-use bincode::{deserialize, serialize};
+use bincode::{decode_from_slice, encode_to_vec};
 use std::{collections::BTreeMap, convert::Into, path::Path};
 
 pub const DB_PARTS: &str = "parts";
@@ -109,7 +109,7 @@ impl Db {
         checksum: Option<Checksum>,
     ) -> Result<Option<sled::IVec>> {
         let part = Part::new(number, seek, chunk, checksum);
-        let cbor_part = serialize(&part)?;
+        let cbor_part = encode_to_vec(&part, bincode::config::standard())?;
         Ok(self.db_parts()?.insert(number.to_be_bytes(), cbor_part)?)
     }
 
@@ -120,7 +120,10 @@ impl Db {
         let part = &self
             .db_parts()?
             .get(number.to_be_bytes())?
-            .map(|part| deserialize(&part[..]))
+            .map(|part| {
+                decode_from_slice(&part[..], bincode::config::standard())
+                    .map(|(decoded, _)| decoded)
+            })
             .transpose()?;
         Ok(part.clone())
     }
@@ -134,8 +137,8 @@ impl Db {
             .values()
             .flat_map(|part| {
                 part.map(|part| {
-                    deserialize(&part[..])
-                        .map(|p: Part| {
+                    decode_from_slice(&part[..], bincode::config::standard())
+                        .map(|(p, _): (Part, usize)| {
                             (
                                 p.get_number(),
                                 actions::Part {

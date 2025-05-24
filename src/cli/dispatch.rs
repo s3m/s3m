@@ -474,7 +474,7 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
-        let cmd = new(&tmp_dir.into_path());
+        let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -534,7 +534,7 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
-        let cmd = new(&tmp_dir.into_path());
+        let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -595,7 +595,7 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
-        let cmd = new(&tmp_dir.into_path());
+        let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -669,7 +669,7 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
-        let cmd = new(&tmp_dir.into_path());
+        let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -731,7 +731,7 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
-        let cmd = new(&tmp_dir.into_path());
+        let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",

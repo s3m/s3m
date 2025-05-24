@@ -253,7 +253,7 @@ hosts:
         let config_path = tmp_dir.path().join("config.yml");
         let mut config = File::create(&config_path)?;
         config.write_all(CONF.as_bytes())?;
-        Ok(tmp_dir.into_path())
+        Ok(tmp_dir.keep())
     }
 
     #[test]

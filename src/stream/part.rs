@@ -1,7 +1,7 @@
 use crate::s3::checksum::Checksum;
-use serde::{Deserialize, Serialize};
+use bincode::{Decode, Encode};
 
-#[derive(Deserialize, Serialize, Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Encode, Decode)]
 pub struct Part {
     etag: String,
     number: u16,

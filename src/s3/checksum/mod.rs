@@ -1,5 +1,6 @@
 use anyhow::Result;
 use base64ct::{Base64, Encoding};
+use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ use self::hasher::{
 
 pub mod digest;
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum ChecksumAlgorithm {
     Crc32,
     Crc32c,
@@ -64,7 +65,7 @@ impl FromStr for ChecksumAlgorithm {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct Checksum {
     pub algorithm: ChecksumAlgorithm,
     pub checksum: String, // Base64 encoded

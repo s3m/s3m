@@ -4,7 +4,7 @@ use crate::{
     stream::{db::Db, iterator::PartIterator, part::Part},
 };
 use anyhow::{anyhow, Result};
-use bincode::{deserialize, serialize};
+use bincode::{decode_from_slice, encode_to_vec};
 use futures::stream::{FuturesUnordered, StreamExt};
 use sled::transaction::{TransactionError, Transactional};
 use std::{collections::BTreeMap, path::Path};
@@ -85,12 +85,11 @@ pub async fn upload_multipart(
 
     log::info!("Max concurrent requests: {}", max_requests);
 
-    for part in db_parts
-        .iter()
-        .values()
-        .filter_map(Result::ok)
-        .map(|p| deserialize(&p[..]).map_err(anyhow::Error::from))
-    {
+    for part in db_parts.iter().values().filter_map(Result::ok).map(|p| {
+        decode_from_slice(&p[..], bincode::config::standard())
+            .map(|(decoded, _)| decoded)
+            .map_err(anyhow::Error::from)
+    }) {
         let part: Part = part?;
 
         log::info!("Task push part: {}", part.get_number());
@@ -264,7 +263,7 @@ async fn upload_part(
     // update part with the etag and checksum if any
     let part = part.set_etag(etag).set_checksum(additional_checksum);
 
-    let cbor_part = serialize(&part)?;
+    let cbor_part = encode_to_vec(&part, bincode::config::standard())?;
 
     // move part to uploaded
     (&unprocessed, &processed)
