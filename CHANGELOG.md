@@ -1,3 +1,6 @@
+## 0.12.0 🛥️
+* Cargo update, upgrade to bincode 2
+
 ## 0.11.1
 * Added option `--version` to command `get` to download a specific object version
 * Fix missing bandwithd throttle when using `--pipe` or `--compress` option
