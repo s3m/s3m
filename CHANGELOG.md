@@ -1,3 +1,7 @@
+## 0.13.0 🚢
+* Enabled encryption using `enc_key` (32 len) in the config file
+* replaced serde_xml_rs with quick-xml for XML parsing
+
 ## 0.12.0 🛥️
 * Cargo update, upgrade to bincode 2
 

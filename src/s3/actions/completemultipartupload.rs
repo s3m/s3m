@@ -11,12 +11,12 @@ use crate::{
 use anyhow::{anyhow, Result};
 use base64ct::{Base64, Encoding};
 use bytes::Bytes;
+use quick_xml::{de::from_str, se::to_string};
 use reqwest::Method;
 use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
-use serde_xml_rs::{from_str, to_string};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct CompleteMultipartUpload<'a> {
     key: &'a str,
     upload_id: &'a str,
@@ -39,7 +39,7 @@ impl Serialize for CompleteMultipartUpload<'_> {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Part {
     pub etag: String,
     pub number: u16,
@@ -90,12 +90,7 @@ impl<'a> CompleteMultipartUpload<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(mut self, s3: &S3) -> Result<CompleteMultipartUploadResult> {
-        let parts = CompleteMultipartUpload {
-            parts: self.parts.clone(),
-            ..Self::default()
-        };
-
-        let body = to_string(&parts)?;
+        let body = to_string(&self)?;
 
         let digest = tools::sha256_digest(&body);
 
@@ -235,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize() {
+    fn test_serialize_1() {
         let mut parts: BTreeMap<u16, Part> = BTreeMap::new();
         parts.insert(
             1,
@@ -247,7 +242,26 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUpload><Part><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r#"<CompleteMultipartUpload><Part><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        assert_eq!(expected, serialized);
+    }
+
+    #[test]
+    fn test_serialize_2() {
+        let mut parts: BTreeMap<u16, Part> = BTreeMap::new();
+        for i in 1..=3 {
+            parts.insert(
+                i,
+                Part {
+                    etag: format!("etag{}", i),
+                    number: i,
+                    checksum: None,
+                },
+            );
+        }
+        let action = CompleteMultipartUpload::new("key", "uid", parts, None);
+        let serialized = to_string(&action).unwrap();
+        let expected = r#"<CompleteMultipartUpload><Part><ETag>etag1</ETag><PartNumber>1</PartNumber></Part><Part><ETag>etag2</ETag><PartNumber>2</PartNumber></Part><Part><ETag>etag3</ETag><PartNumber>3</PartNumber></Part></CompleteMultipartUpload>"#;
         assert_eq!(expected, serialized);
     }
 
@@ -267,7 +281,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUpload><Part><ChecksumSHA256>checksum</ChecksumSHA256><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r#"<CompleteMultipartUpload><Part><ChecksumSHA256>checksum</ChecksumSHA256><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
         assert_eq!(expected, serialized);
     }
 
@@ -287,7 +301,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUpload><Part><ChecksumCRC32>checksum</ChecksumCRC32><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r#"<CompleteMultipartUpload><Part><ChecksumCRC32>checksum</ChecksumCRC32><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
         assert_eq!(expected, serialized);
     }
 
@@ -307,7 +321,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUpload><Part><ChecksumCRC32C>checksum</ChecksumCRC32C><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r#"<CompleteMultipartUpload><Part><ChecksumCRC32C>checksum</ChecksumCRC32C><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
         assert_eq!(expected, serialized);
     }
 
@@ -327,7 +341,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUpload><Part><ChecksumSHA1>checksum</ChecksumSHA1><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r#"<CompleteMultipartUpload><Part><ChecksumSHA1>checksum</ChecksumSHA1><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
         assert_eq!(expected, serialized);
     }
 

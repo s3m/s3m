@@ -3,23 +3,39 @@ pub mod iterator;
 pub mod part;
 pub mod upload_compressed;
 pub mod upload_default;
+pub mod upload_encrypted;
 pub mod upload_multipart;
 pub mod upload_stdin;
 
 use crate::{
-    cli::globals::GlobalArgs,
-    s3::{actions::StreamPart, S3},
+    cli::{globals::GlobalArgs, progressbar::Bar},
+    s3::{actions, S3},
 };
-use anyhow::Result;
-use crossbeam::channel::Sender;
-use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
+use anyhow::{anyhow, Result};
+use bytes::BytesMut;
+use bytesize::ByteSize;
+use chacha20poly1305::{
+    aead::{stream::EncryptorBE32, KeyInit},
+    ChaCha20Poly1305,
+};
+use crossbeam::channel::{unbounded, Sender};
+use rand::{rng, RngCore};
+use ring::digest::{Context, SHA256};
+use secrecy::ExposeSecret;
+use std::{
+    collections::BTreeMap,
+    io::Write,
+    path::{Path, PathBuf},
+};
+use tempfile::{Builder, NamedTempFile};
+use tokio::io::Error;
 use tokio::time::{sleep, Duration};
+use zstd::stream::encode_all;
 
 // 512MB  to upload 5TB (the current max object size)
 const STDIN_BUFFER_SIZE: usize = 1_024 * 1_024 * 512;
 
-struct Stream<'a> {
+pub struct Stream<'a> {
     tmp_file: NamedTempFile,
     count: usize,
     etags: Vec<String>,
@@ -35,16 +51,42 @@ struct Stream<'a> {
     retries: u32,
 }
 
-// return the key with the .zst extension if compress option is set
-fn get_key(key: &str, compress: bool) -> String {
-    if compress
-        && !Path::new(key)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("zst"))
-    {
-        return format!("{key}.zst");
+// return the key with the .zst, .enc, or .zst.enc extension based on the flags
+fn get_key(key: &str, compress: bool, encrypt: bool) -> String {
+    let path = Path::new(key);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match (compress, encrypt) {
+        (true, true) => {
+            // If extension is already "zst.enc" or "enc" or "zst", add ".zst.enc" only if not present
+            if ext == "zst.enc" || ext == "enc" || ext == "zst" {
+                key.to_string()
+            } else {
+                format!("{key}.zst.enc")
+            }
+        }
+        (true, false) => {
+            // Only compress: add ".zst" if not already "zst"
+            if ext == "zst" {
+                key.to_string()
+            } else {
+                format!("{key}.zst")
+            }
+        }
+        (false, true) => {
+            // Only encrypt: add ".enc" if not already "enc"
+            if ext == "enc" {
+                key.to_string()
+            } else {
+                format!("{key}.enc")
+            }
+        }
+        (false, false) => key.to_string(),
     }
-    key.to_string()
 }
 
 async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
@@ -59,6 +101,7 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
         retries: part.retries,
         compress: false,
         encrypt: false,
+        enc_key: None,
     };
 
     for attempt in 1..=part.retries {
@@ -73,7 +116,7 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
             sleep(Duration::from_secs(backoff_time)).await;
         }
 
-        let action = StreamPart::new(
+        let action = actions::StreamPart::new(
             part.key,
             part.tmp_file.path(),
             part.part_number,
@@ -117,6 +160,228 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     Ok(etag)
 }
 
+/// Compress data chunk
+async fn compress_chunk(bytes: BytesMut) -> Result<Vec<u8>> {
+    match tokio::task::spawn_blocking(move || encode_all(&*bytes, 0)).await {
+        Ok(Ok(data)) => Ok(data),
+        Ok(Err(e)) => Err(anyhow!("Compression error: {}", e)),
+        Err(e) => Err(anyhow!("Thread error: {}", e)),
+    }
+}
+
+pub fn init_encryption(
+    encryption_key: &secrecy::SecretString,
+) -> Result<(ChaCha20Poly1305, [u8; 7])> {
+    let cipher = ChaCha20Poly1305::new(encryption_key.expose_secret().as_bytes().into());
+
+    // Generate a random nonce of 7 bytes
+    let mut nonce_bytes = [0u8; 7];
+    rng().fill_bytes(&mut nonce_bytes);
+
+    Ok((cipher, nonce_bytes))
+}
+
+/// Initialize multipart upload
+async fn initiate_multipart_upload(
+    s3: &S3,
+    key: &str,
+    acl: Option<String>,
+    meta: BTreeMap<String, String>,
+) -> Result<String> {
+    let action = actions::CreateMultipartUpload::new(key, acl, Some(meta), None);
+    let response = action.request(s3).await?;
+    Ok(response.upload_id)
+}
+
+async fn setup_progress(quiet: bool) -> Option<crossbeam::channel::Sender<usize>> {
+    if quiet {
+        return None;
+    }
+
+    let (sender, receiver) = unbounded::<usize>();
+    let progress_bar = Bar::new_spinner_stream();
+
+    if let Some(pb) = progress_bar.progress.clone() {
+        tokio::spawn(async move {
+            let mut uploaded = 0;
+
+            while let Ok(bytes_count) = receiver.recv() {
+                uploaded += bytes_count;
+                pb.set_message(ByteSize(uploaded as u64).to_string());
+            }
+
+            log::debug!("Progress channel closed — total uploaded: {}", uploaded);
+
+            pb.finish();
+        });
+    }
+
+    Some(sender)
+}
+
+/// Create the initial stream with nonce header
+#[allow(clippy::too_many_arguments)]
+fn create_initial_stream<'a>(
+    upload_id: &'a str,
+    tmp_dir: &Path,
+    key: &'a str,
+    s3: &'a S3,
+    progress_sender: Option<crossbeam::channel::Sender<usize>>,
+    globals: &GlobalArgs,
+    header_data: Option<&[u8]>,
+) -> Result<Stream<'a>> {
+    let mut tmp_file = Builder::new()
+        .prefix(upload_id)
+        .suffix(".s3m")
+        .tempfile_in(tmp_dir)?;
+
+    let mut sha_context = Context::new(&SHA256);
+    let mut md5_context = md5::Context::new();
+    let mut count = 0;
+
+    if let Some(header) = header_data {
+        tmp_file.write_all(header)?;
+        sha_context.update(header);
+        md5_context.consume(header);
+        count = header.len();
+    }
+
+    Ok(Stream {
+        tmp_file,
+        count,
+        etags: Vec::new(),
+        key,
+        part_number: 1,
+        s3,
+        upload_id,
+        sha: sha_context,
+        md5: md5_context,
+        channel: progress_sender.clone(),
+        tmp_dir: tmp_dir.to_path_buf(),
+        throttle: globals.throttle,
+        retries: globals.retries,
+    })
+}
+
+/// Write data to stream and update counters/hashes
+pub fn write_to_stream(stream: &mut Stream<'_>, data: &[u8]) -> Result<()> {
+    stream.tmp_file.write_all(data)?;
+    stream.sha.update(data);
+    stream.md5.consume(data);
+    stream.count += data.len();
+    Ok(())
+}
+
+/// Create encryption nonce header
+pub fn create_nonce_header(nonce_bytes: &[u8; 7]) -> Vec<u8> {
+    [&[7_u8], nonce_bytes.as_slice()].concat()
+}
+
+/// Encrypt a chunk of data
+pub fn encrypt_chunk(
+    encryptor: &mut EncryptorBE32<ChaCha20Poly1305>,
+    chunk: &[u8],
+) -> Result<Vec<u8>> {
+    let mut encrypted_chunk = chunk.to_vec();
+    encryptor
+        .encrypt_next_in_place(&[], &mut encrypted_chunk)
+        .map_err(|e| anyhow!("Encryption error: {e}"))?;
+
+    // Format: [encrypted_data_length(4 bytes)][encrypted_data]
+    let encrypted_len = encrypted_chunk.len() as u32;
+    let mut result = Vec::with_capacity(4 + encrypted_chunk.len());
+    result.extend_from_slice(&encrypted_len.to_be_bytes());
+    result.extend_from_slice(&encrypted_chunk);
+    Ok(result)
+}
+
+/// Check if we need to upload current part and start a new one
+pub async fn maybe_upload_part(stream: &mut Stream<'_>, buffer_size: usize) -> Result<(), Error> {
+    if stream.count >= buffer_size {
+        let etag = try_stream_part(stream)
+            .await
+            .map_err(|e| Error::other(format!("Error streaming part: {e}")))?;
+
+        stream.etags.push(etag);
+
+        log::debug!(
+            "Part {} uploaded, total bytes: {}, etag: {}",
+            stream.part_number,
+            stream.count,
+            stream.etags.last().unwrap_or(&"".to_string())
+        );
+
+        // Reset for next part
+        stream.tmp_file = Builder::new()
+            .prefix(stream.upload_id)
+            .suffix(".s3m")
+            .tempfile_in(&stream.tmp_dir)?;
+
+        stream.count = 0;
+        stream.part_number += 1;
+        stream.sha = Context::new(&SHA256);
+        stream.md5 = md5::Context::new();
+    }
+    Ok(())
+}
+
+/// Complete multipart upload
+async fn complete_multipart_upload(
+    s3: &S3,
+    key: &str,
+    upload_id: &str,
+    etags: Vec<String>,
+) -> Result<String> {
+    let parts: BTreeMap<u16, actions::Part> = etags
+        .into_iter()
+        .enumerate()
+        .map(|(index, etag)| {
+            let part_number = (index + 1) as u16;
+            (
+                part_number,
+                actions::Part {
+                    etag,
+                    number: part_number,
+                    checksum: None,
+                },
+            )
+        })
+        .collect();
+
+    let action = actions::CompleteMultipartUpload::new(key, upload_id, parts, None);
+
+    let response = action.request(s3).await?;
+
+    Ok(response.e_tag)
+}
+
+/// Upload the final part
+async fn upload_final_part(
+    stream: &mut Stream<'_>,
+    key: &str,
+    upload_id: &str,
+    s3: &S3,
+    globals: &GlobalArgs,
+) -> Result<String> {
+    let digest_sha = stream.sha.clone().finish();
+    let digest_md5 = stream.md5.clone().compute();
+
+    let action = actions::StreamPart::new(
+        key,
+        stream.tmp_file.path(),
+        stream.part_number,
+        upload_id,
+        stream.count,
+        (digest_sha.as_ref(), digest_md5.as_ref()),
+        stream.channel.clone(),
+    );
+
+    action
+        .request(s3, globals)
+        .await
+        .map_err(|e| anyhow!("Failed to upload final part: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +400,7 @@ mod tests {
             ("testzst", true, "testzst.zst"),
         ];
         for (key, compress, expected) in test_cases {
-            assert_eq!(get_key(key, compress), expected);
+            assert_eq!(get_key(key, compress, false), expected);
         }
     }
 

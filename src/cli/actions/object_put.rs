@@ -6,7 +6,8 @@ use crate::{
     },
     stream::{
         db::Db, upload_compressed::stream_compressed, upload_default::upload,
-        upload_multipart::upload_multipart, upload_stdin::stream,
+        upload_encrypted::stream_encrypted, upload_multipart::upload_multipart,
+        upload_stdin::stream,
     },
 };
 use anyhow::{anyhow, Context, Result};
@@ -76,6 +77,15 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 let etag =
                     stream_compressed(s3, &key, acl, meta, quiet, tmp_dir, globals, file_path)
                         .await?;
+
+                if !quiet {
+                    println!("ETag: {etag}");
+                }
+            } else if globals.encrypt {
+                let etag =
+                    stream_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals, file_path)
+                        .await?;
+
                 if !quiet {
                     println!("ETag: {etag}");
                 }

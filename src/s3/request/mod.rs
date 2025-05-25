@@ -60,17 +60,20 @@ pub async fn request(
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
 
-        let stream =
+        let stream = {
+            log::debug!("Sender(channel) is_some: {}", sender.is_some());
+
             FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES)
                 .inspect_ok(move |chunk| {
                     if let Some(tx) = &sender {
-                        log::debug!("Sending {} bytes", chunk.len());
+                        log::trace!("Sending {} bytes", chunk.len());
 
                         if let Err(e) = tx.send(chunk.len()) {
                             eprintln!("{} - {}", e, chunk.len());
                         }
                     }
-                });
+                })
+        };
 
         if let Some(bandwidth_kb) = throttle {
             let duration_per_chunk =

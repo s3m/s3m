@@ -3,7 +3,7 @@ use base64ct::{Base64, Encoding};
 use ring::{digest, hmac};
 use std::{
     fmt::Write,
-    io::{prelude::*, Error, ErrorKind},
+    io::{Error, ErrorKind, Read},
     path::Path,
 };
 use tokio::time::{sleep, Duration};

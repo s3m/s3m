@@ -9,8 +9,8 @@ use crate::{
     s3::{checksum::Checksum, request, tools, S3},
 };
 use anyhow::{anyhow, Result};
+use quick_xml::de::from_str;
 use reqwest::Method;
-use serde_xml_rs::from_str;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
@@ -47,7 +47,14 @@ impl<'a> CreateMultipartUpload<'a> {
             request::request(url.clone(), self.http_method()?, headers, None, None, None).await?;
 
         if response.status().is_success() {
-            let upload_req: InitiateMultipartUploadResult = from_str(&response.text().await?)?;
+            let body = response.text().await?;
+
+            // Log the response body for debugging purposes
+            log::debug!("Response body: {}", body);
+
+            // Parse the XML response into InitiateMultipartUploadResult
+            let upload_req: InitiateMultipartUploadResult = from_str(&body)?;
+
             Ok(upload_req)
         } else {
             Err(anyhow!(response_error(response).await?))

@@ -3,6 +3,7 @@ use crate::s3::{Credentials, S3};
 use anyhow::{anyhow, Context, Result};
 use clap::ArgMatches;
 use colored::Colorize;
+use secrecy::SecretString;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -39,15 +40,13 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     // get the matches
     let matches = cmd.get_matches();
 
-    let verbosity_level =
-        match matches
-            .get_one::<u8>("verbose")
-            .map_or(0, |&v| if v > 1 { 4 } else { v })
-        {
-            0 => log::LevelFilter::Off,
-            1 => log::LevelFilter::Info,
-            _ => log::LevelFilter::Debug,
-        };
+    let verbosity = matches.get_count("verbose");
+    let verbosity_level = match verbosity {
+        0 => log::LevelFilter::Off,
+        1 => log::LevelFilter::Info,
+        2 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    };
 
     env_logger::Builder::new()
         .filter_level(verbosity_level)
@@ -124,6 +123,16 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     // check if compression is enabled
     if host.compress.unwrap_or(false) {
         global_args.compress = true;
+    }
+
+    // check if encryption is enabled
+    if let Some(enc_key) = &host.enc_key {
+        if enc_key.len() != 32 {
+            return Err(anyhow!("Encryption key must be 32 characters long."));
+        }
+
+        global_args.encrypt = true;
+        global_args.enc_key = Some(SecretString::new(enc_key.clone().into()));
     }
 
     // REGION

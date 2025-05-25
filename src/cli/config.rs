@@ -18,16 +18,13 @@ pub struct Host {
     pub access_key: String,
 
     #[serde(default)]
-    pub secret_key: SecretKey,
+    pub secret_key: SecretString,
 
     pub bucket: Option<String>,
 
     pub enc_key: Option<String>,
-    pub enc_type: Option<String>,
     pub compress: Option<bool>,
 }
-
-pub type SecretKey = SecretString;
 
 impl Config {
     /// Create a new config from a config.yml file
@@ -125,6 +122,15 @@ hosts:
     access_key: XXX
     secret_ke: YYY
     compress: true"#;
+
+    const CONF_ENCRYPT: &str = r#"---
+hosts:
+  s3:
+    region: us-east-2
+    access_key: XXX
+    secret_ke: YYY
+    compress: true
+    enc_key: secret"#;
 
     #[test]
     fn test_config_get_host() {
@@ -259,6 +265,24 @@ hosts:
         let r = r.unwrap();
         assert_eq!(r, Region::UsEast2);
         assert_eq!(h.compress, Some(true));
+    }
+
+    #[test]
+    fn test_config_get_compress_and_encrypt() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file.write_all(CONF_ENCRYPT.as_bytes()).unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf());
+        assert!(c.is_ok());
+        let c = c.unwrap();
+        let h = c.get_host("s3");
+        assert!(h.is_ok());
+        let h = h.unwrap();
+        let r = h.get_region();
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        assert_eq!(r, Region::UsEast2);
+        assert_eq!(h.compress, Some(true));
+        assert_eq!(h.enc_key, Some(String::from("secret")));
     }
 
     #[test]

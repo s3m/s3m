@@ -1,3 +1,4 @@
+use secrecy::SecretString;
 use std::convert::TryFrom;
 
 // Define the global arguments
@@ -7,6 +8,7 @@ pub struct GlobalArgs {
     pub retries: u32,
     pub compress: bool,
     pub encrypt: bool,
+    pub enc_key: Option<SecretString>,
 }
 
 impl GlobalArgs {
@@ -17,6 +19,7 @@ impl GlobalArgs {
             retries: 3,
             compress: false,
             encrypt: false,
+            enc_key: None,
         }
     }
 
