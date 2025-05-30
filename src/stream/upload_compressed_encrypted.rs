@@ -2,9 +2,9 @@ use crate::{
     cli::globals::GlobalArgs,
     s3::S3,
     stream::{
-        complete_multipart_upload, create_initial_stream, create_nonce_header, encrypt_chunk,
-        get_key, init_encryption, initiate_multipart_upload, maybe_upload_part, setup_progress,
-        upload_final_part, write_to_stream, Stream, STDIN_BUFFER_SIZE,
+        complete_multipart_upload, compress_chunk, create_initial_stream, create_nonce_header,
+        encrypt_chunk, get_key, init_encryption, initiate_multipart_upload, maybe_upload_part,
+        setup_progress, upload_final_part, write_to_stream, Stream, STDIN_BUFFER_SIZE,
     },
 };
 use anyhow::{anyhow, Result};
@@ -22,7 +22,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 /// # Errors
 /// Will return an error if the upload fails
 #[allow(clippy::too_many_arguments)]
-pub async fn stream_encrypted(
+pub async fn stream_compressed_encrypted(
     s3: &S3,
     object_key: &str,
     acl: Option<String>,
@@ -81,8 +81,11 @@ pub async fn stream_encrypted(
         .try_fold(
             (first_stream, encryptor), // Initial accumulator tuple (encryptor is moved here)
             |(mut current_upload_state_acc, mut current_encryptor_acc), chunk| async move {
+                // Compress the current chunk
+                let compress_data = compress_chunk(chunk).await?;
+
                 // Encrypt the current chunk
-                let encrypted_data = encrypt_chunk(&mut current_encryptor_acc, &chunk)
+                let encrypted_data = encrypt_chunk(&mut current_encryptor_acc, &compress_data)
                     .map_err(|e| anyhow!("Failed to encrypt chunk: {}", e))?;
 
                 // Write the encrypted chunk to our internal buffer/temp file

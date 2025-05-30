@@ -2,16 +2,18 @@ pub mod db;
 pub mod iterator;
 pub mod part;
 pub mod upload_compressed;
+pub mod upload_compressed_encrypted;
 pub mod upload_default;
 pub mod upload_encrypted;
 pub mod upload_multipart;
 pub mod upload_stdin;
+pub mod upload_stdin_compressed_encrypted;
 
 use crate::{
     cli::{globals::GlobalArgs, progressbar::Bar},
     s3::{actions, S3},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use bytes::BytesMut;
 use bytesize::ByteSize;
 use chacha20poly1305::{
@@ -25,12 +27,12 @@ use secrecy::ExposeSecret;
 use std::{
     cmp::min,
     collections::BTreeMap,
-    io::Write,
+    io::{Cursor, Write},
     path::{Path, PathBuf},
 };
 use tempfile::{Builder, NamedTempFile};
-use tokio::io::Error;
 use tokio::time::{sleep, Duration};
+use tokio::{io::Error, task};
 use zstd::stream::encode_all;
 
 // 512MB  to upload 5TB (the current max object size)
@@ -161,13 +163,18 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     Ok(etag)
 }
 
-/// Compress data chunk
-async fn compress_chunk(bytes: BytesMut) -> Result<Vec<u8>> {
-    match tokio::task::spawn_blocking(move || encode_all(&*bytes, 0)).await {
-        Ok(Ok(data)) => Ok(data),
-        Ok(Err(e)) => Err(anyhow!("Compression error: {}", e)),
-        Err(e) => Err(anyhow!("Thread error: {}", e)),
-    }
+/// Compresses a chunk of bytes using Zstandard (zstd), offloading the work to a blocking thread.
+///
+/// # Errors
+/// Returns an error if compression fails or the thread panics.
+pub async fn compress_chunk(bytes: BytesMut) -> Result<Vec<u8>> {
+    let input = bytes.freeze(); // Safe to send across threads
+
+    task::spawn_blocking(move || {
+        encode_all(Cursor::new(input), 0).context("failed to compress with zstd")
+    })
+    .await
+    .context("compression task panicked or was cancelled")?
 }
 
 pub fn init_encryption(

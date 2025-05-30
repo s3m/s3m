@@ -31,7 +31,7 @@ pub async fn stream_compressed(
     file_path: &Path,
 ) -> Result<String> {
     // use .zst extension if compress option is set
-    let key = get_key(object_key, true, globals.encrypt);
+    let key = get_key(object_key, globals.compress, globals.encrypt);
 
     // Add Content-Type application/zstd
     let mut meta = meta.unwrap_or_default();

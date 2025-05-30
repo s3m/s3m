@@ -5,9 +5,11 @@ use crate::{
         tools, S3,
     },
     stream::{
-        db::Db, upload_compressed::stream_compressed, upload_default::upload,
+        db::Db, upload_compressed::stream_compressed,
+        upload_compressed_encrypted::stream_compressed_encrypted, upload_default::upload,
         upload_encrypted::stream_encrypted, upload_multipart::upload_multipart,
         upload_stdin::stream_stdin,
+        upload_stdin_compressed_encrypted::stream_stdin_compressed_encrypted,
     },
 };
 use anyhow::{anyhow, Context, Result};
@@ -17,7 +19,6 @@ use std::{
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::oneshot;
 
 const MAX_FILE_SIZE: u64 = 5_497_558_138_880;
 
@@ -41,11 +42,18 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         if pipe {
             log::debug!("PIPE - streaming from stdin");
 
-            let etag = stream_stdin(s3, &key, acl, meta, quiet, tmp_dir, globals).await?;
+            let etag = if globals.compress && globals.encrypt {
+                log::info!(
+                    "COMPRESS + ENCRYPT - streaming compressed and encrypted data from stdin"
+                );
 
-            if !quiet {
-                println!("ETag: {etag}");
-            }
+                stream_stdin_compressed_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals)
+                    .await?
+            } else {
+                stream_stdin(s3, &key, acl, meta, quiet, tmp_dir, globals).await?
+            };
+
+            print_etag(&etag, quiet);
         } else if let Some(file) = &file {
             // Get file size and last modified time
             let (file_size, file_mtime) = metadata(file)
@@ -72,113 +80,124 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
             // file_path
             let file_path = Path::new(file);
 
-            // if compress is set, stream the compressed file
-            if globals.compress {
-                let etag =
-                    stream_compressed(s3, &key, acl, meta, quiet, tmp_dir, globals, file_path)
-                        .await?;
+            match (globals.compress, globals.encrypt) {
+                (true, true) => {
+                    log::info!("COMPRESS + ENCRYPT - streaming encrypted and compressed file");
 
-                if !quiet {
-                    println!("ETag: {etag}");
+                    let etag = stream_compressed_encrypted(
+                        s3, &key, acl, meta, quiet, tmp_dir, globals, file_path,
+                    )
+                    .await?;
+
+                    print_etag(&etag, quiet);
                 }
-            } else if globals.encrypt {
-                let etag =
-                    stream_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals, file_path)
-                        .await?;
+                (true, false) => {
+                    log::info!("COMPRESS - streaming compressed file");
 
-                if !quiet {
-                    println!("ETag: {etag}");
+                    let etag =
+                        stream_compressed(s3, &key, acl, meta, quiet, tmp_dir, globals, file_path)
+                            .await?;
+
+                    print_etag(&etag, quiet);
                 }
-            } else {
-                // we check here and not before because compressing the file changes the file size
-                if file_size > MAX_FILE_SIZE {
-                    log::error!("object size limit 5 TB");
-                    return Err(anyhow!("object size limit 5 TB"));
+                (false, true) => {
+                    log::info!("ENCRYPT - streaming encrypted file");
+
+                    let etag =
+                        stream_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals, file_path)
+                            .await?;
+
+                    print_etag(&etag, quiet);
                 }
+                (false, false) => {
+                    // we check here and not before because compressing the file changes the file size
+                    if file_size > MAX_FILE_SIZE {
+                        log::error!("object size limit 5 TB");
+                        return Err(anyhow!("object size limit 5 TB"));
+                    }
 
-                // get the part/chunk size
-                let part_size = tools::calculate_part_size(file_size, buf_size as u64)?;
+                    // get the part/chunk size
+                    let part_size = tools::calculate_part_size(file_size, buf_size as u64)?;
 
-                log::info!(
+                    log::info!(
                 "file path: {}\nfile size: {file_size}\nlast modified time: {file_mtime}\npart size: {part_size}",
                 file_path.display()
             );
 
-                // get the checksum with progress bar
-                let blake3_checksum = blake3_checksum(file_path, quiet)?;
+                    // get the checksum with progress bar
+                    let blake3_checksum = blake3_checksum(file_path, quiet)?;
 
-                log::info!("checksum: {}", &blake3_checksum);
+                    log::info!("checksum: {}", &blake3_checksum);
 
-                // keep track of the uploaded parts
-                let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
-                    .context("could not create stream tree, try option \"--clean\"")?;
+                    // keep track of the uploaded parts
+                    let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
+                        .context("could not create stream tree, try option \"--clean\"")?;
 
-                // check if file has been uploaded already
-                let etag = &db
-                    .check()?
-                    .context("could not query db, try option \"--clean\", to clean it");
+                    // check if file has been uploaded already
+                    let etag = &db
+                        .check()?
+                        .context("could not query db, try option \"--clean\", to clean it");
 
-                // if file has been uploaded already, return the etag
-                if let Ok(etag) = etag {
-                    if !quiet {
-                        println!("{etag}");
-                    }
-                    return Ok(());
-                };
+                    // if file has been uploaded already, return the etag
+                    if let Ok(etag) = etag {
+                        if !quiet {
+                            println!("{etag}");
+                        }
+                        return Ok(());
+                    };
 
-                // upload the file in parts if it is bigger than the chunk size (buf_size)
-                if file_size > part_size as u64 {
-                    // return only the the additional checksum algorithm if the option is set
-                    let additional_checksum =
-                        calculate_additional_checksum(file_path, checksum_algorithm, false).await;
+                    // upload the file in parts if it is bigger than the chunk size (buf_size)
+                    if file_size > part_size as u64 {
+                        // return only the the additional checksum algorithm if the option is set
+                        let additional_checksum =
+                            calculate_additional_checksum(file_path, checksum_algorithm, false)
+                                .await;
 
-                    log::debug!("additional checksum: {:#?}", &additional_checksum);
+                        log::debug!("additional checksum: {:#?}", &additional_checksum);
 
-                    let rs = upload_multipart(
-                        s3,
-                        &key,
-                        file_path,
-                        file_size,
-                        part_size,
-                        &db,
-                        acl,
-                        meta,
-                        quiet,
-                        additional_checksum,
-                        number,
-                        globals,
-                    )
-                    .await
-                    .context("multipart upload failed")?;
+                        let rs = upload_multipart(
+                            s3,
+                            &key,
+                            file_path,
+                            file_size,
+                            part_size,
+                            &db,
+                            acl,
+                            meta,
+                            quiet,
+                            additional_checksum,
+                            number,
+                            globals,
+                        )
+                        .await
+                        .context("multipart upload failed")?;
 
-                    if !quiet {
-                        println!("{rs}");
-                    }
+                        print_etag(&rs, quiet);
 
-                // upload the file as a whole if it is smaller than the chunk size (buf_size)
-                } else {
-                    // calculate the additional checksum if the option is set
-                    let additional_checksum =
-                        calculate_additional_checksum(file_path, checksum_algorithm, true).await;
+                    // upload the file as a whole if it is smaller than the chunk size (buf_size)
+                    } else {
+                        // calculate the additional checksum if the option is set
+                        let additional_checksum =
+                            calculate_additional_checksum(file_path, checksum_algorithm, true)
+                                .await;
 
-                    log::debug!("additional checksum: {:?}", &additional_checksum);
+                        log::debug!("additional checksum: {:?}", &additional_checksum);
 
-                    let rs = upload(
-                        s3,
-                        &key,
-                        file_path,
-                        file_size,
-                        &db,
-                        acl,
-                        meta,
-                        quiet,
-                        additional_checksum,
-                        globals,
-                    )
-                    .await?;
+                        let rs = upload(
+                            s3,
+                            &key,
+                            file_path,
+                            file_size,
+                            &db,
+                            acl,
+                            meta,
+                            quiet,
+                            additional_checksum,
+                            globals,
+                        )
+                        .await?;
 
-                    if !quiet {
-                        println!("{rs}");
+                        print_etag(&rs, quiet);
                     }
                 }
             }
@@ -186,6 +205,13 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
     }
 
     Ok(())
+}
+
+/// Print the ETag if not in quiet mode
+fn print_etag(etag: &str, quiet: bool) {
+    if !quiet {
+        println!("ETag: {etag}");
+    }
 }
 
 /// Calculate the blake3 checksum of a file
@@ -224,32 +250,26 @@ async fn additional_checksum(file: &Path, algorithm: String, calculate: bool) ->
     Ok(checksum)
 }
 
-// New function encapsulating the logic
 async fn calculate_additional_checksum(
     file: &Path,
     checksum_algorithm: Option<String>,
     calculate: bool,
 ) -> Option<Checksum> {
     if let Some(algorithm) = checksum_algorithm {
-        let file_clone = file;
+        let file_path = file.to_path_buf(); // Proper cloning for owned data
 
-        // Use oneshot channel to send the result back from the async task
-        let (sender, receiver) = oneshot::channel();
-        let additional_checksum_task = additional_checksum(file_clone, algorithm, calculate).await;
+        // Spawn the task with owned data
+        let handle =
+            tokio::spawn(
+                async move { additional_checksum(&file_path, algorithm, calculate).await },
+            );
 
-        // Spawn the task and send the result to the main thread
-        tokio::spawn(async move {
-            let additional_checksum_result = additional_checksum_task;
-            let _ = sender.send(additional_checksum_result);
-        });
-
-        // Wait for the result from the async task
-        receiver
-            .await
-            .map_or(None, |additional_checksum| {
-                Some(additional_checksum.context("could not calculate the additional checksum"))
-            })
-            .and_then(Result::ok)
+        // Await the spawned task and handle all errors by returning None
+        match handle.await {
+            Ok(Ok(checksum)) => Some(checksum),
+            Ok(Err(_checksum_error)) => None, // Checksum calculation failed
+            Err(_join_error) => None,         // Task join failed
+        }
     } else {
         None
     }
