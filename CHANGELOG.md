@@ -1,6 +1,7 @@
 ## 0.13.0 🚢
 * Enabled encryption using `enc_key` (32 len) in the config file
 * replaced serde_xml_rs with quick-xml for XML parsing
+* refactored code to use `async` in the try_fold (compression, encryption, stdin pipe)
 
 ## 0.12.0 🛥️
 * Cargo update, upgrade to bincode 2
