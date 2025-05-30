@@ -101,7 +101,11 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 .context("could not get content_length")?;
 
             // if quiet is true, then use a default progress bar
-            let pb = Bar::new(file_size, Some(quiet));
+            let pb = if quiet {
+                Bar::default()
+            } else {
+                Bar::new(file_size)
+            };
 
             let mut downloaded = 0;
             while let Some(bytes) = res.chunk().await? {

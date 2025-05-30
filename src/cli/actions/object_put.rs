@@ -7,7 +7,7 @@ use crate::{
     stream::{
         db::Db, upload_compressed::stream_compressed, upload_default::upload,
         upload_encrypted::stream_encrypted, upload_multipart::upload_multipart,
-        upload_stdin::stream,
+        upload_stdin::stream_stdin,
     },
 };
 use anyhow::{anyhow, Context, Result};
@@ -41,7 +41,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         if pipe {
             log::debug!("PIPE - streaming from stdin");
 
-            let etag = stream(s3, &key, acl, meta, quiet, tmp_dir, globals).await?;
+            let etag = stream_stdin(s3, &key, acl, meta, quiet, tmp_dir, globals).await?;
 
             if !quiet {
                 println!("ETag: {etag}");

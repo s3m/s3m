@@ -77,7 +77,11 @@ pub async fn upload_multipart(
     }
 
     // Upload parts progress bar
-    let pb = Bar::new(file_size, Some(quiet));
+    let pb = if quiet {
+        Bar::default()
+    } else {
+        Bar::new(file_size)
+    };
 
     increment_progress_bar(&pb, db_uploaded.len() as u64 * chunk_size, None);
 

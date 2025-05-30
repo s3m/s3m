@@ -17,11 +17,7 @@ pub struct Bar {
 
 impl Bar {
     #[must_use]
-    pub fn new(file_size: u64, quiet: Option<bool>) -> Self {
-        if quiet == Some(true) {
-            return Self::default();
-        }
-
+    pub fn new(file_size: u64) -> Self {
         let pb = ProgressBar::new(file_size);
 
         let style_result = ProgressStyle::default_bar()

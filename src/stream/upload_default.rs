@@ -1,11 +1,10 @@
 use crate::{
-    cli::{globals::GlobalArgs, progressbar::Bar},
+    cli::globals::GlobalArgs,
     s3::{actions, checksum::Checksum, S3},
-    stream::db::Db,
+    stream::{db::Db, setup_progress},
 };
 use anyhow::{anyhow, Result};
-use crossbeam::channel::unbounded;
-use std::{cmp::min, collections::BTreeMap, fmt::Write, path::Path};
+use std::{collections::BTreeMap, fmt::Write, path::Path};
 
 /// # Errors
 /// Will return an error if the upload fails
@@ -22,31 +21,16 @@ pub async fn upload(
     additional_checksum: Option<Checksum>,
     globals: GlobalArgs,
 ) -> Result<String> {
-    let (sender, receiver) = unbounded::<usize>();
-    let channel = if quiet { None } else { Some(sender) };
+    let progress_sender = setup_progress(quiet, Some(file_size)).await;
+
     let action = actions::PutObject::new(
         key,
         Path::new(file),
         acl,
         meta,
-        channel,
+        progress_sender,
         additional_checksum,
     );
-
-    if !quiet {
-        // Spawn a thread to update the progress bar
-        if let Some(pb) = Bar::new(file_size, Some(quiet)).progress {
-            tokio::spawn(async move {
-                let mut uploaded = 0;
-                while let Ok(i) = receiver.recv() {
-                    let new = min(uploaded + i as u64, file_size);
-                    uploaded = new;
-                    pb.set_position(new);
-                }
-                pb.finish();
-            });
-        }
-    };
 
     let response = action.request(s3, globals).await?;
     let etag = &response.get("ETag").ok_or_else(|| anyhow!("no etag"))?;

@@ -23,6 +23,7 @@ use rand::{rng, RngCore};
 use ring::digest::{Context, SHA256};
 use secrecy::ExposeSecret;
 use std::{
+    cmp::min,
     collections::BTreeMap,
     io::Write,
     path::{Path, PathBuf},
@@ -193,15 +194,33 @@ async fn initiate_multipart_upload(
     Ok(response.upload_id)
 }
 
-async fn setup_progress(quiet: bool) -> Option<crossbeam::channel::Sender<usize>> {
+async fn setup_progress(
+    quiet: bool,
+    size: Option<u64>,
+) -> Option<crossbeam::channel::Sender<usize>> {
     if quiet {
         return None;
     }
 
     let (sender, receiver) = unbounded::<usize>();
-    let progress_bar = Bar::new_spinner_stream();
 
-    if let Some(pb) = progress_bar.progress.clone() {
+    if let Some(size) = size {
+        if let Some(pb) = Bar::new(size).progress {
+            tokio::spawn(async move {
+                let mut uploaded = 0;
+
+                while let Ok(bytes_count) = receiver.recv() {
+                    let new = min(uploaded + bytes_count as u64, size);
+                    uploaded = new;
+                    pb.set_position(new);
+                }
+
+                log::debug!("Progress channel closed — total uploaded: {}", uploaded);
+
+                pb.finish();
+            });
+        }
+    } else if let Some(pb) = Bar::new_spinner_stream().progress {
         tokio::spawn(async move {
             let mut uploaded = 0;
 

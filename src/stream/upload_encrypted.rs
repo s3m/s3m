@@ -51,7 +51,7 @@ pub async fn stream_encrypted(
     // S3 setup
     let upload_id = initiate_multipart_upload(s3, &key, acl, meta).await?;
 
-    let progress_sender = setup_progress(quiet).await;
+    let progress_sender = setup_progress(quiet, None).await;
 
     // Initialize encryption
     let (cipher, nonce_bytes) = init_encryption(encryption_key)?;

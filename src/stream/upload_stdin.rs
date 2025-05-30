@@ -16,7 +16,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 /// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
 /// # Errors
 /// Will return an error if the upload fails
-pub async fn stream(
+pub async fn stream_stdin(
     s3: &S3,
     object_key: &str,
     acl: Option<String>,
@@ -37,7 +37,7 @@ pub async fn stream(
     // S3 setup
     let upload_id = initiate_multipart_upload(s3, &key, acl, meta).await?;
 
-    let progress_sender = setup_progress(quiet).await;
+    let progress_sender = setup_progress(quiet, None).await;
 
     // Create initial stream
     let first_stream: Stream = create_initial_stream(

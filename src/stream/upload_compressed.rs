@@ -40,7 +40,7 @@ pub async fn stream_compressed(
     // S3 setup
     let upload_id = initiate_multipart_upload(s3, &key, acl, meta).await?;
 
-    let progress_sender = setup_progress(quiet).await;
+    let progress_sender = setup_progress(quiet, None).await;
 
     // Create initial stream
     let first_stream: Stream = create_initial_stream(
