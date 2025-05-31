@@ -415,6 +415,7 @@ async fn upload_final_part(
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region, S3};
+    use chacha20poly1305::aead::{generic_array::GenericArray, stream::EncryptorBE32};
     use secrecy::SecretString;
 
     #[test]
@@ -464,5 +465,112 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(try_stream_part(&part));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_nonce_header() {
+        let nonce = [1, 2, 3, 4, 5, 6, 7];
+        let header = create_nonce_header(&nonce);
+        assert_eq!(header.len(), 8);
+        assert_eq!(header[0], 7);
+        assert_eq!(&header[1..], &nonce);
+    }
+
+    #[test]
+    fn test_encrypt_chunk() {
+        let key = secrecy::SecretString::new("0123456789abcdef0123456789abcdef".into());
+        let (cipher, nonce) = init_encryption(&key).unwrap();
+        let mut encryptor = EncryptorBE32::from_aead(cipher, GenericArray::from_slice(&nonce));
+
+        let data = b"Hello, world!";
+        let encrypted = encrypt_chunk(&mut encryptor, data).unwrap();
+
+        assert!(
+            encrypted.len() > 4,
+            "Encrypted output should include ciphertext after 4-byte prefix"
+        );
+
+        let prefix = u32::from_be_bytes(encrypted[0..4].try_into().unwrap()) as usize;
+        let encrypted_payload = &encrypted[4..];
+
+        // The prefix should match the actual length of the encrypted payload
+        assert_eq!(
+            prefix,
+            encrypted_payload.len(),
+            "Length prefix should match encrypted chunk length"
+        );
+
+        // The encrypted payload should differ from plaintext
+        assert_ne!(
+            encrypted_payload, data,
+            "Encrypted payload should differ from original plaintext"
+        );
+    }
+
+    #[test]
+    fn test_write_to_stream() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let mut stream = Stream {
+            tmp_file: NamedTempFile::new().unwrap(),
+            count: 0,
+            etags: Vec::new(),
+            key: "test",
+            part_number: 1,
+            s3: &s3,
+            upload_id: "test",
+            sha: Context::new(&SHA256),
+            md5: md5::Context::new(),
+            channel: None,
+            tmp_dir: PathBuf::new(),
+            throttle: None,
+            retries: 1,
+        };
+
+        let data = b"Hello, world!";
+        write_to_stream(&mut stream, data).unwrap();
+
+        assert_eq!(stream.count, data.len());
+        assert!(stream.tmp_file.as_file().metadata().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_create_initial_stream() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let tmp_dir = PathBuf::from("/tmp");
+        let key = "test_key";
+        let upload_id = "test_upload_id";
+        let globals = GlobalArgs {
+            throttle: None,
+            retries: 1,
+            compress: false,
+            encrypt: false,
+            enc_key: None,
+        };
+
+        let stream =
+            create_initial_stream(upload_id, &tmp_dir, key, &s3, None, &globals, None).unwrap();
+
+        assert_eq!(stream.key, key);
+        assert_eq!(stream.upload_id, upload_id);
+        assert_eq!(stream.part_number, 1);
+        assert_eq!(stream.count, 0);
     }
 }
