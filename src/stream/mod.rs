@@ -554,7 +554,7 @@ mod tests {
             false,
         );
 
-        let tmp_dir = PathBuf::from("/tmp");
+        let tmp_dir = PathBuf::new();
         let key = "test_key";
         let upload_id = "test_upload_id";
         let globals = GlobalArgs {
