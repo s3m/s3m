@@ -3,12 +3,19 @@ use crate::{
     s3::{actions, tools::throttle_download, S3},
 };
 use anyhow::{anyhow, Context, Result};
+use bytes::{Buf, BytesMut};
 use bytesize::ByteSize;
+use chacha20poly1305::{
+    aead::{generic_array::GenericArray, stream::DecryptorBE32, KeyInit},
+    ChaCha20Poly1305,
+};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
+use http::{header::CONTENT_TYPE, HeaderMap};
+use secrecy::ExposeSecret;
 use std::{
     cmp::min,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
 };
 use tokio::{fs::OpenOptions, io::AsyncWriteExt};
@@ -69,7 +76,34 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 .file_name()
                 .with_context(|| format!("Failed to get file name from: {key}"))?;
 
-            let path = get_dest(dest, file_name)?;
+            // do the request first to get the headers
+            let action = actions::GetObject::new(&key, version);
+            let mut res = action.request(s3, &globals).await?;
+
+            let is_encrypted = is_s3m_encrypted(res.headers());
+            let can_decrypt = is_encrypted && globals.enc_key.is_some();
+
+            log::info!(
+                "file_name: {}, is_encrypted: {}, can_decrypt: {}",
+                file_name.to_string_lossy(),
+                is_encrypted,
+                can_decrypt
+            );
+
+            // Determine the final file name (remove .enc extension if decrypting)
+            let final_file_name = if can_decrypt {
+                let file_name_str = file_name.to_string_lossy();
+                if let Some(stripped) = file_name_str.strip_suffix(".enc") {
+                    // stripped is the file name without ".enc" at the end
+                    OsString::from(stripped)
+                } else {
+                    file_name.to_os_string()
+                }
+            } else {
+                file_name.to_os_string()
+            };
+
+            let path = get_dest(dest, &final_file_name)?;
 
             // check if file exists
             if path.is_file() && !force {
@@ -84,10 +118,6 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
             if force {
                 options.truncate(true);
             }
-
-            // do the request
-            let action = actions::GetObject::new(&key, version);
-            let mut res = action.request(s3, &globals).await?;
 
             // Open the file with the specified options
             let mut file = options
@@ -107,30 +137,104 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 Bar::new(file_size)
             };
 
-            let mut downloaded = 0;
-            while let Some(bytes) = res.chunk().await? {
-                let new = min(downloaded + bytes.len() as u64, file_size);
+            let mut downloaded = 0u64;
+            let mut buffer = BytesMut::new();
+            let mut decryptor: Option<DecryptorBE32<ChaCha20Poly1305>> = None;
 
+            let cipher = if can_decrypt {
+                let key_bytes = globals
+                    .enc_key
+                    .as_ref()
+                    .unwrap()
+                    .expose_secret()
+                    .as_bytes()
+                    .into();
+                Some(ChaCha20Poly1305::new(key_bytes))
+            } else {
+                None
+            };
+
+            while let Some(chunk) = res.chunk().await? {
+                let new = min(downloaded + chunk.len() as u64, file_size);
                 downloaded = new;
 
-                if let Some(pb) = pb.progress.as_ref() {
-                    pb.set_position(new);
+                buffer.extend_from_slice(&chunk);
+
+                while can_decrypt {
+                    // Handle initial nonce
+                    if decryptor.is_none() {
+                        if buffer.len() < 8 {
+                            break;
+                        }
+                        let nonce_len = buffer[0] as usize;
+                        if nonce_len != 7 {
+                            return Err(anyhow::anyhow!(
+                                "Expected nonce length 7, got {}",
+                                nonce_len
+                            ));
+                        }
+                        let nonce = GenericArray::from_slice(&buffer[1..8]);
+                        decryptor = Some(DecryptorBE32::from_aead(cipher.clone().unwrap(), nonce));
+                        buffer.advance(8);
+                        continue;
+                    }
+
+                    // Need 4 bytes for encrypted chunk length
+                    if buffer.len() < 4 {
+                        break;
+                    }
+
+                    let len = u32::from_be_bytes(buffer[..4].try_into().unwrap()) as usize;
+                    if buffer.len() < 4 + len {
+                        break;
+                    }
+
+                    let mut encrypted_chunk = buffer[4..4 + len].to_vec();
+
+                    // decrypt_next_in_place modifies the slice in place and returns ()
+                    decryptor
+                        .as_mut()
+                        .unwrap()
+                        .decrypt_next_in_place(&[], &mut encrypted_chunk)
+                        .map_err(|_| {
+                            anyhow::anyhow!("Decryption failed, check your encryption key")
+                        })?;
+
+                    file.write_all(&encrypted_chunk).await?;
+
+                    if let Some(pb) = pb.progress.as_ref() {
+                        pb.set_position(downloaded);
+                    }
+
+                    buffer.advance(4 + len);
+
+                    if let Some(bandwidth_kb) = globals.throttle {
+                        throttle_download(bandwidth_kb, encrypted_chunk.len()).await?;
+                    }
                 }
 
-                file.write_all(&bytes).await?;
+                // If encryption is present but we cannot decrypt (no key), store raw
+                if is_encrypted && !can_decrypt {
+                    file.write_all(&buffer).await?;
+                    buffer.clear();
+                    if let Some(pb) = pb.progress.as_ref() {
+                        pb.set_position(downloaded);
+                    }
+                    continue;
+                }
 
-                // throttle bandwidth
-                if let Some(bandwidth_kb) = globals.throttle {
-                    throttle_download(bandwidth_kb, bytes.len()).await?;
+                // If not encrypted, write raw
+                if !is_encrypted {
+                    file.write_all(&buffer).await?;
+                    buffer.clear();
+                    if let Some(pb) = pb.progress.as_ref() {
+                        pb.set_position(downloaded);
+                    }
                 }
             }
 
             if let Some(pb) = pb.progress.as_ref() {
                 pb.finish();
-            }
-
-            while let Some(bytes) = res.chunk().await? {
-                file.write_all(&bytes).await?;
             }
         }
     }
@@ -164,6 +268,16 @@ fn get_dest(dest: Option<String>, file_name: &OsStr) -> Result<PathBuf> {
 
     // Use default path if dest is None
     Ok(Path::new(".").join(file_name))
+}
+
+/// Returns `true` if the Content-Type is `application/vnd.s3m.encrypted`
+/// or starts with that (e.g., `application/vnd.s3m.encrypted`)
+pub fn is_s3m_encrypted(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.starts_with("application/vnd.s3m.encrypted"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -65,13 +65,14 @@ fn get_key(key: &str, compress: bool, encrypt: bool) -> String {
 
     match (compress, encrypt) {
         (true, true) => {
-            // If extension is already "zst.enc" or "enc" or "zst", add ".zst.enc" only if not present
-            if ext == "zst.enc" || ext == "enc" || ext == "zst" {
+            // If extension is already "zst.enc" add ".zst.enc" only if not present
+            if ext == "zst.enc" {
                 key.to_string()
             } else {
                 format!("{key}.zst.enc")
             }
         }
+
         (true, false) => {
             // Only compress: add ".zst" if not already "zst"
             if ext == "zst" {
@@ -80,6 +81,7 @@ fn get_key(key: &str, compress: bool, encrypt: bool) -> String {
                 format!("{key}.zst")
             }
         }
+
         (false, true) => {
             // Only encrypt: add ".enc" if not already "enc"
             if ext == "enc" {
@@ -88,6 +90,7 @@ fn get_key(key: &str, compress: bool, encrypt: bool) -> String {
                 format!("{key}.enc")
             }
         }
+
         (false, false) => key.to_string(),
     }
 }

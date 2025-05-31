@@ -39,7 +39,7 @@ pub async fn stream_stdin_compressed_encrypted(
     let mut meta = meta.unwrap_or_default();
     meta.insert(
         "Content-Type".to_string(),
-        "application/octet-stream".to_string(),
+        "application/vnd.s3m.encrypted".to_string(),
     );
 
     // S3 setup
