@@ -34,139 +34,76 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
     } = action
     {
         if metadata {
-            let action = actions::HeadObject::new(&key, version);
-            let headers = action.request(s3).await?;
+            return handle_metadata(s3, &key, version).await;
+        }
 
-            let mut i = 0;
+        if versions {
+            return handle_versions(s3, &key).await;
+        }
 
-            for k in headers.keys() {
-                i = k.len();
-            }
+        let file_name = Path::new(&key)
+            .file_name()
+            .with_context(|| format!("Failed to get file name from: {key}"))?;
 
-            i += 1;
-            for (k, v) in headers {
-                println!("{:<width$} {}", format!("{k}:").green(), v, width = i);
-            }
-        } else if versions {
-            let action = actions::ListObjectVersions::new(&key);
-            let result = action.request(s3).await?;
+        // do the request first to get the headers
+        let action = actions::GetObject::new(&key, version);
+        let mut res = action.request(s3, &globals).await?;
 
-            if result.versions.is_empty() {
-                println!("No versions found for key: {}", key);
-                return Ok(());
-            }
+        let is_encrypted = is_s3m_encrypted(res.headers());
+        let can_decrypt = is_encrypted && globals.enc_key.is_some();
 
-            for version in result.versions {
-                let dt = DateTime::parse_from_rfc3339(&version.last_modified)?;
-                let last_modified: DateTime<Utc> = DateTime::from(dt);
-                println!(
-                    "{} {:>10} {:<} ID: {}",
-                    format!("[{}]", last_modified.format("%F %T %Z")).green(),
-                    ByteSize(version.size).to_string().yellow(),
-                    if version.is_latest {
-                        format!("{} (latest)", version.key)
-                    } else {
-                        version.key.to_string()
-                    },
-                    version.version_id
-                );
-            }
+        log::info!(
+            "file_name: {}, is_encrypted: {}, can_decrypt: {}",
+            file_name.to_string_lossy(),
+            is_encrypted,
+            can_decrypt
+        );
+
+        let final_file_name = determine_final_filename(file_name, can_decrypt);
+
+        let path = get_dest(dest, &final_file_name)?;
+
+        // check if file exists
+        if path.is_file() && !force {
+            return Err(anyhow!("file {:?} already exists", path));
+        }
+
+        let mut file = create_output_file(&path, force).await?;
+
+        // get the file_size in bytes by using the content_length
+        let file_size = res
+            .content_length()
+            .context("could not get content_length")?;
+
+        // if quiet is true, then use a default progress bar
+        let pb = if quiet {
+            Bar::default()
         } else {
-            let file_name = Path::new(&key)
-                .file_name()
-                .with_context(|| format!("Failed to get file name from: {key}"))?;
+            Bar::new(file_size)
+        };
 
-            // do the request first to get the headers
-            let action = actions::GetObject::new(&key, version);
-            let mut res = action.request(s3, &globals).await?;
+        let mut downloaded = 0u64;
+        let mut buffer = BytesMut::new();
+        let mut decryptor: Option<DecryptorBE32<ChaCha20Poly1305>> = None;
 
-            let is_encrypted = is_s3m_encrypted(res.headers());
-            let can_decrypt = is_encrypted && globals.enc_key.is_some();
+        let cipher = create_cipher_if_needed(&globals, can_decrypt)?;
 
-            log::info!(
-                "file_name: {}, is_encrypted: {}, can_decrypt: {}",
-                file_name.to_string_lossy(),
-                is_encrypted,
-                can_decrypt
-            );
+        while let Some(chunk) = res.chunk().await? {
+            let new = min(downloaded + chunk.len() as u64, file_size);
+            downloaded = new;
 
-            // Determine the final file name (remove .enc extension if decrypting)
-            let final_file_name = if can_decrypt {
-                let file_name_str = file_name.to_string_lossy();
-                if let Some(stripped) = file_name_str.strip_suffix(".enc") {
-                    // stripped is the file name without ".enc" at the end
-                    OsString::from(stripped)
-                } else {
-                    file_name.to_os_string()
-                }
-            } else {
-                file_name.to_os_string()
-            };
+            buffer.extend_from_slice(&chunk);
 
-            let path = get_dest(dest, &final_file_name)?;
-
-            // check if file exists
-            if path.is_file() && !force {
-                return Err(anyhow!("file {:?} already exists", path));
-            }
-
-            // open
-            let mut options = OpenOptions::new();
-            options.write(true).create(true);
-
-            // Set truncate flag to overwrite the file if it exists
-            if force {
-                options.truncate(true);
-            }
-
-            // Open the file with the specified options
-            let mut file = options
-                .open(&path)
-                .await
-                .context(format!("could not open {}", &path.display()))?;
-
-            // get the file_size in bytes by using the content_length
-            let file_size = res
-                .content_length()
-                .context("could not get content_length")?;
-
-            // if quiet is true, then use a default progress bar
-            let pb = if quiet {
-                Bar::default()
-            } else {
-                Bar::new(file_size)
-            };
-
-            let mut downloaded = 0u64;
-            let mut buffer = BytesMut::new();
-            let mut decryptor: Option<DecryptorBE32<ChaCha20Poly1305>> = None;
-
-            let cipher = if can_decrypt {
-                let key_bytes = globals
-                    .enc_key
-                    .as_ref()
-                    .unwrap()
-                    .expose_secret()
-                    .as_bytes()
-                    .into();
-                Some(ChaCha20Poly1305::new(key_bytes))
-            } else {
-                None
-            };
-
-            while let Some(chunk) = res.chunk().await? {
-                let new = min(downloaded + chunk.len() as u64, file_size);
-                downloaded = new;
-
-                buffer.extend_from_slice(&chunk);
-
-                while can_decrypt {
+            if can_decrypt {
+                loop {
                     // Handle initial nonce
                     if decryptor.is_none() {
                         if buffer.len() < 8 {
                             break;
                         }
+
                         let nonce_len = buffer[0] as usize;
+
                         if nonce_len != 7 {
                             return Err(anyhow::anyhow!(
                                 "Expected nonce length 7, got {}",
@@ -174,8 +111,11 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                             ));
                         }
                         let nonce = GenericArray::from_slice(&buffer[1..8]);
+
                         decryptor = Some(DecryptorBE32::from_aead(cipher.clone().unwrap(), nonce));
+
                         buffer.advance(8);
+
                         continue;
                     }
 
@@ -207,39 +147,130 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                     }
 
                     buffer.advance(4 + len);
-
-                    if let Some(bandwidth_kb) = globals.throttle {
-                        throttle_download(bandwidth_kb, encrypted_chunk.len()).await?;
-                    }
-                }
-
-                // If encryption is present but we cannot decrypt (no key), store raw
-                if is_encrypted && !can_decrypt {
-                    file.write_all(&buffer).await?;
-                    buffer.clear();
-                    if let Some(pb) = pb.progress.as_ref() {
-                        pb.set_position(downloaded);
-                    }
-                    continue;
-                }
-
-                // If not encrypted, write raw
-                if !is_encrypted {
-                    file.write_all(&buffer).await?;
-                    buffer.clear();
-                    if let Some(pb) = pb.progress.as_ref() {
-                        pb.set_position(downloaded);
-                    }
                 }
             }
 
-            if let Some(pb) = pb.progress.as_ref() {
-                pb.finish();
+            // If encryption is present but we cannot decrypt (no key), store raw
+            if is_encrypted && !can_decrypt {
+                file.write_all(&buffer).await?;
+                buffer.clear();
+                if let Some(pb) = pb.progress.as_ref() {
+                    pb.set_position(downloaded);
+                }
+                continue;
             }
+
+            // If not encrypted, write raw
+            if !is_encrypted {
+                file.write_all(&buffer).await?;
+                buffer.clear();
+                if let Some(pb) = pb.progress.as_ref() {
+                    pb.set_position(downloaded);
+                }
+            }
+
+            if let Some(bandwidth_kb) = globals.throttle {
+                throttle_download(bandwidth_kb, chunk.len()).await?;
+            }
+        }
+
+        if let Some(pb) = pb.progress.as_ref() {
+            pb.finish();
         }
     }
 
     Ok(())
+}
+
+async fn handle_metadata(s3: &S3, key: &str, version: Option<String>) -> Result<()> {
+    let action = actions::HeadObject::new(key, version);
+    let headers = action.request(s3).await?;
+
+    let max_key_len = headers.keys().map(|k| k.len()).max().unwrap_or(0) + 1;
+
+    for (k, v) in headers {
+        println!(
+            "{:<width$} {}",
+            format!("{k}:").green(),
+            v,
+            width = max_key_len
+        );
+    }
+
+    Ok(())
+}
+
+async fn handle_versions(s3: &S3, key: &str) -> Result<()> {
+    let action = actions::ListObjectVersions::new(key);
+    let result = action.request(s3).await?;
+
+    if result.versions.is_empty() {
+        println!("No versions found for key: {}", key);
+        return Ok(());
+    }
+
+    for version in result.versions {
+        let dt = DateTime::parse_from_rfc3339(&version.last_modified)?;
+        let last_modified: DateTime<Utc> = DateTime::from(dt);
+        println!(
+            "{} {:>10} {:<} ID: {}",
+            format!("[{}]", last_modified.format("%F %T %Z")).green(),
+            ByteSize(version.size).to_string().yellow(),
+            if version.is_latest {
+                format!("{} (latest)", version.key)
+            } else {
+                version.key.to_string()
+            },
+            version.version_id
+        );
+    }
+
+    Ok(())
+}
+
+fn determine_final_filename(file_name: &OsStr, can_decrypt: bool) -> OsString {
+    if can_decrypt {
+        let file_name_str = file_name.to_string_lossy();
+        if let Some(stripped) = file_name_str.strip_suffix(".enc") {
+            OsString::from(stripped)
+        } else {
+            file_name.to_os_string()
+        }
+    } else {
+        file_name.to_os_string()
+    }
+}
+
+async fn create_output_file(path: &Path, force: bool) -> Result<tokio::fs::File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true);
+
+    if force {
+        options.truncate(true);
+    }
+
+    options
+        .open(path)
+        .await
+        .with_context(|| format!("could not open {}", path.display()))
+}
+
+fn create_cipher_if_needed(
+    globals: &GlobalArgs,
+    can_decrypt: bool,
+) -> Result<Option<ChaCha20Poly1305>> {
+    if can_decrypt {
+        let key_bytes = globals
+            .enc_key
+            .as_ref()
+            .context("Encryption key is required but not provided")?
+            .expose_secret()
+            .as_bytes()
+            .into();
+        Ok(Some(ChaCha20Poly1305::new(key_bytes)))
+    } else {
+        Ok(None)
+    }
 }
 
 fn get_dest(dest: Option<String>, file_name: &OsStr) -> Result<PathBuf> {
