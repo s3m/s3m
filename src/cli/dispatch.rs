@@ -1,12 +1,16 @@
-use crate::cli::{actions::Action, globals::GlobalArgs};
+use crate::cli::{actions::Action, globals::GlobalArgs, s3_location::S3Location};
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
-use std::{borrow::ToOwned, collections::BTreeMap, path::PathBuf, string::String};
+use std::{
+    borrow::ToOwned,
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    string::String,
+};
 
 // return Action based on the command or subcommand
 pub fn dispatch(
-    hbp: Vec<&str>,
-    bucket: Option<String>,
+    hbk: S3Location,
     buf_size: usize,
     s3m_dir: PathBuf,
     matches: &clap::ArgMatches,
@@ -19,40 +23,50 @@ pub fn dispatch(
             .context("arguments missing")
     };
 
-    // Closure to check if hpb is not empty and if not return the file key
-    let hbp_empty = |hbp: Vec<&str>| -> Result<String> {
-        if hbp.is_empty() {
-            return Err(anyhow!(
+    let get_key = || -> Result<String> {
+        match &hbk.key {
+            Some(key) => Ok(key.clone()),
+
+            None => Err(anyhow!(
                 "file name missing, <s3 provider>/<bucket>/{}, For more information try {}",
                 "<file name>".red(),
                 "--help".green()
-            ));
+            )),
         }
-        Ok(hbp.join("/"))
     };
 
     match matches.subcommand_name() {
         // ACL
         Some("acl") => {
-            let key = hbp_empty(hbp)?;
+            let key = get_key()?;
+
             let sub_m = sub_m("acl")?;
+
             let acl = sub_m.get_one("acl").map(|s: &String| s.to_string());
+
             Ok(Action::ACL { key, acl })
         }
 
         // GetObject
         Some("get") => {
-            let key = hbp_empty(hbp)?;
+            let key = get_key()?;
+
             let sub_m = sub_m("get")?;
+
             let metadata = sub_m.get_one("metadata").copied().unwrap_or(false);
+
             let args: Vec<&str> = sub_m
                 .get_many::<String>("arguments")
                 .unwrap_or_default()
                 .map(String::as_str)
                 .collect();
+
             let quiet = sub_m.get_one("quiet").copied().unwrap_or(false);
+
             let force = sub_m.get_one("force").copied().unwrap_or(false);
+
             let versions = sub_m.get_one("versions").copied().unwrap_or(false);
+
             let version = sub_m.get_one("version").map(|s: &String| s.to_string());
 
             // get destination file/path
@@ -76,12 +90,17 @@ pub fn dispatch(
         // ListObjects
         Some("ls") => {
             let sub_m = sub_m("ls")?;
+
             let prefix = sub_m.get_one("prefix").map(|s: &String| s.to_string());
+
             let start_after = sub_m.get_one("start-after").map(|s: &String| s.to_string());
+
+            // option -n/--number
             // convert max_keys to string and default to None
             let max_kub = sub_m.get_one::<usize>("max-kub").map(|s| s.to_string());
+
             Ok(Action::ListObjects {
-                bucket,
+                bucket: hbk.bucket.clone(),
                 list_multipart_uploads: sub_m
                     .get_one("ListMultipartUploads")
                     .copied()
@@ -93,12 +112,14 @@ pub fn dispatch(
         }
 
         // CreateBucket
-        Some("cb") => match bucket {
+        Some("cb") => match hbk.bucket {
             Some(_) => {
                 let sub_m = sub_m("cb")?;
+
                 let acl = sub_m
                     .get_one("acl")
                     .map_or_else(|| String::from("private"), |s: &String| s.to_string());
+
                 Ok(Action::CreateBucket { acl })
             }
             None => Err(anyhow!("Bucket name missing, <s3 provider>/<bucket>")),
@@ -107,14 +128,19 @@ pub fn dispatch(
         // DeleteObject or DeleteBucket
         Some("rm") => {
             let mut key = String::new();
+
             let sub_m = sub_m("rm")?;
+
             let upload_id = sub_m
                 .get_one("UploadId")
                 .map_or_else(String::new, |s: &String| s.to_string());
+
             let bucket = sub_m.get_one("bucket").copied().unwrap_or(false);
+
             if !bucket {
-                key = hbp_empty(hbp)?;
+                key = get_key()?;
             }
+
             Ok(Action::DeleteObject {
                 key,
                 upload_id,
@@ -124,24 +150,55 @@ pub fn dispatch(
 
         // ShareObject
         Some("share") => {
-            let key = hbp_empty(hbp)?;
+            let key = get_key()?;
+
             let sub_m = sub_m("share")?;
+
             let expire = sub_m.get_one::<usize>("expire").map_or_else(|| 0, |s| *s);
+
             Ok(Action::ShareObject { key, expire })
         }
 
         // PutObject
         _ => {
-            let key = hbp_empty(hbp)?;
             let mut src: Option<String> = None;
+
             let args: Vec<&str> = matches
                 .get_many::<String>("arguments")
                 .unwrap_or_default()
                 .map(String::as_str)
                 .collect();
+
             if args.len() == 2 {
                 src = Some(args[0].to_string());
+
+                // if src is provided, check if it exists
+                if !Path::new(&src.as_ref().unwrap()).exists() {
+                    return Err(anyhow!(
+                        "Source file does not exist: {}",
+                        src.as_ref().unwrap().red()
+                    ));
+                }
             }
+
+            log::info!(
+                "Arguments: {:?}, Source file: {:?}",
+                args,
+                src.as_deref().unwrap_or(""),
+            );
+
+            let key = match get_key() {
+                Ok(k) => k,
+                Err(e) => {
+                    if src.is_some() {
+                        src.as_ref().unwrap().to_string()
+                    } else {
+                        return Err(e);
+                    }
+                }
+            };
+
+            log::info!("Key: {}", key);
 
             // get ACL to apply to the object
             let acl = matches.get_one("acl").map(|s: &String| s.to_string());
@@ -172,9 +229,6 @@ pub fn dispatch(
             if !global_args.compress {
                 global_args.compress = matches.get_one("compress").copied().unwrap_or(false);
             }
-
-            // set encrypt
-            // TODO: implement encrypt
 
             Ok(Action::PutObject {
                 acl,
@@ -226,8 +280,7 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location::default(),
             0,
             PathBuf::new(),
             &matches,
@@ -252,8 +305,7 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location::default(),
             0,
             PathBuf::new(),
             &matches,
@@ -291,8 +343,7 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location::default(),
             0,
             PathBuf::new(),
             &matches,
@@ -330,8 +381,7 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location::default(),
             0,
             PathBuf::new(),
             &matches,
@@ -365,8 +415,11 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            Some("bucket-required".to_string()),
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: None,
+            },
             0,
             PathBuf::new(),
             &matches,
@@ -390,8 +443,11 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: Some("f".to_string()),
+            },
             0,
             PathBuf::new(),
             &matches,
@@ -421,8 +477,11 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: Some("f".to_string()),
+            },
             0,
             PathBuf::new(),
             &matches,
@@ -451,8 +510,11 @@ hosts:
         assert!(matches.is_ok());
         let matches = matches.unwrap();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: Some("f".to_string()),
+            },
             0,
             PathBuf::new(),
             &matches,
@@ -486,8 +548,11 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: Some("f".to_string()),
+            },
             0,
             PathBuf::new(),
             &matches,
@@ -550,8 +615,11 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: Some("f".to_string()),
+            },
             0,
             PathBuf::new(),
             &matches,
@@ -613,8 +681,11 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: Some("f".to_string()),
+            },
             0,
             PathBuf::new(),
             &matches,
@@ -683,8 +754,11 @@ hosts:
 
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: Some("f".to_string()),
+            },
             0,
             PathBuf::new(),
             &matches,
@@ -744,8 +818,11 @@ hosts:
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
         let action = dispatch(
-            vec!["h/b/f"],
-            None,
+            S3Location {
+                host: "h".to_string(),
+                bucket: Some("b".to_string()),
+                key: Some("f".to_string()),
+            },
             0,
             PathBuf::new(),
             &matches,

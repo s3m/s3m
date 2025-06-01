@@ -57,11 +57,7 @@ pub struct Stream<'a> {
 // return the key with the .zst, .enc, or .zst.enc extension based on the flags
 fn get_key(key: &str, compress: bool, encrypt: bool) -> String {
     let path = Path::new(key);
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     match (compress, encrypt) {
         (true, true) => {
@@ -421,16 +417,21 @@ mod tests {
     #[test]
     fn test_get_key() {
         let test_cases = vec![
-            ("test", false, "test"),
-            ("test", true, "test.zst"),
-            ("test.txt", false, "test.txt"),
-            ("test.txt", true, "test.txt.zst"),
-            ("test.ZST", false, "test.ZST"),
-            ("test.ZST", true, "test.ZST"),
-            ("testzst", true, "testzst.zst"),
+            ("test", false, false, "test"),
+            ("test", true, false, "test.zst"),
+            ("test", false, true, "test.enc"),
+            ("test", true, true, "test.zst.enc"),
+            ("test.txt", false, false, "test.txt"),
+            ("test.txt", true, false, "test.txt.zst"),
+            ("test.txt", false, true, "test.txt.enc"),
+            ("test.txt", true, true, "test.txt.zst.enc"),
+            ("test.ZST", false, false, "test.ZST"),
+            ("test.ZST", true, false, "test.ZST.zst"),
+            ("test.ZST", false, true, "test.ZST.enc"),
+            ("test.ZST", true, true, "test.ZST.zst.enc"),
         ];
-        for (key, compress, expected) in test_cases {
-            assert_eq!(get_key(key, compress, false), expected);
+        for (key, compress, encrypt, expected) in test_cases {
+            assert_eq!(get_key(key, compress, encrypt), expected);
         }
     }
 

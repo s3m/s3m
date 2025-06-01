@@ -10,4 +10,4 @@ pub use self::start::start;
 
 mod commands;
 mod dispatch;
-mod matches;
+mod s3_location;

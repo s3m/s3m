@@ -1,3 +1,6 @@
+## 0.13.1
+* Fixed get_key to not lower_case the key when using compression or encryption
+
 ## 0.13.0 🚢
 * Enabled encryption using `enc_key` (32 len) in the config file
 * replaced serde_xml_rs with quick-xml for XML parsing
