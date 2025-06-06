@@ -190,8 +190,8 @@ pub fn dispatch(
             let key = match get_key() {
                 Ok(k) => k,
                 Err(e) => {
-                    if src.is_some() {
-                        src.as_ref().unwrap().to_string()
+                    if let Some(src) = &src {
+                        src.to_string()
                     } else {
                         return Err(e);
                     }
@@ -257,6 +257,7 @@ mod tests {
         actions::Action,
         commands::{cmd_acl, cmd_cb, cmd_get, cmd_ls, cmd_rm, cmd_share, new},
         globals::GlobalArgs,
+        s3_location::host_bucket_key,
     };
     use clap::Command;
     use std::cmp;
@@ -273,23 +274,51 @@ hosts:
     bucket: my-bucket"#;
 
     #[test]
+    fn test_dispatch_bad_bucket() {
+        let cmd = Command::new("test").subcommand(cmd_acl::command());
+
+        let matches = cmd.try_get_matches_from(vec!["test", "acl", "s3/b/key"]);
+        assert!(matches.is_ok());
+
+        let matches = matches.unwrap();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_err());
+
+        let err = s3_location.unwrap_err().to_string();
+
+        assert!(err.contains("Invalid bucket name"));
+        assert!(err.contains("Must be 3-63"));
+    }
+
+    #[test]
     fn test_dispatch_acl() {
         let cmd = Command::new("test").subcommand(cmd_acl::command());
-        let matches = cmd.try_get_matches_from(vec!["test", "acl", "h/b/f"]);
+
+        let matches = cmd.try_get_matches_from(vec!["test", "acl", "s3/bucket/key"]);
         assert!(matches.is_ok());
-        let matches = matches.unwrap();
+
         let mut globals = GlobalArgs::new();
+
+        let matches = matches.unwrap();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location::default(),
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
             &mut globals,
         )
         .unwrap();
+
         match action {
             Action::ACL { key, acl } => {
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "key");
                 assert_eq!(acl, None);
                 assert!(!globals.compress);
             }
@@ -298,14 +327,55 @@ hosts:
     }
 
     #[test]
-    fn test_dispatch_get() {
+    fn test_dispatch_acl_put() {
+        let cmd = Command::new("test").subcommand(cmd_acl::command());
+
+        let matches =
+            cmd.try_get_matches_from(vec!["test", "acl", "-a", "private", "s3/bucket/key"]);
+        assert!(matches.is_ok());
+
+        let mut globals = GlobalArgs::new();
+
+        let matches = matches.unwrap();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
+        let action = dispatch(
+            s3_location.unwrap(),
+            0,
+            PathBuf::new(),
+            &matches,
+            &mut globals,
+        )
+        .unwrap();
+
+        match action {
+            Action::ACL { key, acl } => {
+                assert_eq!(key, "key");
+                assert_eq!(acl, Some("private".to_string()));
+                assert!(!globals.compress);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_get_1() {
         let cmd = Command::new("test").subcommand(cmd_get::command());
-        let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f"]);
+        let matches = cmd.try_get_matches_from(vec!["test", "get", "h/bucket/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location::default(),
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -322,7 +392,7 @@ hosts:
                 versions,
                 version,
             } => {
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "f");
                 assert!(!metadata);
                 assert_eq!(dest, None);
                 assert!(!quiet);
@@ -341,9 +411,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f", "-q", "-f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location::default(),
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -376,12 +452,20 @@ hosts:
     #[test]
     fn test_dispatch_ls() {
         let cmd = Command::new("test").subcommand(cmd_ls::command());
+
         let matches = cmd.try_get_matches_from(vec!["test", "ls", "h/b/f"]);
         assert!(matches.is_ok());
+
         let matches = matches.unwrap();
+
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location::default(),
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -414,12 +498,13 @@ hosts:
         assert!(matches.is_ok());
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: None,
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -442,12 +527,13 @@ hosts:
         assert!(matches.is_ok());
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: Some("f".to_string()),
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -475,13 +561,15 @@ hosts:
         let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "h/b/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: Some("f".to_string()),
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -508,13 +596,15 @@ hosts:
         let cmd = Command::new("test").subcommand(cmd_share::command());
         let matches = cmd.try_get_matches_from(vec!["test", "share", "h/b/f"]);
         assert!(matches.is_ok());
+
         let matches = matches.unwrap();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: Some("f".to_string()),
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -546,13 +636,15 @@ hosts:
         ]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: Some("f".to_string()),
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -614,12 +706,12 @@ hosts:
         assert!(matches.is_ok());
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: Some("f".to_string()),
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -680,12 +772,13 @@ hosts:
         assert!(matches.is_ok());
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: Some("f".to_string()),
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -753,12 +846,12 @@ hosts:
         let matches = matches.unwrap();
 
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: Some("f".to_string()),
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,
@@ -817,12 +910,13 @@ hosts:
         assert!(matches.is_ok());
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
         let action = dispatch(
-            S3Location {
-                host: "h".to_string(),
-                bucket: Some("b".to_string()),
-                key: Some("f".to_string()),
-            },
+            s3_location.unwrap(),
             0,
             PathBuf::new(),
             &matches,

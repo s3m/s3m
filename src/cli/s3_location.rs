@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::ArgMatches;
 use regex::Regex;
 
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct S3Location {
     pub host: String,
     pub bucket: Option<String>,

@@ -222,9 +222,9 @@ hosts:
         let matches = cmd
             .try_get_matches_from(vec!["s3m", "ls", "aws/bucket/x"])
             .unwrap();
-        let mut hbp = host_bucket_key(&matches).unwrap();
+        let hbk = host_bucket_key(&matches).unwrap();
         assert_eq!(
-            hbp,
+            hbk,
             S3Location {
                 host: String::from("aws"),
                 bucket: Some(String::from("bucket")),
@@ -232,7 +232,7 @@ hosts:
             }
         );
         let config = Config::new(config_path.clone()).unwrap();
-        let host = get_host(&config, &config_path, &mut hbp);
+        let host = get_host(&config, &config_path, &hbk);
         assert!(host.is_ok());
 
         let host = host.unwrap();
