@@ -33,7 +33,7 @@ impl S3Location {
             _ => {
                 if !allow_missing_bucket {
                     return Err(anyhow!(
-                        "No \"bucket\" found, expected format: <s3 provider>/<bucket name>/key"
+                        "Bucket name missing, expected format: <s3 provider>/<bucket name>/key"
                     ));
                 } else {
                     None
@@ -295,6 +295,6 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("invalid characters"));
+            .contains("Invalid bucket name"));
     }
 }

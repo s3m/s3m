@@ -256,8 +256,10 @@ mod tests {
     use crate::cli::{
         actions::Action,
         commands::{cmd_acl, cmd_cb, cmd_get, cmd_ls, cmd_rm, cmd_share, new},
+        config::Config,
         globals::GlobalArgs,
         s3_location::host_bucket_key,
+        start::get_host,
     };
     use clap::Command;
     use std::cmp;
@@ -408,7 +410,7 @@ hosts:
     #[test]
     fn test_dispatch_get_quiet_force() {
         let cmd = Command::new("test").subcommand(cmd_get::command());
-        let matches = cmd.try_get_matches_from(vec!["test", "get", "h/b/f", "-q", "-f"]);
+        let matches = cmd.try_get_matches_from(vec!["test", "get", "h/bucket/key", "-q", "-f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
 
@@ -436,7 +438,7 @@ hosts:
                 versions,
                 version,
             } => {
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "key");
                 assert!(!metadata);
                 assert_eq!(dest, None);
                 assert!(quiet);
@@ -453,7 +455,7 @@ hosts:
     fn test_dispatch_ls() {
         let cmd = Command::new("test").subcommand(cmd_ls::command());
 
-        let matches = cmd.try_get_matches_from(vec!["test", "ls", "h/b/f"]);
+        let matches = cmd.try_get_matches_from(vec!["test", "ls", "h/bucket/file"]);
         assert!(matches.is_ok());
 
         let matches = matches.unwrap();
@@ -480,7 +482,7 @@ hosts:
                 prefix,
                 start_after,
             } => {
-                assert_eq!(bucket, None);
+                assert_eq!(bucket, Some("bucket".to_string()));
                 assert!(!list_multipart_uploads);
                 assert_eq!(prefix, None);
                 assert_eq!(start_after, None);
@@ -492,9 +494,9 @@ hosts:
     }
 
     #[test]
-    fn test_dispatch_cb() {
+    fn test_dispatch_cb_1() {
         let cmd = Command::new("test").subcommand(cmd_cb::command());
-        let matches = cmd.try_get_matches_from(vec!["test", "cb", "h/b/f"]);
+        let matches = cmd.try_get_matches_from(vec!["test", "cb", "h/bucket/f"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
@@ -521,11 +523,32 @@ hosts:
     }
 
     #[test]
-    fn test_dispatch_rm() {
-        let cmd = Command::new("test").subcommand(cmd_rm::command());
-        let matches = cmd.try_get_matches_from(vec!["test", "rm", "h/b/f"]);
+    fn test_dispatch_cb_2() {
+        let cmd = Command::new("test").subcommand(cmd_cb::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "cb", "h"]);
         assert!(matches.is_ok());
         let matches = matches.unwrap();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_err());
+
+        let err = s3_location.unwrap_err().to_string();
+
+        println!("{}", err);
+
+        assert!(err.contains("Bucket name missing"));
+    }
+
+    #[test]
+    fn test_dispatch_rm_key() {
+        let cmd = Command::new("test").subcommand(cmd_rm::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "rm", "h/bucket/key"]);
+
+        assert!(matches.is_ok());
+
+        let matches = matches.unwrap();
+
         let mut globals = GlobalArgs::new();
 
         let s3_location = host_bucket_key(&matches);
@@ -546,7 +569,7 @@ hosts:
                 upload_id,
                 bucket,
             } => {
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "key");
                 assert_eq!(upload_id, "");
                 assert!(!bucket);
                 assert!(!globals.compress);
@@ -558,8 +581,9 @@ hosts:
     #[test]
     fn test_dispatch_rm_bucket() {
         let cmd = Command::new("test").subcommand(cmd_rm::command());
-        let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "h/b/f"]);
+        let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "h/bucket/file"]);
         assert!(matches.is_ok());
+
         let matches = matches.unwrap();
 
         let mut globals = GlobalArgs::new();
@@ -594,7 +618,7 @@ hosts:
     #[test]
     fn test_dispatch_share() {
         let cmd = Command::new("test").subcommand(cmd_share::command());
-        let matches = cmd.try_get_matches_from(vec!["test", "share", "h/b/f"]);
+        let matches = cmd.try_get_matches_from(vec!["test", "share", "h/bucket/share_file"]);
         assert!(matches.is_ok());
 
         let matches = matches.unwrap();
@@ -613,7 +637,7 @@ hosts:
         .unwrap();
         match action {
             Action::ShareObject { key, expire } => {
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "share_file");
                 assert_eq!(expire, 43200);
             }
             _ => panic!("wrong action"),
@@ -621,36 +645,34 @@ hosts:
     }
 
     #[test]
-    fn test_dispatch_default_put() {
+    fn test_dispatch_default_put_1() {
         let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
+
+        let filepath = config_path.as_os_str().to_str().unwrap();
+
         let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
-            config_path.as_os_str().to_str().unwrap(),
-            "path/to/file",
-            "h/b/f",
+            filepath,
+            filepath,
+            "s3/bucket/key",
         ]);
+
         assert!(matches.is_ok());
+
         let matches = matches.unwrap();
 
         let mut globals = GlobalArgs::new();
 
-        let s3_location = host_bucket_key(&matches);
+        let s3_location = host_bucket_key(&matches).unwrap();
 
-        assert!(s3_location.is_ok());
+        // assert!(s3_location.is_ok());
 
-        let action = dispatch(
-            s3_location.unwrap(),
-            0,
-            PathBuf::new(),
-            &matches,
-            &mut globals,
-        )
-        .unwrap();
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -668,9 +690,9 @@ hosts:
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
-                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(file, Some(filepath.to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "key");
                 assert!(!pipe);
                 assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
@@ -691,33 +713,33 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+
         let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
-            config_path.as_os_str().to_str().unwrap(),
-            "path/to/file",
-            "h/b/f",
+            filepath,
+            filepath,
+            "s3/bucket/key",
             "--acl",
             "public-read",
             "--number",
             "32",
         ]);
+
         assert!(matches.is_ok());
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
 
-        let s3_location = host_bucket_key(&matches);
-        assert!(s3_location.is_ok());
+        let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(
-            s3_location.unwrap(),
-            0,
-            PathBuf::new(),
-            &matches,
-            &mut globals,
-        )
-        .unwrap();
+        let config = Config::new(config_path.clone()).unwrap();
+
+        let host = get_host(&config, &config_path, &s3_location);
+        assert!(host.is_ok());
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -735,9 +757,9 @@ hosts:
                 assert_eq!(acl, Some("public-read".to_string()));
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
-                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(file, Some(filepath.to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "key");
                 assert!(!pipe);
                 assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
@@ -755,13 +777,15 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+
         let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
-            config_path.as_os_str().to_str().unwrap(),
-            "path/to/file",
-            "h/b/f",
+            filepath,
+            filepath,
+            "s3/bucket/f",
             "--meta",
             "key1=val1;key2=val2",
             "--checksum",
@@ -770,21 +794,18 @@ hosts:
             "4",
         ]);
         assert!(matches.is_ok());
+
         let matches = matches.unwrap();
         let mut globals = GlobalArgs::new();
 
-        let s3_location = host_bucket_key(&matches);
+        let s3_location = host_bucket_key(&matches).unwrap();
 
-        assert!(s3_location.is_ok());
+        let config = Config::new(config_path.clone()).unwrap();
 
-        let action = dispatch(
-            s3_location.unwrap(),
-            0,
-            PathBuf::new(),
-            &matches,
-            &mut globals,
-        )
-        .unwrap();
+        let host = get_host(&config, &config_path, &s3_location);
+        assert!(host.is_ok());
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -813,9 +834,9 @@ hosts:
                     )
                 );
                 assert_eq!(buf_size, 0);
-                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(file, Some(filepath.to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "f");
                 assert!(!pipe);
                 assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
@@ -833,13 +854,15 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+
         let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
-            config_path.as_os_str().to_str().unwrap(),
-            "path/to/file",
-            "h/b/f",
+            filepath,
+            filepath,
+            "s3/bucket/f",
             "-x",
         ]);
         assert!(matches.is_ok());
@@ -847,17 +870,14 @@ hosts:
 
         let mut globals = GlobalArgs::new();
 
-        let s3_location = host_bucket_key(&matches);
+        let s3_location = host_bucket_key(&matches).unwrap();
 
-        assert!(s3_location.is_ok());
-        let action = dispatch(
-            s3_location.unwrap(),
-            0,
-            PathBuf::new(),
-            &matches,
-            &mut globals,
-        )
-        .unwrap();
+        let config = Config::new(config_path.clone()).unwrap();
+
+        let host = get_host(&config, &config_path, &s3_location);
+        assert!(host.is_ok());
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -875,9 +895,9 @@ hosts:
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
-                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(file, Some(filepath.to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "f");
                 assert!(!pipe);
                 assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());
@@ -898,13 +918,15 @@ hosts:
         let config_path = tmp_dir.path().join("config.yaml");
         let mut config = File::create(&config_path).unwrap();
         config.write_all(CONF.as_bytes()).unwrap();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+
         let cmd = new(&tmp_dir.keep());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
-            config_path.as_os_str().to_str().unwrap(),
-            "path/to/file",
-            "h/b/f",
+            filepath,
+            filepath,
+            "s3/bucket/f",
             "--compress",
         ]);
         assert!(matches.is_ok());
@@ -940,9 +962,9 @@ hosts:
                 assert_eq!(acl, None);
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
-                assert_eq!(file, Some("path/to/file".to_string()));
+                assert_eq!(file, Some(filepath.to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
-                assert_eq!(key, "h/b/f");
+                assert_eq!(key, "f");
                 assert!(!pipe);
                 assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());

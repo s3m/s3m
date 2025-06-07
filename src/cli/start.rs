@@ -169,7 +169,11 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     Ok((s3, action, global_args))
 }
 
-fn get_host<'a>(config: &'a Config, config_path: &Path, hbk: &'a S3Location) -> Result<&'a Host> {
+pub fn get_host<'a>(
+    config: &'a Config,
+    config_path: &Path,
+    hbk: &'a S3Location,
+) -> Result<&'a Host> {
     if hbk.host.is_empty() {
         return Err(anyhow!(
             "No \"host\" found, check config file {}/config.yml, For more information try {}",
@@ -256,6 +260,8 @@ hosts:
         let hbp = host_bucket_key(&matches);
         assert!(hbp.is_err());
         let error = hbp.unwrap_err();
-        assert!(error.to_string().contains("No \"bucket\" found"));
+        assert!(error
+            .to_string()
+            .contains("Bucket name missing, expected format"));
     }
 }
