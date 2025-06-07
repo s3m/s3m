@@ -62,7 +62,7 @@ impl S3 {
 
         hash.push_str(self.credentials.aws_access_key_id());
         hash.push_str(self.credentials.aws_secret_access_key());
-        hash.push_str(self.region.endpoint());
+        hash.push_str(&self.region.endpoint());
 
         if let Some(bucket) = &self.bucket {
             hash.push_str(bucket);

@@ -59,7 +59,7 @@ impl<'a> Signature<'a> {
         let current_date = self.datetime.format("%Y%m%d").to_string();
         let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ").to_string();
 
-        self.add_header("host", self.auth.region.endpoint());
+        self.add_header("host", &self.auth.region.endpoint());
         self.add_header("x-amz-date", &current_datetime);
         self.add_header("User-Agent", APP_USER_AGENT);
         self.add_header("x-amz-content-sha256", &write_hex_bytes(digest_sha256));
@@ -180,7 +180,7 @@ impl<'a> Signature<'a> {
             url.query_pairs_mut().append_pair(pair.0, pair.1);
         }
 
-        self.add_header("host", self.auth.region.endpoint());
+        self.add_header("host", &self.auth.region.endpoint());
 
         let signed_headers = signed_headers(&self.headers);
 

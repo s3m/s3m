@@ -195,11 +195,8 @@ pub fn get_host<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::commands::new;
-    use crate::s3::Region;
-    use std::fs::File;
-    use std::io::Write;
-    use std::str::FromStr;
+    use crate::{cli::commands::new, s3::Region};
+    use std::{fs::File, io::Write, str::FromStr};
     use tempfile::TempDir;
 
     const CONF: &str = r#"---

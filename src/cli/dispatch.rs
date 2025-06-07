@@ -408,6 +408,50 @@ hosts:
     }
 
     #[test]
+    fn test_dispatch_get_2() {
+        let cmd = Command::new("test").subcommand(cmd_get::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "get", "h/bucket/f", "tmp/file"]);
+        assert!(matches.is_ok());
+        let matches = matches.unwrap();
+
+        let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
+        let action = dispatch(
+            s3_location.unwrap(),
+            0,
+            PathBuf::new(),
+            &matches,
+            &mut globals,
+        )
+        .unwrap();
+        match action {
+            Action::GetObject {
+                key,
+                metadata,
+                dest,
+                quiet,
+                force,
+                versions,
+                version,
+            } => {
+                assert_eq!(key, "f");
+                assert!(!metadata);
+                assert_eq!(dest, Some("tmp/file".to_string()));
+                assert!(!quiet);
+                assert!(!force);
+                assert!(!versions);
+                assert_eq!(version, None);
+                assert!(!globals.compress);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
     fn test_dispatch_get_quiet_force() {
         let cmd = Command::new("test").subcommand(cmd_get::command());
         let matches = cmd.try_get_matches_from(vec!["test", "get", "h/bucket/key", "-q", "-f"]);
@@ -693,6 +737,90 @@ hosts:
                 assert_eq!(file, Some(filepath.to_string()));
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "key");
+                assert!(!pipe);
+                assert!(!quiet);
+                assert_eq!(tmp_dir, std::env::temp_dir());
+                assert_eq!(checksum_algorithm, None);
+                assert_eq!(
+                    number,
+                    cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
+                );
+                assert!(!globals.compress);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_default_put_2() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+
+        let filepath = config_path.as_os_str().to_str().unwrap();
+
+        let cmd = new(&tmp_dir.keep());
+        let matches =
+            cmd.try_get_matches_from(vec!["test", "--config", filepath, "foo", "s3/bucket/key"]);
+
+        assert!(matches.is_ok());
+
+        let matches = matches.unwrap();
+
+        let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals);
+        assert!(action.is_err());
+
+        let err = action.unwrap_err().to_string();
+        assert!(err.contains("Source file does not exist"));
+    }
+
+    #[test]
+    fn test_dispatch_default_put_3() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+
+        let filepath = config_path.as_os_str().to_str().unwrap();
+
+        let cmd = new(&tmp_dir.keep());
+        let matches =
+            cmd.try_get_matches_from(vec!["test", "--config", filepath, filepath, "s3/bucket/"]);
+
+        assert!(matches.is_ok());
+
+        let matches = matches.unwrap();
+
+        let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        match action {
+            Action::PutObject {
+                acl,
+                meta,
+                buf_size,
+                file,
+                s3m_dir,
+                key,
+                pipe,
+                quiet,
+                tmp_dir,
+                checksum_algorithm,
+                number,
+            } => {
+                assert_eq!(acl, None);
+                assert_eq!(meta, None);
+                assert_eq!(buf_size, 0);
+                assert_eq!(file, Some(filepath.to_string()));
+                assert_eq!(s3m_dir, PathBuf::new());
+                assert_eq!(key, filepath.to_string());
                 assert!(!pipe);
                 assert!(!quiet);
                 assert_eq!(tmp_dir, std::env::temp_dir());

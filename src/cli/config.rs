@@ -71,6 +71,7 @@ impl Host {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::s3::Region;
     use secrecy::ExposeSecret;
     use std::io::Write;
     use std::str::FromStr;
@@ -189,11 +190,11 @@ hosts:
         let r = h.get_region();
         assert!(r.is_ok());
         let r = r.unwrap();
-        assert_eq!(r, Region::EuCentral2);
+        assert_eq!(r, Region::aws("eu-central-2"));
     }
 
     #[test]
-    fn test_config_get_invalid_aws_region() {
+    fn test_config_get_custom_aws_region() {
         let mut tmp_file = NamedTempFile::new().unwrap();
         tmp_file.write_all(CONF.as_bytes()).unwrap();
         let c = Config::new(tmp_file.into_temp_path().to_path_buf());
@@ -202,8 +203,14 @@ hosts:
         let h = c.get_host("s3");
         assert!(h.is_ok());
         let h = h.unwrap();
-        let r = h.get_region();
-        assert!(r.is_err());
+        let r = h.get_region().unwrap();
+        assert_eq!(
+            r,
+            Region::Custom {
+                name: "xx-region-y".to_string(),
+                endpoint: "xx-region-y.foo".to_string(),
+            },
+        );
     }
 
     #[test]
@@ -229,7 +236,7 @@ hosts:
     }
 
     #[test]
-    fn test_config_get_x_region() {
+    fn test_config_get_bad_region() {
         let mut tmp_file = NamedTempFile::new().unwrap();
         tmp_file.write_all(CONF_X_REGION.as_bytes()).unwrap();
         let c = Config::new(tmp_file.into_temp_path().to_path_buf());
@@ -239,15 +246,7 @@ hosts:
         assert!(h.is_ok());
         let h = h.unwrap();
         let r = h.get_region();
-        assert!(r.is_ok());
-        let r = r.unwrap();
-        assert_eq!(
-            r,
-            Region::Custom {
-                name: String::from("x"),
-                endpoint: "s3.x.amazonaws.com".to_string()
-            }
-        );
+        assert!(r.is_err());
     }
 
     #[test]
@@ -263,7 +262,7 @@ hosts:
         let r = h.get_region();
         assert!(r.is_ok());
         let r = r.unwrap();
-        assert_eq!(r, Region::UsEast2);
+        assert_eq!(r, Region::aws("us-east-2"));
         assert_eq!(h.compress, Some(true));
     }
 
@@ -280,7 +279,7 @@ hosts:
         let r = h.get_region();
         assert!(r.is_ok());
         let r = r.unwrap();
-        assert_eq!(r, Region::UsEast2);
+        assert_eq!(r, Region::aws("us-east-2"));
         assert_eq!(h.compress, Some(true));
         assert_eq!(h.enc_key, Some(String::from("secret")));
     }
@@ -427,7 +426,11 @@ hosts:
                 "us-gov-west-1",
                 "s3.us-gov-west-1.amazonaws.com",
             ),
-            ("new region", "new-region", "s3.new-region.amazonaws.com"),
+            (
+                "new region",
+                "new-region-1",
+                "s3.new-region-1.amazonaws.com",
+            ),
         ];
 
         let mut yaml_content = "---\nhosts:\n".to_string();
@@ -441,7 +444,7 @@ hosts:
         let mut tmp_file = NamedTempFile::new().unwrap();
         tmp_file.write_all(yaml_content.as_bytes()).unwrap();
         let c = Config::new(tmp_file.into_temp_path().to_path_buf());
-        //        assert!(c.is_ok());
+        assert!(c.is_ok());
         let c = c.unwrap();
 
         for (name, region, endpoint) in &aws_s3_regions {
@@ -450,7 +453,11 @@ hosts:
             assert!(h.is_ok());
             let h = h.unwrap();
             let r = h.get_region();
-            assert!(r.is_ok());
+            assert!(
+                r.is_ok(),
+                "Expected region to parse for '{}'",
+                formatted_name
+            );
             let r = r.unwrap();
             assert_eq!(r, Region::from_str(region).unwrap());
             assert_eq!(r.endpoint(), endpoint.to_string())
