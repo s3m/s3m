@@ -1,6 +1,8 @@
 use crate::cli::{
     actions::Action,
-    commands, dispatch,
+    commands,
+    decrypt::decrypt,
+    dispatch,
     globals::GlobalArgs,
     s3_location::{host_bucket_key, S3Location},
     Config, Host,
@@ -55,6 +57,18 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     if matches.get_one::<bool>("clean").copied().unwrap_or(false) {
         let streams = config_path.join("streams");
         fs::remove_dir_all(streams).unwrap_or(());
+        exit(0);
+    }
+
+    if let Some([enc_path, enc_key]) = matches
+        .get_many::<String>("decrypt")
+        .map(|vals| vals.collect::<Vec<_>>())
+        .as_deref()
+    {
+        let enc_path = PathBuf::from(enc_path);
+
+        decrypt(&enc_path, enc_key)?;
+
         exit(0);
     }
 

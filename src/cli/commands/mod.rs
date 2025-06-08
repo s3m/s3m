@@ -159,7 +159,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("arguments")
             .help("/path/to/file <s3 provider>/<bucket>/<file>")
-            .required_unless_present("clean")
+            .required_unless_present_any(["clean", "decrypt"])
             .num_args(1..=2)
         )
         .arg(
@@ -222,6 +222,14 @@ pub fn new(config_path: &Path) -> Command {
             .short('x')
             .num_args(0)
             .conflicts_with("checksum")
+        )
+        .arg(
+            Arg::new("decrypt")
+            .help("Decrypt encrypted file with s3m, need to provide the key")
+            .long("decrypt")
+            .short('d')
+            .num_args(2)
+            .value_names(["file.enc", "key"])
         )
         .subcommand(cmd_acl::command())
         .subcommand(cmd_get::command())

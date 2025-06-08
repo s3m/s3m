@@ -9,5 +9,6 @@ mod start;
 pub use self::start::start;
 
 mod commands;
+mod decrypt;
 mod dispatch;
 mod s3_location;
