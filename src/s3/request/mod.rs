@@ -185,6 +185,8 @@ pub async fn upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockito::Server;
+    use reqwest::StatusCode;
 
     #[test]
     fn test_calculate_duration_per_chunk() {
@@ -194,5 +196,53 @@ mod tests {
         let duration = calculate_duration_per_chunk(bandwidth_kb_per_sec, chunk_size);
 
         assert_eq!(duration.as_secs_f64(), 0.125);
+    }
+
+    #[tokio::test]
+    async fn test_upload_get() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/test")
+            .with_status(200)
+            .match_header("User-Agent", APP_USER_AGENT)
+            .match_body("test data")
+            .create_async()
+            .await;
+
+        let headers = BTreeMap::new();
+        let body = Bytes::from("test data");
+
+        let url = format!("{}/test", server.url()).parse::<Url>().unwrap();
+
+        let response = upload(url, reqwest::Method::GET, &headers, body).await;
+
+        assert!(response.is_ok());
+        let response = response.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_upload_post() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("POST", "/test")
+            .with_status(200)
+            .match_header("User-Agent", APP_USER_AGENT)
+            .match_body("test data")
+            .create_async()
+            .await;
+
+        let headers = BTreeMap::new();
+        let body = Bytes::from("test data");
+
+        let url = format!("{}/test", server.url()).parse::<Url>().unwrap();
+
+        let response = upload(url, reqwest::Method::POST, &headers, body).await;
+
+        println!("Response: {:?}", response);
+
+        assert!(response.is_ok());
+        let response = response.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
