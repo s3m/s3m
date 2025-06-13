@@ -321,3 +321,107 @@ pub struct DeleteMarker {
     pub last_modified: String,
     pub owner: Owner,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_yaml;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct TestStruct {
+        #[serde(deserialize_with = "bool_deserializer")]
+        value: bool,
+    }
+
+    #[test]
+    fn test_bool_deserializer_true() {
+        let yaml = "value: \"true\"";
+        let result: TestStruct = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(result, TestStruct { value: true });
+    }
+
+    #[test]
+    fn test_bool_deserializer_false() {
+        let yaml = "value: \"false\"";
+        let result: TestStruct = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(result, TestStruct { value: false });
+    }
+
+    #[test]
+    fn test_bool_deserializer_invalid() {
+        let yaml = "value: \"yes\"";
+        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("got yes, but expected `true` or `false`"),
+                "unexpected error message: {}",
+                msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_bucket_result_deserialization() {
+        let yaml = r#"
+Name: test-bucket
+Prefix: test/
+Marker: null
+Delimiter: "/"
+MaxKeys: 1000
+EncodingType: null
+IsTruncated: "false"
+Contents: []
+CommonPrefixes: []
+NextContinuationToken: null
+"#;
+        let parsed: ListBucketResult = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.name, "test-bucket");
+        assert!(!parsed.is_truncated);
+        assert_eq!(parsed.max_keys, 1000);
+        assert_eq!(parsed.contents.len(), 0);
+    }
+
+    #[test]
+    fn test_list_multipart_uploads_result_deserialization() {
+        let yaml = r#"
+Bucket: example-bucket
+KeyMarker: null
+UploadIdMarker: null
+NextKeyMarker: null
+Prefix: null
+Delimiter: "/"
+NextUploadIdMarker: null
+MaxUploads: 2
+IsTruncated: "true"
+Upload: []
+CommonPrefixes: []
+EncodingType: null
+"#;
+        let parsed: ListMultipartUploadsResult = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.bucket, "example-bucket");
+        assert!(parsed.is_truncated);
+        assert_eq!(parsed.max_uploads, 2);
+    }
+
+    #[test]
+    fn test_list_versions_result_deserialization() {
+        let yaml = r#"
+Name: versioned-bucket
+Prefix: null
+KeyMarker: start
+VersionIdMarker: null
+MaxKeys: 100
+IsTruncated: false
+Version: []
+DeleteMarker: []
+"#;
+        let parsed: ListVersionsResult = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.name, "versioned-bucket");
+        assert_eq!(parsed.key_marker, "start");
+        assert!(!parsed.is_truncated);
+        assert_eq!(parsed.versions.len(), 0);
+        assert_eq!(parsed.delete_markers.len(), 0);
+    }
+}
