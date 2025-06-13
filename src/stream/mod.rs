@@ -574,4 +574,59 @@ mod tests {
         assert_eq!(stream.part_number, 1);
         assert_eq!(stream.count, 0);
     }
+
+    #[test]
+    fn test_compress_chunk() {
+        let data = BytesMut::from("Hello, world!");
+        let compressed = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(compress_chunk(data))
+            .unwrap();
+
+        assert!(
+            !compressed.is_empty(),
+            "Compressed data should not be empty"
+        );
+
+        assert_ne!(
+            compressed, b"Hello, world!",
+            "Compressed data should differ from original"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_maybe_upload_part_1_no_upload() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let tmp_dir = PathBuf::new();
+        let key = "test_key";
+        let upload_id = "test_upload_id";
+        let globals = GlobalArgs {
+            throttle: None,
+            retries: 1,
+            compress: false,
+            encrypt: false,
+            enc_key: None,
+        };
+
+        let stream =
+            create_initial_stream(upload_id, &tmp_dir, key, &s3, None, &globals, None).unwrap();
+
+        let buffer_size = 1024; // 1KB for testing
+        let mut stream = stream;
+        let data = vec![0; 1023];
+
+        write_to_stream(&mut stream, &data).unwrap();
+        let result = maybe_upload_part(&mut stream, buffer_size).await;
+
+        println!("Result: {:?}", result);
+    }
 }

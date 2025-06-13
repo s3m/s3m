@@ -108,3 +108,62 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_bad_enc_key() {
+        let enc_file = PathBuf::from("testdata/encrypted_file.enc");
+        let enc_key = "abc";
+
+        let result = decrypt(&enc_file, enc_key);
+        assert!(result.is_err(), "Decryption should fail with short key");
+    }
+
+    #[test]
+    fn test_nonexistent_file() {
+        let enc_file = PathBuf::from("testdata/nonexistent_file.enc");
+        let enc_key = "01234567890123456789012345678901";
+
+        let result = decrypt(&enc_file, enc_key);
+        assert!(
+            result.is_err(),
+            "Decryption should fail with nonexistent file"
+        );
+    }
+
+    #[test]
+    fn test_decrypt() {
+        let enc_file = PathBuf::from("testdata/encrypted_file.enc");
+        let enc_key = "01234567890123456789012345678901";
+
+        // Ensure the encrypted file exists
+        assert!(enc_file.exists(), "Encrypted file does not exist");
+
+        // Call the decrypt function
+        let result = decrypt(&enc_file, enc_key);
+        assert!(result.is_ok(), "Decryption failed: {:?}", result);
+
+        // Check if the decrypted file was created
+        let decrypted_file = enc_file.with_extension("decrypted");
+        assert!(decrypted_file.exists(), "Decrypted file was not created");
+
+        // check content of decrypted file
+        let mut decrypted_content = String::new();
+        File::open(&decrypted_file)
+            .expect("Failed to open decrypted file")
+            .read_to_string(&mut decrypted_content)
+            .expect("Failed to read decrypted file");
+        assert!(!decrypted_content.is_empty(), "Decrypted file is empty");
+        assert_eq!(
+            decrypted_content,
+            "The quick brown fox jumps over the lazy dog.\n"
+        );
+
+        // Clean up test files
+        fs::remove_file(decrypted_file).unwrap();
+    }
+}
