@@ -14,7 +14,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
-base64ct = { version = "1.7.3", features = ["alloc"] }
+base64ct = { version = "1.8", features = ["alloc"] }
 bincode = "2.0"
 blake3 = "1"
 bytes = "1"
@@ -33,7 +33,7 @@ http = "1"
 indicatif = "0.17"
 log = "0.4"
 md5 = "0.7"
-num_cpus = "1.16"
+num_cpus = "1.17"
 openssl = { version = "0.10", optional = true, features = ["vendored"] }
 percent-encoding = "2.3"
 quick-xml = { version = "0.37", features = ["serialize"] }
