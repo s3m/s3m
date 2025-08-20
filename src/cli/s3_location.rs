@@ -37,7 +37,7 @@ impl S3Location {
             _ => {
                 if !allow_missing_bucket {
                     return Err(anyhow!(
-                        "Bucket name missing, expected format: <s3 provider>/<bucket name>/key"
+                        "Bucket name missing, expected format: <s3 provider>/<bucket name>"
                     ));
                 } else {
                     None

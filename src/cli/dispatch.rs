@@ -112,18 +112,13 @@ pub fn dispatch(
         }
 
         // CreateBucket
-        Some("cb") => match hbk.bucket {
-            Some(_) => {
-                let sub_m = sub_m("cb")?;
-
-                let acl = sub_m
-                    .get_one("acl")
-                    .map_or_else(|| String::from("private"), |s: &String| s.to_string());
-
-                Ok(Action::CreateBucket { acl })
-            }
-            None => Err(anyhow!("Bucket name missing, <s3 provider>/<bucket>")),
-        },
+        Some("cb") => {
+            let sub_m = sub_m("cb")?;
+            let acl = sub_m
+                .get_one("acl")
+                .map_or_else(|| String::from("private"), |s: &String| s.to_string());
+            Ok(Action::CreateBucket { acl })
+        }
 
         // DeleteObject or DeleteBucket
         Some("rm") => {
