@@ -11,7 +11,11 @@ pub struct S3Location {
 
 impl S3Location {
     /// Parse an S3 location string in the format "host/bucket/key"
-    fn parse(location: &str, allow_missing_bucket: bool) -> Result<Self> {
+    fn parse(
+        location: &str,
+        allow_missing_bucket: bool,
+        validate_bucket_name: bool,
+    ) -> Result<Self> {
         let parts: Vec<&str> = location.splitn(3, '/').collect();
 
         log::info!("Parts: {:?}", parts);
@@ -24,7 +28,7 @@ impl S3Location {
 
         let bucket = match parts.get(1) {
             Some(b) if !b.is_empty() => {
-                Self::validate_bucket_name(b)?;
+                Self::validate_bucket_name(b, validate_bucket_name)?;
                 Some(b.to_string())
             }
 
@@ -65,12 +69,17 @@ impl S3Location {
     /// Validate S3 bucket name according to AWS specifications
     /// - Length: 3-63 characters
     /// - Pattern: [a-z0-9][\.\-a-z0-9]{1,61}[a-z0-9]
-    fn validate_bucket_name(bucket: &str) -> Result<()> {
+    fn validate_bucket_name(bucket: &str, validate_bucket_name: bool) -> Result<()> {
         if bucket.len() < 3 || bucket.len() > 63 {
             return Err(anyhow!(
                 "Invalid bucket name '{}'. Must be 3-63 characters long",
                 bucket
             ));
+        }
+
+        if !validate_bucket_name {
+            log::debug!("Skipping bucket name validation for '{}'", bucket);
+            return Ok(());
         }
 
         let bucket_regex =
@@ -146,7 +155,10 @@ fn parse_subcommand_args(matches: &ArgMatches, subcommand: &str) -> Result<S3Loc
 
     log::info!("Allow missing bucket: {}", allow_missing_bucket);
 
-    S3Location::parse(s3_location, allow_missing_bucket)
+    // Only validate bucket names when creating buckets
+    let validate_bucket = subcommand == "cb";
+
+    S3Location::parse(s3_location, allow_missing_bucket, validate_bucket)
 }
 
 fn parse_put_object_args(matches: &ArgMatches) -> Result<S3Location> {
@@ -167,7 +179,7 @@ fn parse_put_object_args(matches: &ArgMatches) -> Result<S3Location> {
 
     log::info!("Parsed S3 location for put object: {}", s3_location);
 
-    S3Location::parse(s3_location, false)
+    S3Location::parse(s3_location, false, false)
 }
 
 fn get_subcommand_arguments<'a>(
@@ -200,7 +212,7 @@ mod tests {
     #[test]
     fn test_s3_location_parse_valid() {
         let s3_location =
-            S3Location::parse("s3.amazonaws.com/my-bucket/path/to/file.txt", false).unwrap();
+            S3Location::parse("s3.amazonaws.com/my-bucket/path/to/file.txt", false, true).unwrap();
         assert_eq!(s3_location.host, "s3.amazonaws.com");
         assert_eq!(s3_location.bucket, Some("my-bucket".to_string()));
         assert_eq!(s3_location.key, Some("path/to/file.txt".to_string()));
@@ -208,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_s3_location_parse_no_key() {
-        let s3_location = S3Location::parse("s3.amazonaws.com/my-bucket", false).unwrap();
+        let s3_location = S3Location::parse("s3.amazonaws.com/my-bucket", false, true).unwrap();
         assert_eq!(s3_location.host, "s3.amazonaws.com");
         assert_eq!(s3_location.bucket, Some("my-bucket".to_string()));
         assert_eq!(s3_location.key, None);
@@ -216,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_s3_location_parse_ls_no_bucket() {
-        let s3_location = S3Location::parse("s3.amazonaws.com", true).unwrap();
+        let s3_location = S3Location::parse("s3.amazonaws.com", true, true).unwrap();
         assert_eq!(s3_location.host, "s3.amazonaws.com");
         assert_eq!(s3_location.bucket, None);
         assert_eq!(s3_location.key, None);
@@ -224,45 +236,45 @@ mod tests {
 
     #[test]
     fn test_s3_location_parse_invalid_leading_slash() {
-        let result = S3Location::parse("s3.amazonaws.com/my-bucket//file.txt", false);
+        let result = S3Location::parse("s3.amazonaws.com/my-bucket//file.txt", false, true);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("leading slashes"));
     }
 
     #[test]
     fn test_s3_location_parse_missing_bucket() {
-        let result = S3Location::parse("s3.amazonaws.com", false);
+        let result = S3Location::parse("s3.amazonaws.com", false, true);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("bucket"));
     }
 
     #[test]
     fn test_validate_bucket_name_valid() {
-        assert!(S3Location::validate_bucket_name("my-bucket").is_ok());
-        assert!(S3Location::validate_bucket_name("bucket123").is_ok());
-        assert!(S3Location::validate_bucket_name("my.bucket.name").is_ok());
-        assert!(S3Location::validate_bucket_name("a1b").is_ok()); // minimum length
-        assert!(S3Location::validate_bucket_name("my..bucket").is_ok()); // consecutive dots allowed per AWS spec
+        assert!(S3Location::validate_bucket_name("my-bucket", true).is_ok());
+        assert!(S3Location::validate_bucket_name("bucket123", true).is_ok());
+        assert!(S3Location::validate_bucket_name("my.bucket.name", true).is_ok());
+        assert!(S3Location::validate_bucket_name("a1b", true).is_ok()); // minimum length
+        assert!(S3Location::validate_bucket_name("my..bucket", true).is_ok()); // consecutive dots allowed per AWS spec
     }
 
     #[test]
     fn test_validate_bucket_name_invalid() {
         // Too short
-        assert!(S3Location::validate_bucket_name("ab").is_err());
+        assert!(S3Location::validate_bucket_name("ab", true).is_err());
 
         // Too long
         let long_name = "a".repeat(64);
-        assert!(S3Location::validate_bucket_name(&long_name).is_err());
+        assert!(S3Location::validate_bucket_name(&long_name, true).is_err());
 
         // Invalid characters
-        assert!(S3Location::validate_bucket_name("My-Bucket").is_err()); // uppercase
-        assert!(S3Location::validate_bucket_name("bucket_name").is_err()); // underscore
+        assert!(S3Location::validate_bucket_name("My-Bucket", true).is_err()); // uppercase
+        assert!(S3Location::validate_bucket_name("bucket_name", true).is_err()); // underscore
 
         // Invalid start/end (must be alphanumeric)
-        assert!(S3Location::validate_bucket_name("-bucket").is_err()); // starts with hyphen
-        assert!(S3Location::validate_bucket_name("bucket-").is_err()); // ends with hyphen
-        assert!(S3Location::validate_bucket_name(".bucket").is_err()); // starts with dot
-        assert!(S3Location::validate_bucket_name("bucket.").is_err()); // ends with dot
+        assert!(S3Location::validate_bucket_name("-bucket", true).is_err()); // starts with hyphen
+        assert!(S3Location::validate_bucket_name("bucket-", true).is_err()); // ends with hyphen
+        assert!(S3Location::validate_bucket_name(".bucket", true).is_err()); // starts with dot
+        assert!(S3Location::validate_bucket_name("bucket.", true).is_err()); // ends with dot
     }
 
     #[test]
@@ -287,14 +299,20 @@ mod tests {
     #[test]
     fn test_bucket_validation_in_parse() {
         // Valid bucket should work
-        assert!(S3Location::parse("s3.com/valid-bucket/key", false).is_ok());
+        assert!(S3Location::parse("s3.com/valid-bucket/key", false, true).is_ok());
 
         // Invalid bucket should fail
-        let result = S3Location::parse("s3.com/INVALID-BUCKET/key", false);
+        let result = S3Location::parse("s3.com/INVALID-BUCKET/key", false, true);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
             .to_string()
             .contains("Invalid bucket name"));
+    }
+
+    #[test]
+    fn test_bucket_no_validate_bucket_name() {
+        // Invalid bucket should work if validation is skipped
+        assert!(S3Location::parse("s3.com/INVALID-BUCKET/key", false, false).is_ok());
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.13.1"
+version = "0.13.2"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -30,13 +30,13 @@ dirs = "6"
 env_logger = "0.11"
 futures = "0.3"
 http = "1"
-indicatif = "0.17"
+indicatif = "0.18"
 log = "0.4"
-md5 = "0.7"
+md5 = "0.8"
 num_cpus = "1.17"
 openssl = { version = "0.10", optional = true, features = ["vendored"] }
 percent-encoding = "2.3"
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { version = "0.38", features = ["serialize"] }
 rand = "0.9.1"
 rand_core = { version = "0.9.3", features = ["os_rng"] }
 regex = "1.11"
@@ -60,7 +60,7 @@ assets = [
 ]
 
 [dev-dependencies]
-criterion = { version = "0.6", features = ["async_futures"] }
+criterion = { version = "0.7", features = ["async_futures"] }
 mockito = "1.7.0"
 
 [[bench]]

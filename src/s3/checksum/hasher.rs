@@ -73,7 +73,7 @@ impl ChecksumHasher for Md5Hasher {
     }
 
     fn finalize(self: Box<Self>) -> Bytes {
-        Bytes::from(self.0.compute().0.to_vec())
+        Bytes::from(self.0.finalize().0.to_vec())
     }
 }
 

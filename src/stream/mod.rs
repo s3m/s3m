@@ -95,7 +95,7 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     let mut etag = String::new();
 
     let digest_sha = part.sha.clone().finish();
-    let digest_md5 = part.md5.clone().compute();
+    let digest_md5 = part.md5.clone().finalize();
 
     // Create globals only to pass the throttle
     let globals = GlobalArgs {
@@ -389,7 +389,7 @@ async fn upload_final_part(
     globals: &GlobalArgs,
 ) -> Result<String> {
     let digest_sha = stream.sha.clone().finish();
-    let digest_md5 = stream.md5.clone().compute();
+    let digest_md5 = stream.md5.clone().finalize();
 
     let action = actions::StreamPart::new(
         key,

@@ -1,3 +1,6 @@
+## 0.13.2
+* Only verify the bucket name when creating a bucket, option `cb`
+
 ## 0.13.1
 * Fixed get_key to not lower_case the key when using compression or encryption
 * Refactored `s3::Region`
