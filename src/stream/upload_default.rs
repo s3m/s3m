@@ -1,9 +1,9 @@
 use crate::{
     cli::globals::GlobalArgs,
-    s3::{actions, checksum::Checksum, S3},
+    s3::{S3, actions, checksum::Checksum},
     stream::{db::Db, setup_progress},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::{collections::BTreeMap, fmt::Write, path::Path};
 
 /// # Errors

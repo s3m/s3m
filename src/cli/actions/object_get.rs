@@ -1,17 +1,14 @@
 use crate::{
     cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
-    s3::{actions, tools::throttle_download, S3},
+    s3::{S3, actions, tools::throttle_download},
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bytes::{Buf, BytesMut};
 use bytesize::ByteSize;
-use chacha20poly1305::{
-    aead::{generic_array::GenericArray, stream::DecryptorBE32, KeyInit},
-    ChaCha20Poly1305,
-};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::stream::DecryptorBE32};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use http::{header::CONTENT_TYPE, HeaderMap};
+use http::{HeaderMap, header::CONTENT_TYPE};
 use secrecy::ExposeSecret;
 use std::{
     cmp::min,
@@ -110,9 +107,12 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                                 nonce_len
                             ));
                         }
-                        let nonce = GenericArray::from_slice(&buffer[1..8]);
+                        let nonce = &buffer[1..8];
 
-                        decryptor = Some(DecryptorBE32::from_aead(cipher.clone().unwrap(), nonce));
+                        decryptor = Some(DecryptorBE32::from_aead(
+                            cipher.clone().unwrap(),
+                            nonce.into(),
+                        ));
 
                         buffer.advance(8);
 

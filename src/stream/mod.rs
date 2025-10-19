@@ -11,17 +11,17 @@ pub mod upload_stdin_compressed_encrypted;
 
 use crate::{
     cli::{globals::GlobalArgs, progressbar::Bar},
-    s3::{actions, S3},
+    s3::{S3, actions},
 };
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use bytes::BytesMut;
 use bytesize::ByteSize;
 use chacha20poly1305::{
-    aead::{stream::EncryptorBE32, KeyInit},
     ChaCha20Poly1305,
+    aead::{KeyInit, stream::EncryptorBE32},
 };
-use crossbeam::channel::{unbounded, Sender};
-use rand::{rng, RngCore};
+use crossbeam::channel::{Sender, unbounded};
+use rand::{RngCore, rng};
 use ring::digest::{Context, SHA256};
 use secrecy::ExposeSecret;
 use std::{
@@ -31,7 +31,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use tempfile::{Builder, NamedTempFile};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tokio::{io::Error, task};
 use zstd::stream::encode_all;
 
@@ -411,7 +411,7 @@ async fn upload_final_part(
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region, S3};
-    use chacha20poly1305::aead::{generic_array::GenericArray, stream::EncryptorBE32};
+    use chacha20poly1305::aead::stream::EncryptorBE32;
     use secrecy::SecretString;
 
     #[test]
@@ -481,7 +481,7 @@ mod tests {
     fn test_encrypt_chunk() {
         let key = secrecy::SecretString::new("0123456789abcdef0123456789abcdef".into());
         let (cipher, nonce) = init_encryption(&key).unwrap();
-        let mut encryptor = EncryptorBE32::from_aead(cipher, GenericArray::from_slice(&nonce));
+        let mut encryptor = EncryptorBE32::from_aead(cipher, (&nonce).into());
 
         let data = b"Hello, world!";
         let encrypted = encrypt_chunk(&mut encryptor, data).unwrap();

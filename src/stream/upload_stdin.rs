@@ -2,12 +2,12 @@ use crate::{
     cli::globals::GlobalArgs,
     s3::S3,
     stream::{
-        complete_multipart_upload, compress_chunk, create_initial_stream, get_key,
-        initiate_multipart_upload, maybe_upload_part, setup_progress, upload_final_part,
-        write_to_stream, Stream, STDIN_BUFFER_SIZE,
+        STDIN_BUFFER_SIZE, Stream, complete_multipart_upload, compress_chunk,
+        create_initial_stream, get_key, initiate_multipart_upload, maybe_upload_part,
+        setup_progress, upload_final_part, write_to_stream,
     },
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::stream::TryStreamExt;
 use std::{collections::BTreeMap, path::PathBuf};
 use tokio::io::stdin;

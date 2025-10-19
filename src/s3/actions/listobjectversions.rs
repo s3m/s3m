@@ -1,9 +1,9 @@
 use crate::{
-    s3::actions::{response_error, Action},
+    s3::actions::{Action, response_error},
     s3::responses::ListVersionsResult,
-    s3::{request, tools, S3},
+    s3::{S3, request, tools},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use quick_xml::de::from_str;
 use reqwest::Method;
 use std::collections::BTreeMap;
@@ -103,9 +103,11 @@ mod tests {
             url.as_str()
         );
 
-        assert!(headers
-            .get("authorization")
-            .unwrap()
-            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
+        assert!(
+            headers
+                .get("authorization")
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE")
+        );
     }
 }

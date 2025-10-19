@@ -2,13 +2,13 @@ use crate::{
     cli::globals::GlobalArgs,
     s3::S3,
     stream::{
-        complete_multipart_upload, create_initial_stream, create_nonce_header, encrypt_chunk,
-        get_key, init_encryption, initiate_multipart_upload, maybe_upload_part, setup_progress,
-        upload_final_part, write_to_stream, Stream, STDIN_BUFFER_SIZE,
+        STDIN_BUFFER_SIZE, Stream, complete_multipart_upload, create_initial_stream,
+        create_nonce_header, encrypt_chunk, get_key, init_encryption, initiate_multipart_upload,
+        maybe_upload_part, setup_progress, upload_final_part, write_to_stream,
     },
 };
-use anyhow::{anyhow, Result};
-use chacha20poly1305::aead::{generic_array::GenericArray, stream::EncryptorBE32};
+use anyhow::{Result, anyhow};
+use chacha20poly1305::aead::stream::EncryptorBE32;
 use futures::stream::TryStreamExt;
 use std::{
     collections::BTreeMap,
@@ -55,7 +55,7 @@ pub async fn stream_encrypted(
 
     // Initialize encryption
     let (cipher, nonce_bytes) = init_encryption(encryption_key)?;
-    let encryptor = EncryptorBE32::from_aead(cipher, GenericArray::from_slice(&nonce_bytes));
+    let encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
     let nonce_header = create_nonce_header(&nonce_bytes);
 

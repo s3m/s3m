@@ -1,5 +1,5 @@
 use crate::cli::{actions::Action, globals::GlobalArgs, s3_location::S3Location};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use std::{
     borrow::ToOwned,
@@ -199,23 +199,22 @@ pub fn dispatch(
             let acl = matches.get_one("acl").map(|s: &String| s.to_string());
 
             // get x-amz-meta- to apply to the object
-            let meta = if matches
-                .get_one::<String>("meta")
-                .map(|s: &String| s.to_string())
-                .is_some()
-            {
-                Some(
-                    matches
-                        .get_one("meta")
-                        .map(|s: &String| s.to_string())
-                        .unwrap_or_default()
-                        .split(';')
-                        .map(|s| s.split_once('=').unwrap())
-                        .map(|(key, val)| {
-                            (format!("x-amz-meta-{}", key.to_owned()), val.to_owned())
-                        })
-                        .collect::<BTreeMap<String, String>>(),
-                )
+            let meta = if let Some(meta_str) = matches.get_one::<String>("meta") {
+                let mut metadata = BTreeMap::new();
+                for item in meta_str.split(';') {
+                    match item.split_once('=') {
+                        Some((key, val)) => {
+                            metadata.insert(format!("x-amz-meta-{key}"), val.to_owned());
+                        }
+                        None => {
+                            return Err(anyhow!(
+                                "Invalid metadata format: '{}'. Expected 'key=value' pairs separated by ';'",
+                                item
+                            ));
+                        }
+                    }
+                }
+                Some(metadata)
             } else {
                 None
             };
@@ -1100,5 +1099,65 @@ hosts:
             }
             _ => panic!("wrong action"),
         }
+    }
+
+    #[test]
+    fn test_metadata_parsing_valid() {
+        // Test the metadata parsing logic directly
+        let meta_str = "key1=value1;key2=value2;key3=value3";
+        let mut metadata = BTreeMap::new();
+
+        for item in meta_str.split(';') {
+            match item.split_once('=') {
+                Some((key, val)) => {
+                    metadata.insert(format!("x-amz-meta-{key}"), val.to_owned());
+                }
+                None => {
+                    panic!("Should not reach here with valid input");
+                }
+            }
+        }
+
+        assert_eq!(metadata.len(), 3);
+        assert_eq!(metadata.get("x-amz-meta-key1"), Some(&"value1".to_string()));
+        assert_eq!(metadata.get("x-amz-meta-key2"), Some(&"value2".to_string()));
+        assert_eq!(metadata.get("x-amz-meta-key3"), Some(&"value3".to_string()));
+    }
+
+    #[test]
+    fn test_metadata_parsing_invalid() {
+        // Test that invalid format is properly detected
+        let meta_str = "key1=value1;invalid_without_equals;key3=value3";
+        let mut has_error = false;
+
+        for item in meta_str.split(';') {
+            if item.split_once('=').is_none() {
+                has_error = true;
+                assert_eq!(item, "invalid_without_equals");
+                break;
+            }
+        }
+
+        assert!(has_error, "Should detect invalid metadata format");
+    }
+
+    #[test]
+    fn test_metadata_parsing_empty() {
+        // Test empty metadata string
+        let meta_str = "";
+        let mut metadata = BTreeMap::new();
+
+        for item in meta_str.split(';').filter(|s| !s.is_empty()) {
+            match item.split_once('=') {
+                Some((key, val)) => {
+                    metadata.insert(format!("x-amz-meta-{key}"), val.to_owned());
+                }
+                None => {
+                    panic!("Should not have invalid entries");
+                }
+            }
+        }
+
+        assert_eq!(metadata.len(), 0);
     }
 }

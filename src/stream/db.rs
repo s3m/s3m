@@ -1,5 +1,5 @@
 use crate::{
-    s3::{actions, checksum::Checksum, S3},
+    s3::{S3, actions, checksum::Checksum},
     stream::part::Part,
 };
 use anyhow::Result;
@@ -158,7 +158,7 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::s3::{credentials::Credentials, Region, S3};
+    use crate::s3::{Region, S3, credentials::Credentials};
     use anyhow::Result;
     use secrecy::SecretString;
     use std::path::PathBuf;

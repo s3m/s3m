@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Get the release version from the tag
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
@@ -46,13 +46,20 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - run: sudo apt -y install musl-dev musl-tools
+      # Linux-only prerequisites
+      - name: Install system deps (musl)
         if: matrix.build == 'linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y musl-dev musl-tools
 
-      - name: Install `cargo-generate-rpm`
+      - name: Install packaging tools (RPM/DEB)
         if: matrix.build == 'linux'
-        run: cargo install cargo-generate-rpm
+        run: |
+          cargo install cargo-generate-rpm
+          cargo install cargo-deb --force --locked
 
+      # Windows prerequisites
       - run: choco install openssl
         if: matrix.build == 'windows'
 
@@ -60,34 +67,52 @@ jobs:
           $env:GITHUB_ENV -Append
         if: matrix.build == 'windows'
 
-      - name: Build Linux
-        run: |
-          cargo build --release --locked --target ${{ matrix.target }} --features "openssl/vendored"
+      # Build once for Linux (musl)
+      - name: Build Linux (musl)
         if: matrix.build == 'linux'
+        run: cargo build --release --locked --target ${{ matrix.target }} --features
+          musl
+
+      # Strip once and prep paths for both packagers
+      - name: Strip and prepare packaging paths (Linux)
+        if: matrix.build == 'linux'
+        run: |
+          BIN="target/${{ matrix.target }}/release/s3m"
+          ls -al "$BIN"
+          strip -s "$BIN" || true
+          # Ensure cargo-generate-rpm's asset path exists without copying the file
+          mkdir -p target/release
+          ln -sf "../${{ matrix.target }}/release/s3m" "target/release/s3m"
+          ls -al target/release/s3m
 
       - name: Generate RPM
         if: matrix.build == 'linux'
         run: |
-          ls -alR target/${{ matrix.target }}/release/s3m
-          cp target/${{ matrix.target }}/release/s3m ./target/release/s3m
-          strip -s ./target/release/s3m
           cargo generate-rpm
-          ls -alR target/generate-rpm  # Check where the RPM is generated
-          RPM_PATH=$(find target/generate-rpm/ -name "*.rpm" -print -quit)
+          RPM_PATH="$(find target/generate-rpm -type f -name '*.rpm' -print -quit)"
           echo "RPM_ASSET=$RPM_PATH" >> $GITHUB_ENV
+          echo "RPM: $RPM_PATH"
 
-      - name: Build
+      - name: Generate DEB (musl static)
+        if: matrix.build == 'linux'
         run: |
-          cargo build --release --locked --target ${{ matrix.target }}
+          cargo deb --no-build
+          DEB_PATH="$(find target/debian -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          echo "DEB_ASSET=$DEB_PATH" >> $GITHUB_ENV
+          echo "DEB: $DEB_PATH"
+
+      # Non-Linux builds (macOS, Windows)
+      - name: Build
         if: matrix.build != 'linux'
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Build archive
         shell: bash
         run: |
           binary_name="s3m"
-
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mkdir "$dirname"
+
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             mv "target/${{ matrix.target }}/release/$binary_name.exe" "$dirname"
           else
@@ -102,22 +127,26 @@ jobs:
             echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
           fi
 
+      # Skip release if the tag starts with 't'
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 't')
+        uses: softprops/action-gh-release@v2
         with:
           files: |-
             ${{ env.ASSET }}
             ${{ env.RPM_ASSET }}
+            ${{ env.DEB_ASSET }}
 
   publish:
     name: Publish
     runs-on: ubuntu-latest
     needs:
       - build
+    # Only publish to crates.io on tag pushes that DON'T start with 't'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 't')
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -130,5 +159,7 @@ jobs:
     name: PackageCloud
     needs:
       - build
+    # Only upload to PackageCloud on tag pushes that DON'T start with 't'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 't')
     uses: ./.github/workflows/packagecloud.yml
     secrets: inherit

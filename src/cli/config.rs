@@ -2,6 +2,7 @@ use crate::s3::Region;
 use anyhow::{Context, Result};
 use secrecy::SecretString;
 use serde::Deserialize;
+use serde_yaml_ng as serde_yaml;
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
 
 #[derive(Debug, Deserialize)]

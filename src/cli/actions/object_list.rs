@@ -1,9 +1,8 @@
 use crate::{
     cli::actions::Action,
     s3::{
-        actions,
+        S3, actions,
         responses::{Bucket, Object, Upload},
-        S3,
     },
 };
 use anyhow::Result;

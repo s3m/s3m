@@ -10,8 +10,12 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    // TODO
-    // give priority to passed keys and then env
+    /// Creates new credentials with the following priority:
+    /// 1. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
+    /// 2. Passed parameters (`access`, `secret`)
+    ///
+    /// This allows environment variables to override configuration file values,
+    /// which is useful for temporary credential overrides and CI/CD environments.
     #[must_use]
     pub fn new(access: &str, secret: &SecretString) -> Self {
         let access_key = env::var("AWS_ACCESS_KEY_ID").unwrap_or_else(|_| access.to_string());

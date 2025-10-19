@@ -1,12 +1,13 @@
 use crate::{
     cli::globals::GlobalArgs,
-    s3::actions::{response_error, Action},
+    s3::actions::{Action, response_error},
     s3::{
-        checksum::{sha256_md5_digest_multipart, Checksum},
-        request, S3,
+        S3,
+        checksum::{Checksum, sha256_md5_digest_multipart},
+        request,
     },
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use reqwest::Method;
 use std::{collections::BTreeMap, path::Path};
 
@@ -71,14 +72,14 @@ impl<'a> UploadPart<'a> {
         .await?;
 
         // Update self.additional_checksum with the modified checksum, if any
-        if let Some(ref mut additional_checksum) = self.additional_checksum {
-            if let Some(ref new_checksum) = checksum {
-                // Update the fields of additional_checksum with the modified values
-                additional_checksum.algorithm = new_checksum.algorithm.clone();
-                additional_checksum
-                    .checksum
-                    .clone_from(&new_checksum.checksum);
-            }
+        if let Some(ref mut additional_checksum) = self.additional_checksum
+            && let Some(ref new_checksum) = checksum
+        {
+            // Update the fields of additional_checksum with the modified values
+            additional_checksum.algorithm = new_checksum.algorithm.clone();
+            additional_checksum
+                .checksum
+                .clone_from(&new_checksum.checksum);
         }
 
         // add additional checksum to headers if provided
@@ -197,9 +198,11 @@ mod tests {
             "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?partNumber=1&uploadId=uid",
             url.as_str()
         );
-        assert!(headers
-            .get("authorization")
-            .unwrap()
-            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
+        assert!(
+            headers
+                .get("authorization")
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE")
+        );
     }
 }

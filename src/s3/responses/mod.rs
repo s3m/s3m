@@ -1,5 +1,5 @@
-use serde::de::{Deserializer, Error};
 use serde::Deserialize;
+use serde::de::{Deserializer, Error};
 
 /// # Errors
 ///
@@ -325,7 +325,7 @@ pub struct DeleteMarker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_yaml;
+    use serde_yaml_ng as serde_yaml;
 
     #[derive(Debug, Deserialize, PartialEq)]
     struct TestStruct {

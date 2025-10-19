@@ -1,8 +1,9 @@
 use crate::{
     cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
     s3::{
+        S3,
         checksum::{Checksum, ChecksumAlgorithm},
-        tools, S3,
+        tools,
     },
     stream::{
         db::Db, upload_compressed::stream_compressed,
@@ -12,7 +13,7 @@ use crate::{
         upload_stdin_compressed_encrypted::stream_stdin_compressed_encrypted,
     },
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::{
     fs::metadata,
     path::Path,
@@ -120,9 +121,9 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                     let part_size = tools::calculate_part_size(file_size, buf_size as u64)?;
 
                     log::info!(
-                "file path: {}\nfile size: {file_size}\nlast modified time: {file_mtime}\npart size: {part_size}",
-                file_path.display()
-            );
+                        "file path: {}\nfile size: {file_size}\nlast modified time: {file_mtime}\npart size: {part_size}",
+                        file_path.display()
+                    );
 
                     // get the checksum with progress bar
                     let blake3_checksum = blake3_checksum(file_path, quiet)?;

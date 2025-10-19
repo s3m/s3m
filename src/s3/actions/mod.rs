@@ -1,8 +1,8 @@
 //! Actions
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations.html>
 
-use crate::s3::{responses::ErrorResponse, signature::Signature, S3};
-use anyhow::{anyhow, Result};
+use crate::s3::{S3, responses::ErrorResponse, signature::Signature};
+use anyhow::{Result, anyhow};
 use quick_xml::de::from_str;
 use reqwest::{Method, Response};
 use std::{collections::BTreeMap, fmt::Write};

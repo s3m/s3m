@@ -1,9 +1,6 @@
 use crate::cli::progressbar::Bar;
-use anyhow::{anyhow, Context, Result};
-use chacha20poly1305::{
-    aead::{generic_array::GenericArray, stream::DecryptorBE32, KeyInit},
-    ChaCha20Poly1305,
-};
+use anyhow::{Context, Result, anyhow};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::stream::DecryptorBE32};
 use std::{
     fs::File,
     io::{self, Read, Write}, // Import io for specific error types
@@ -57,7 +54,7 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
         .context("Failed to read nonce bytes")?;
 
     let cipher = ChaCha20Poly1305::new(enc_key.as_bytes().into());
-    let mut decryptor = DecryptorBE32::from_aead(cipher, GenericArray::from_slice(&nonce));
+    let mut decryptor = DecryptorBE32::from_aead(cipher, nonce.as_slice().into());
 
     let mut chunk_idx = 0;
     let mut total_decrypted_bytes = 0u64;
@@ -154,9 +151,9 @@ mod tests {
         // check content of decrypted file
         let mut decrypted_content = String::new();
         File::open(&decrypted_file)
-            .expect("Failed to open decrypted file")
+            .expect("BUG: Failed to open decrypted file that should exist")
             .read_to_string(&mut decrypted_content)
-            .expect("Failed to read decrypted file");
+            .expect("BUG: Failed to read decrypted file");
         assert!(!decrypted_content.is_empty(), "Decrypted file is empty");
         assert_eq!(
             decrypted_content,

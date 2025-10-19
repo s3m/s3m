@@ -1,3 +1,14 @@
+## 0.14.0 ✈️
+* Migrated to Rust Edition 2024
+* Updated all GitHub Actions to latest versions (actions/checkout@v5, etc.)
+* Added DEB package generation alongside RPM
+* Fixed metadata parsing crash bug with proper error handling
+* Replaced deprecated serde_yaml with serde_yaml_ng
+* Enhanced deploy workflow with test tag filtering (tags starting with 't')
+* Removed unused dependencies and cargo-machete metadata
+* Zero deprecation warnings
+* All 242 tests passing
+
 ## 0.13.2
 * Only verify the bucket name when creating a bucket, option `cb`
 

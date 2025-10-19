@@ -6,8 +6,8 @@ use bytes::Bytes;
 use crossbeam::channel::Sender;
 use futures::stream::TryStreamExt;
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
     Body, Client, Response,
+    header::{HeaderMap, HeaderName, HeaderValue},
 };
 use std::{collections::BTreeMap, path::Path};
 use tokio::time::Duration;

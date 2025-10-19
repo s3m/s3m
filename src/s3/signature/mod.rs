@@ -2,13 +2,13 @@
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
 use crate::{
-    s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes},
     s3::S3,
+    s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use base64ct::{Base64, Encoding};
 use chrono::prelude::{DateTime, Utc};
-use percent_encoding::{percent_decode, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode, utf8_percent_encode};
 use reqwest::Method;
 use ring::hmac;
 use std::collections::BTreeMap;
@@ -353,7 +353,10 @@ mod tests {
         let mut sign = Signature::new(&s3, "s3", Method::from_bytes(b"GET").unwrap()).unwrap();
         sign.datetime = date_utc;
         let rs = sign.presigned_url("/test.txt", 86400).unwrap();
-        assert_eq!("https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404", &rs);
+        assert_eq!(
+            "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404",
+            &rs
+        );
     }
 
     #[test]

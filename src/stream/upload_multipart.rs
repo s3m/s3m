@@ -1,14 +1,14 @@
 use crate::{
     cli::{globals::GlobalArgs, progressbar::Bar},
-    s3::{actions, checksum::Checksum, S3},
+    s3::{S3, actions, checksum::Checksum},
     stream::{db::Db, iterator::PartIterator, part::Part},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use bincode::{decode_from_slice, encode_to_vec};
 use futures::stream::{FuturesUnordered, StreamExt};
 use sled::transaction::{TransactionError, Transactional};
 use std::{collections::BTreeMap, path::Path};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload

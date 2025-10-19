@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use base64ct::{Base64, Encoding};
 use ring::{digest, hmac};
 use std::{
@@ -6,7 +6,7 @@ use std::{
     io::{Error, ErrorKind, Read},
     path::Path,
 };
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 const MAX_PART_SIZE: u64 = 5_368_709_120;
 const MAX_PARTS_PER_UPLOAD: usize = 10_000;

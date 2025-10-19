@@ -70,9 +70,10 @@ mod tests {
         // get matches
         let m = m.unwrap();
 
-        assert!(m
-            .get_one::<bool>("ListMultipartUploads")
-            .map_or_else(|| false, |v| *v));
+        assert!(
+            m.get_one::<bool>("ListMultipartUploads")
+                .map_or_else(|| false, |v| *v)
+        );
 
         Ok(())
     }

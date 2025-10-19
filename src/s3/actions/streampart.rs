@@ -1,9 +1,9 @@
 use crate::{
     cli::globals::GlobalArgs,
-    s3::actions::{response_error, Action},
-    s3::{request, S3},
+    s3::actions::{Action, response_error},
+    s3::{S3, request},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use crossbeam::channel::Sender;
 use reqwest::Method;
 use std::{collections::BTreeMap, path::Path};
@@ -136,9 +136,11 @@ mod tests {
             "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?partNumber=1&uploadId=uid",
             url.as_str()
         );
-        assert!(headers
-            .get("authorization")
-            .unwrap()
-            .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE"));
+        assert!(
+            headers
+                .get("authorization")
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE")
+        );
     }
 }

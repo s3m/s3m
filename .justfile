@@ -1,8 +1,11 @@
-test: clippy
+test: clippy fmt
   cargo test
 
 clippy:
   cargo clippy --all-targets --all-features -- -D warnings
+
+fmt:
+  cargo fmt --all -- --check
 
 coverage:
   CARGO_INCREMENTAL=0 RUSTFLAGS='-Cinstrument-coverage' LLVM_PROFILE_FILE='coverage-%p-%m.profraw' cargo test

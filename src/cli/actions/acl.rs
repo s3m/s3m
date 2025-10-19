@@ -1,6 +1,6 @@
 use crate::{
     cli::actions::Action,
-    s3::{actions, S3},
+    s3::{S3, actions},
 };
 use anyhow::Result;
 

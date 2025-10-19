@@ -1,14 +1,14 @@
 use crate::cli::{
+    Config, Host,
     actions::Action,
     commands,
     decrypt::decrypt,
     dispatch,
     globals::GlobalArgs,
-    s3_location::{host_bucket_key, S3Location},
-    Config, Host,
+    s3_location::{S3Location, host_bucket_key},
 };
 use crate::s3::{Credentials, S3};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use secrecy::SecretString;
 use std::{
@@ -271,8 +271,10 @@ hosts:
         let hbp = host_bucket_key(&matches);
         assert!(hbp.is_err());
         let error = hbp.unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Bucket name missing, expected format"));
+        assert!(
+            error
+                .to_string()
+                .contains("Bucket name missing, expected format")
+        );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.13.2"
+version = "0.14.0"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -10,7 +10,11 @@ readme = "README.md"
 keywords = ["s3", "stream", "upload", "resume", "bucket"]
 categories = ["command-line-utilities", "command-line-interface"]
 license = "BSD-3-Clause"
-edition = "2021"
+edition = "2024"
+
+[features]
+default = []
+musl = ["openssl/vendored"]
 
 [dependencies]
 anyhow = "1"
@@ -38,13 +42,12 @@ openssl = { version = "0.10", optional = true, features = ["vendored"] }
 percent-encoding = "2.3"
 quick-xml = { version = "0.38", features = ["serialize"] }
 rand = "0.9.1"
-rand_core = { version = "0.9.3", features = ["os_rng"] }
 regex = "1.11"
 reqwest = { version = "0.12", features = ["stream"] }
 ring = "0.17"
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10"
 sled = "0.34"
 temp-env = "0.3.6"
 tempfile = "3"
@@ -58,6 +61,12 @@ zstd = "0.13"
 assets = [
     { source = "target/release/s3m", dest = "/usr/bin/s3m", mode = "0755" },
 ]
+
+[package.metadata.deb]
+assets = [
+  ["target/release/s3m", "/usr/bin/s3m", "755"],
+]
+depends = ""
 
 [dev-dependencies]
 criterion = { version = "0.7", features = ["async_futures"] }

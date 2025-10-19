@@ -1,2 +1,2 @@
 [codespell]
-ignore-words-list = crate,ser
+ignore-words-list = crate,ser,serde

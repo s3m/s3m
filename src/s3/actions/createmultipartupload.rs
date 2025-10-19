@@ -4,11 +4,11 @@
 //! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>
 
 use crate::{
-    s3::actions::{response_error, Action},
+    s3::actions::{Action, response_error},
     s3::responses::InitiateMultipartUploadResult,
-    s3::{checksum::Checksum, request, tools, S3},
+    s3::{S3, checksum::Checksum, request, tools},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use quick_xml::de::from_str;
 use reqwest::Method;
 use std::collections::BTreeMap;
@@ -111,8 +111,8 @@ impl Action for CreateMultipartUpload<'_> {
 mod tests {
     use super::*;
     use crate::s3::{
-        checksum::{Checksum, ChecksumAlgorithm},
         Credentials, Region, S3,
+        checksum::{Checksum, ChecksumAlgorithm},
     };
     use secrecy::SecretString;
 
@@ -206,9 +206,11 @@ mod tests {
             "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?uploads=",
             url.as_str()
         );
-        assert!(headers
-            .get("authorization")
-            .unwrap()
-            .starts_with("AWS4-HMAC-SHA256 Credential="));
+        assert!(
+            headers
+                .get("authorization")
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 Credential=")
+        );
     }
 }

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::ArgMatches;
 use regex::Regex;
 
@@ -116,7 +116,9 @@ impl S3Location {
         }
 
         if key.chars().any(|c| c.is_control()) {
-            log::warn!("Object key '{key}' contains control characters (including newline, tab, etc.) which may cause issues");
+            log::warn!(
+                "Object key '{key}' contains control characters (including newline, tab, etc.) which may cause issues"
+            );
         }
 
         Ok(())
@@ -173,8 +175,11 @@ fn parse_put_object_args(matches: &ArgMatches) -> Result<S3Location> {
             // Format: s3m host/bucket/key (with --pipe)
             args[0]
         }
-        _ => return Err(anyhow!("Invalid arguments. Expected format: '/path/to/file <s3 provider>/<bucket>/<file>' or use --pipe for standard input"))
-
+        _ => {
+            return Err(anyhow!(
+                "Invalid arguments. Expected format: '/path/to/file <s3 provider>/<bucket>/<file>' or use --pipe for standard input"
+            ));
+        }
     };
 
     log::info!("Parsed S3 location for put object: {}", s3_location);
@@ -304,10 +309,12 @@ mod tests {
         // Invalid bucket should fail
         let result = S3Location::parse("s3.com/INVALID-BUCKET/key", false, true);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid bucket name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid bucket name")
+        );
     }
 
     #[test]

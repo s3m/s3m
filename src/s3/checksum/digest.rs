@@ -1,8 +1,8 @@
 use crate::s3::checksum::{
-    hasher::{ChecksumHasher, Md5Hasher, Sha256Hasher},
     Checksum, ChecksumAlgorithm,
+    hasher::{ChecksumHasher, Md5Hasher, Sha256Hasher},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use base64ct::{Base64, Encoding};
 use bytes::Bytes;
 use futures::stream::TryStreamExt;

@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies
         run: sudo apt -y install musl-dev musl-tools
@@ -30,7 +30,7 @@ jobs:
           "openssl/vendored"
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@v2
         with:
           ruby-version: 3
           bundler-cache: true

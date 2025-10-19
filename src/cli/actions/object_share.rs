@@ -1,6 +1,6 @@
 use crate::{
     cli::actions::Action,
-    s3::{Signature, S3},
+    s3::{S3, Signature},
 };
 use anyhow::Result;
 use reqwest::Method;
