@@ -132,6 +132,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 't')
         uses: softprops/action-gh-release@v2
         with:
+          draft: false
           files: |-
             ${{ env.ASSET }}
             ${{ env.RPM_ASSET }}
@@ -144,6 +145,7 @@ jobs:
       - build
     # Only publish to crates.io on tag pushes that DON'T start with 't'
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 't')
+    continue-on-error: true
     steps:
       - name: Checkout sources
         uses: actions/checkout@v5
