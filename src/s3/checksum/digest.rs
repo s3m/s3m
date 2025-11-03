@@ -246,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sha256_md5_digest_multipart_with_checksum() {
-        let tests = vec![
+        let tests = [
             Test {
                 algorithm: ChecksumAlgorithm::Sha256,
                 expected_sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",

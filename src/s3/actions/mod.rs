@@ -152,13 +152,24 @@ pub async fn response_error(response: Response) -> Result<String> {
         error.insert("Request ID", rid.to_str()?.to_string());
     }
 
-    let body = response.text().await?;
-
-    if let Ok(e) = from_str::<ErrorResponse>(&body) {
-        error.insert("Code", e.code);
-        error.insert("Message", e.message);
-    } else {
-        error.insert("Response", body);
+    // Try to read the response body, but don't fail if we can't
+    match response.text().await {
+        Ok(body) => {
+            if let Ok(e) = from_str::<ErrorResponse>(&body) {
+                error.insert("Code", e.code);
+                error.insert("Message", e.message);
+            } else if !body.is_empty() {
+                error.insert("Response", body);
+            }
+        }
+        Err(e) => {
+            // If we can't read the body, still report what we know
+            log::warn!("Failed to read error response body: {}", e);
+            error.insert(
+                "Note",
+                "Connection closed before response body could be read".to_string(),
+            );
+        }
     }
 
     Ok(error.iter().fold(String::new(), |mut output, (k, v)| {

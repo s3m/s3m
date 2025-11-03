@@ -1,3 +1,7 @@
+## 0.14.1
+* **Critical Fix**: Improved error handling when uploading to non-existent buckets or when server closes connection prematurely. Previously, larger files (>~300KB) would show cryptic "error decoding response body" messages. Now always displays HTTP status code (e.g., "404 Not Found") even if response body can't be read, giving users clear feedback about what went wrong.
+* **Clarification**: Progress bar shows file read/send progress, not confirmed upload status. The bar reaches 100% when data is sent to the server, but errors may still occur during server processing. Use `-q` flag to disable progress bar if desired.
+
 ## 0.14.0 ✈️
 * Migrated to Rust Edition 2024
 * Updated all GitHub Actions to latest versions (actions/checkout@v5, etc.)
