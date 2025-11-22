@@ -4,7 +4,7 @@ use std::{
     str::FromStr,
 };
 
-/// https://docs.aws.amazon.com/general/latest/gr/rande.html#regional-endpoints
+/// <https://docs.aws.amazon.com/general/latest/gr/rande.html#regional-endpoints>
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Region {
     /// AWS region (follows s3.{region}.amazonaws.com pattern)
@@ -32,6 +32,7 @@ impl Region {
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
+            #[allow(clippy::match_same_arms)]
             Self::Aws(name) => name,
             Self::Custom { name, .. } => name,
         }
@@ -41,7 +42,7 @@ impl Region {
     #[must_use]
     pub fn endpoint(&self) -> String {
         match self {
-            Self::Aws(region) => format!("s3.{}.amazonaws.com", region),
+            Self::Aws(region) => format!("s3.{region}.amazonaws.com"),
             Self::Custom { endpoint, .. } => endpoint.clone(),
         }
     }
@@ -138,6 +139,13 @@ impl Default for Region {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
 

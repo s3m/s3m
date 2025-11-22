@@ -1,4 +1,5 @@
 //! Amazon S3 multipart upload limits
+#![allow(clippy::format_collect)]
 //! Maximum object size 5 TB
 //! Maximum number of parts per upload  10,000
 //! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>
@@ -191,6 +192,14 @@ impl Action for CompleteMultipartUpload<'_> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps,
+    clippy::format_collect
+)]
 mod tests {
     use super::*;
     use crate::s3::{
@@ -242,7 +251,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<CompleteMultipartUpload><Part><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r"<CompleteMultipartUpload><Part><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>";
         assert_eq!(expected, serialized);
     }
 
@@ -253,7 +262,7 @@ mod tests {
             parts.insert(
                 i,
                 Part {
-                    etag: format!("etag{}", i),
+                    etag: format!("etag{i}"),
                     number: i,
                     checksum: None,
                 },
@@ -261,7 +270,7 @@ mod tests {
         }
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<CompleteMultipartUpload><Part><ETag>etag1</ETag><PartNumber>1</PartNumber></Part><Part><ETag>etag2</ETag><PartNumber>2</PartNumber></Part><Part><ETag>etag3</ETag><PartNumber>3</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r"<CompleteMultipartUpload><Part><ETag>etag1</ETag><PartNumber>1</PartNumber></Part><Part><ETag>etag2</ETag><PartNumber>2</PartNumber></Part><Part><ETag>etag3</ETag><PartNumber>3</PartNumber></Part></CompleteMultipartUpload>";
         assert_eq!(expected, serialized);
     }
 
@@ -281,7 +290,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<CompleteMultipartUpload><Part><ChecksumSHA256>checksum</ChecksumSHA256><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r"<CompleteMultipartUpload><Part><ChecksumSHA256>checksum</ChecksumSHA256><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>";
         assert_eq!(expected, serialized);
     }
 
@@ -301,7 +310,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<CompleteMultipartUpload><Part><ChecksumCRC32>checksum</ChecksumCRC32><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r"<CompleteMultipartUpload><Part><ChecksumCRC32>checksum</ChecksumCRC32><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>";
         assert_eq!(expected, serialized);
     }
 
@@ -321,7 +330,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<CompleteMultipartUpload><Part><ChecksumCRC32C>checksum</ChecksumCRC32C><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r"<CompleteMultipartUpload><Part><ChecksumCRC32C>checksum</ChecksumCRC32C><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>";
         assert_eq!(expected, serialized);
     }
 
@@ -341,7 +350,7 @@ mod tests {
         );
         let action = CompleteMultipartUpload::new("key", "uid", parts, None);
         let serialized = to_string(&action).unwrap();
-        let expected = r#"<CompleteMultipartUpload><Part><ChecksumSHA1>checksum</ChecksumSHA1><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#;
+        let expected = r"<CompleteMultipartUpload><Part><ChecksumSHA1>checksum</ChecksumSHA1><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>";
         assert_eq!(expected, serialized);
     }
 

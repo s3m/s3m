@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::missing_panics_doc)]
+
 use criterion::{
     BenchmarkId, Criterion, {criterion_group, criterion_main},
 };
@@ -6,7 +8,7 @@ use std::path::Path;
 use tokio::runtime::Runtime;
 
 async fn bench_sha256_md5_digest(path: &Path) {
-    let _ = async {
+    let () = async {
         sha256_md5_digest(path)
             .await
             .expect("Failed to compute hash");
@@ -17,9 +19,7 @@ async fn bench_sha256_md5_digest(path: &Path) {
 pub fn from_elem(c: &mut Criterion) {
     let file = Path::new("README.md");
 
-    if !file.exists() {
-        panic!("File does not exist");
-    }
+    assert!(file.exists(), "File does not exist");
 
     // Create a Tokio runtime manually
     let rt = Runtime::new().expect("Failed to create Tokio runtime");
@@ -31,7 +31,7 @@ pub fn from_elem(c: &mut Criterion) {
             b.iter(|| {
                 rt.block_on(async {
                     // Call the async function within the runtime
-                    bench_sha256_md5_digest(file).await
+                    bench_sha256_md5_digest(file).await;
                 });
             });
         },

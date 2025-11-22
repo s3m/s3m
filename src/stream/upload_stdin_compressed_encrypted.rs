@@ -49,7 +49,7 @@ pub async fn stream_stdin_compressed_encrypted(
     let progress_sender = setup_progress(quiet, None).await;
 
     // Initialize encryption
-    let (cipher, nonce_bytes) = init_encryption(encryption_key)?;
+    let (cipher, nonce_bytes) = init_encryption(encryption_key);
     let encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
     let nonce_header = create_nonce_header(&nonce_bytes);
@@ -66,7 +66,7 @@ pub async fn stream_stdin_compressed_encrypted(
     )?;
 
     let mut stream = FramedRead::new(stdin(), BytesCodec::new())
-        .map_err(|e| anyhow!("Error reading STDIN chunk: {}", e))
+        .map_err(|e| anyhow!("Error reading STDIN chunk: {e}"))
         .try_fold(
             (first_stream, encryptor), // Initial accumulator tuple (encryptor is moved here)
             |(mut current_upload_state_acc, mut current_encryptor_acc), chunk| async move {
@@ -75,11 +75,11 @@ pub async fn stream_stdin_compressed_encrypted(
 
                 // Encrypt the current chunk
                 let encrypted_data = encrypt_chunk(&mut current_encryptor_acc, &compress_data)
-                    .map_err(|e| anyhow!("Failed to encrypt chunk: {}", e))?;
+                    .map_err(|e| anyhow!("Failed to encrypt chunk: {e}"))?;
 
                 // Write the encrypted chunk to our internal buffer/temp file
                 write_to_stream(&mut current_upload_state_acc, &encrypted_data).map_err(|e| {
-                    anyhow!("Failed to write encrypted chunk to upload stream: {}", e)
+                    anyhow!("Failed to write encrypted chunk to upload stream: {e}")
                 })?;
 
                 // Check if a part needs to be uploaded to S3

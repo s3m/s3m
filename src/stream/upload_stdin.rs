@@ -51,7 +51,7 @@ pub async fn stream_stdin(
     )?;
 
     let mut stream = FramedRead::new(stdin(), BytesCodec::new())
-        .map_err(|e| anyhow!("Error reading STDIN chunk: {}", e))
+        .map_err(|e| anyhow!("Error reading STDIN chunk: {e}"))
         .try_fold(
             first_stream,
             |mut current_upload_state_acc, chunk| async move {
@@ -61,11 +61,11 @@ pub async fn stream_stdin(
 
                     // Write the compressed chunk to our internal buffer/temp file
                     write_to_stream(&mut current_upload_state_acc, &data)
-                        .map_err(|e| anyhow!("Error writing compressed chunk to stream: {}", e))?;
+                        .map_err(|e| anyhow!("Error writing compressed chunk to stream: {e}"))?;
                 } else {
                     // If compression is not enabled, write the raw chunk
                     write_to_stream(&mut current_upload_state_acc, &chunk)
-                        .map_err(|e| anyhow!("Error writing raw chunk to stream: {}", e))?;
+                        .map_err(|e| anyhow!("Error writing raw chunk to stream: {e}"))?;
                 }
 
                 // Check if a part needs to be uploaded to S3

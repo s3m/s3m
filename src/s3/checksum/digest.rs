@@ -29,6 +29,7 @@ async fn compute_hash(
 /// Compute the SHA256 and MD5 hashes of a file
 /// # Errors
 /// Will return an error if the file cannot be opened or read
+#[allow(clippy::format_collect)]
 pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)> {
     let file = File::open(file_path).await?;
 
@@ -52,12 +53,12 @@ pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)
         md5_tx
             .send(bytes_clone.clone())
             .await
-            .map_err(|err| anyhow!("Error sending to MD5 channel: {}", err))?;
+            .map_err(|err| anyhow!("Error sending to MD5 channel: {err}"))?;
 
         sha256_tx
             .send(bytes_clone.clone())
             .await
-            .map_err(|err| anyhow!("Error sending to SHA256 channel: {}", err))?;
+            .map_err(|err| anyhow!("Error sending to SHA256 channel: {err}"))?;
 
         length += &bytes.len();
     }
@@ -74,6 +75,7 @@ pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)
 /// Compute the SHA256 and MD5 hashes of a file chunk
 /// # Errors
 /// Will return an error if the file cannot be opened or read
+#[allow(clippy::format_collect)]
 pub async fn sha256_md5_digest_multipart(
     file_path: &Path,
     seek: u64,
@@ -120,18 +122,18 @@ pub async fn sha256_md5_digest_multipart(
         md5_tx
             .send(bytes_clone.clone())
             .await
-            .map_err(|err| anyhow!("Error sending to MD5 channel: {}", err))?;
+            .map_err(|err| anyhow!("Error sending to MD5 channel: {err}"))?;
 
         sha256_tx
             .send(bytes_clone.clone())
             .await
-            .map_err(|err| anyhow!("Error sending to SHA256 channel: {}", err))?;
+            .map_err(|err| anyhow!("Error sending to SHA256 channel: {err}"))?;
 
         if let Some((ref hasher_tx, _)) = hasher_channel {
             hasher_tx
                 .send(bytes_clone)
                 .await
-                .map_err(|err| anyhow!("Error sending to hasher channel: {}", err))?;
+                .map_err(|err| anyhow!("Error sending to hasher channel: {err}"))?;
         }
 
         length += &bytes.len();
@@ -168,6 +170,14 @@ pub async fn sha256_md5_digest_multipart(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps,
+    clippy::format_collect
+)]
 mod tests {
     use super::*;
     use crate::s3::checksum::ChecksumAlgorithm;
@@ -182,12 +192,12 @@ mod tests {
         assert_eq!(
             sha256
                 .iter()
-                .map(|b| format!("{:02x}", b))
+                .map(|b| format!("{b:02x}"))
                 .collect::<String>(),
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
         assert_eq!(
-            md5.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+            md5.iter().map(|b| format!("{b:02x}")).collect::<String>(),
             "5eb63bbbe01eeed093cb22bb8f5acdc3"
         );
         assert_eq!(length, 11);
@@ -203,12 +213,12 @@ mod tests {
         assert_eq!(
             sha256
                 .iter()
-                .map(|b| format!("{:02x}", b))
+                .map(|b| format!("{b:02x}"))
                 .collect::<String>(),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
         assert_eq!(
-            md5.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+            md5.iter().map(|b| format!("{b:02x}")).collect::<String>(),
             "5d41402abc4b2a76b9719d911017c592"
         );
         assert_eq!(length, 5);
@@ -226,12 +236,12 @@ mod tests {
         assert_eq!(
             sha256
                 .iter()
-                .map(|b| format!("{:02x}", b))
+                .map(|b| format!("{b:02x}"))
                 .collect::<String>(),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
         assert_eq!(
-            md5.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+            md5.iter().map(|b| format!("{b:02x}")).collect::<String>(),
             "5d41402abc4b2a76b9719d911017c592"
         );
         assert_eq!(length, 5);
@@ -284,7 +294,7 @@ mod tests {
             },
         ];
 
-        for test in tests.iter() {
+        for test in &tests {
             let mut file = NamedTempFile::new().unwrap();
             file.write_all(b"hello world").unwrap();
             let mut checksum = Checksum::new(test.algorithm.clone());
@@ -292,12 +302,8 @@ mod tests {
                 sha256_md5_digest_multipart(file.path(), 0, 5, Some(&mut checksum))
                     .await
                     .unwrap();
-            let get_hex = |bytes: Bytes| {
-                bytes
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<String>()
-            };
+            let get_hex =
+                |bytes: Bytes| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
 
             assert_eq!(length, 5);
             assert_eq!(get_hex(sha256), test.expected_sha256);

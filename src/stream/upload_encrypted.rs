@@ -54,7 +54,7 @@ pub async fn stream_encrypted(
     let progress_sender = setup_progress(quiet, None).await;
 
     // Initialize encryption
-    let (cipher, nonce_bytes) = init_encryption(encryption_key)?;
+    let (cipher, nonce_bytes) = init_encryption(encryption_key);
     let encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
     let nonce_header = create_nonce_header(&nonce_bytes);
@@ -77,17 +77,17 @@ pub async fn stream_encrypted(
     // The accumulator for try_fold is a tuple: (UploadStream, EncryptorBE32).
     // After the fold, we map the Result to extract only the UploadStream state.
     let mut stream = FramedRead::new(file, BytesCodec::new())
-        .map_err(|e| anyhow!("Error reading file chunk: {}", e)) // Convert io::Error to anyhow::Error
+        .map_err(|e| anyhow!("Error reading file chunk: {e}")) // Convert io::Error to anyhow::Error
         .try_fold(
             (first_stream, encryptor), // Initial accumulator tuple (encryptor is moved here)
             |(mut current_upload_state_acc, mut current_encryptor_acc), chunk| async move {
                 // Encrypt the current chunk
                 let encrypted_data = encrypt_chunk(&mut current_encryptor_acc, &chunk)
-                    .map_err(|e| anyhow!("Failed to encrypt chunk: {}", e))?;
+                    .map_err(|e| anyhow!("Failed to encrypt chunk: {e}"))?;
 
                 // Write the encrypted chunk to our internal buffer/temp file
                 write_to_stream(&mut current_upload_state_acc, &encrypted_data).map_err(|e| {
-                    anyhow!("Failed to write encrypted chunk to upload stream: {}", e)
+                    anyhow!("Failed to write encrypted chunk to upload stream: {e}")
                 })?;
 
                 // Check if a part needs to be uploaded to S3

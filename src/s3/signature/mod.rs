@@ -156,7 +156,7 @@ impl<'a> Signature<'a> {
 
         for p in clean_path {
             url.path_segments_mut()
-                .map_err(|e| anyhow!("cannot be base: {:#?}", e))?
+                .map_err(|e| anyhow!("cannot be base: {e:#?}"))?
                 .push(p);
         }
 
@@ -330,6 +330,13 @@ fn signature_key(secret_access_key: &str, date: &str, region: &str, service: &st
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region};

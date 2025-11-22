@@ -59,19 +59,10 @@ jobs:
           cargo install cargo-generate-rpm
           cargo install cargo-deb --force --locked
 
-      # Windows prerequisites
-      - run: choco install openssl
-        if: matrix.build == 'windows'
-
-      - run: echo 'OPENSSL_DIR=C:\Program Files\OpenSSL-Win64' | Out-File -FilePath
-          $env:GITHUB_ENV -Append
-        if: matrix.build == 'windows'
-
       # Build once for Linux (musl)
       - name: Build Linux (musl)
         if: matrix.build == 'linux'
-        run: cargo build --release --locked --target ${{ matrix.target }} --features
-          musl
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       # Strip once and prep paths for both packagers
       - name: Strip and prepare packaging paths (Linux)

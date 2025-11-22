@@ -30,9 +30,10 @@ pub fn sha256_hmac(key: &[u8], msg: &[u8]) -> hmac::Tag {
 
 #[must_use]
 pub fn write_hex_bytes(bytes: &[u8]) -> String {
-    let mut s = String::new();
+    let mut s = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        write!(&mut s, "{byte:02x}").expect("Unable to write");
+        // Writing to a String is infallible
+        let _ = write!(&mut s, "{byte:02x}");
     }
     s
 }
@@ -43,17 +44,14 @@ pub fn write_hex_bytes(bytes: &[u8]) -> String {
 /// Will return `Err` if the file size exceeds 5 TB
 /// or if the part size exceeds 5 GB
 pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
-    log::info!("file size: {}, buf size: {}", file_size, buf_size);
+    log::info!("file size: {file_size}, buf size: {buf_size}");
 
     let mut part_size = buf_size.max(1);
 
     while {
         let calculated_parts = (file_size.saturating_add(part_size).saturating_sub(1)) / part_size;
         log::debug!(
-            "Calculated parts: {}, Part size: {}, Max parts: {}",
-            calculated_parts,
-            part_size,
-            MAX_PARTS_PER_UPLOAD
+            "Calculated parts: {calculated_parts}, Part size: {part_size}, Max parts: {MAX_PARTS_PER_UPLOAD}"
         );
         calculated_parts > MAX_PARTS_PER_UPLOAD as u64
     } {
@@ -65,7 +63,7 @@ pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
         return Err(anyhow!("max part size 5 GB"));
     }
 
-    log::info!("part size: {}", part_size);
+    log::info!("part size: {part_size}");
 
     Ok(part_size)
 }
@@ -76,13 +74,17 @@ pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
 pub fn blake3(file: &Path) -> Result<String> {
     let mut file = std::fs::File::open(file)?;
     let mut hasher = blake3::Hasher::new();
+    #[allow(clippy::large_stack_arrays)]
     let mut buf = [0_u8; 65536];
 
-    while let Ok(size) = file.read(&mut buf[..]) {
+    loop {
+        let size = file.read(&mut buf)?;
         if size == 0 {
             break;
         }
-        hasher.update(&buf[0..size]);
+        // SAFETY: size is guaranteed to be <= buf.len() by the Read trait contract
+        #[allow(clippy::indexing_slicing)]
+        hasher.update(&buf[..size]);
     }
 
     Ok(hasher.finalize().to_hex().to_string())
@@ -94,9 +96,11 @@ pub fn blake3(file: &Path) -> Result<String> {
 /// - `bandwidth_kb`: Bandwidth in kilobytes per second (must be > 0).
 /// - `chunk_size`: Size of the data chunk in bytes (must be > 0).
 ///
+/// # Errors
+/// - Returns `Err` if bandwidth is 0, chunk size is 0, bandwidth value overflows, or duration calculation is invalid.
+///
 /// # Returns
 /// - `Ok(())` if throttling is successful.
-/// - `Err(Error)` if inputs are invalid or calculations overflow.
 pub async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) -> Result<(), Error> {
     if bandwidth_kb == 0 {
         return Err(Error::new(
@@ -117,32 +121,41 @@ pub async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) -> Result
         .checked_mul(1024)
         .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Bandwidth value too large"))?;
 
-    // Calculate the duration for the chunk
-    let duration_seconds = chunk_size as f64 / bandwidth_bytes as f64;
-    if duration_seconds.is_nan() || duration_seconds.is_infinite() {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            "Invalid duration calculation",
-        ));
-    }
+    // Calculate duration in nanoseconds using integer arithmetic
+    // duration = (chunk_size * 1_000_000_000) / bandwidth_bytes
+    let nanos = u64::try_from(chunk_size)
+        .ok()
+        .and_then(|cs| cs.checked_mul(1_000_000_000))
+        .and_then(|n| {
+            u64::try_from(bandwidth_bytes)
+                .ok()
+                .and_then(|bb| n.checked_div(bb))
+        })
+        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Duration calculation overflow"))?;
 
-    let duration = Duration::from_secs_f64(duration_seconds);
+    let duration = Duration::from_nanos(nanos);
 
     // Introduce the delay for throttling
     sleep(duration).await;
 
     // Log the throttling details
     log::debug!(
-        "Throttling download: Bandwidth = {} KB/s, Chunk size = {} bytes, Sleep duration = {:.3} seconds",
-        bandwidth_kb,
-        chunk_size,
-        duration_seconds
+        "Throttling download: Bandwidth = {bandwidth_kb} KB/s, Chunk size = {chunk_size} bytes, Sleep duration = {:.3} seconds",
+        duration.as_secs_f64()
     );
 
     Ok(())
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps,
+    clippy::format_collect
+)]
 mod tests {
     use super::*;
     use crate::stream::iterator::PartIterator;
@@ -264,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_calculate_part_size_max_part_per_upload() {
-        let buf_size = 549755814;
+        let buf_size = 549_755_814;
         let part_size = calculate_part_size(MAX_FILE_SIZE, buf_size).unwrap();
         let (number, seek, chunk) = PartIterator::new(MAX_FILE_SIZE, part_size).last().unwrap();
         assert_eq!(MAX_FILE_SIZE, seek + chunk);
@@ -303,10 +316,12 @@ mod tests {
 
     #[test]
     fn test_calculate_part_size_max_part_per_upload_4() {
-        let buf_size = 52428800;
-        let part_size = calculate_part_size(524288000000, buf_size).unwrap();
-        let (number, seek, chunk) = PartIterator::new(524288000000, part_size).last().unwrap();
-        assert_eq!(524288000000, seek + chunk);
+        let buf_size = 52_428_800;
+        let part_size = calculate_part_size(524_288_000_000, buf_size).unwrap();
+        let (number, seek, chunk) = PartIterator::new(524_288_000_000, part_size)
+            .last()
+            .unwrap();
+        assert_eq!(524_288_000_000, seek + chunk);
         assert!(usize::from(number) <= MAX_PARTS_PER_UPLOAD);
     }
 

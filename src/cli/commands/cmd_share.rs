@@ -22,6 +22,13 @@ pub fn command() -> Command {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use anyhow::Result;
@@ -36,7 +43,7 @@ mod tests {
         let m = m.unwrap();
         assert_eq!(
             m.get_one::<usize>("expire").map_or_else(|| 0, |v| *v),
-            604800_usize
+            604_800_usize
         );
         Ok(())
     }

@@ -2,3 +2,17 @@ target
 **/*.rs.bk
 s3m.yml
 .envrc
+.DS_Store
+
+# Editor/IDE artifacts
+flycheck_*
+flycheck*.rs
+.flycheck_*
+
+# Ai tools
+.claude/
+.copilot/
+.cursor/
+.idea/
+.vscode/
+.codexrc

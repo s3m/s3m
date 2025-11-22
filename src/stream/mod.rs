@@ -153,8 +153,6 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
                         e
                     ));
                 }
-
-                continue;
             }
         }
     }
@@ -176,16 +174,15 @@ pub async fn compress_chunk(bytes: BytesMut) -> Result<Vec<u8>> {
     .context("compression task panicked or was cancelled")?
 }
 
-pub fn init_encryption(
-    encryption_key: &secrecy::SecretString,
-) -> Result<(ChaCha20Poly1305, [u8; 7])> {
+#[must_use]
+pub fn init_encryption(encryption_key: &secrecy::SecretString) -> (ChaCha20Poly1305, [u8; 7]) {
     let cipher = ChaCha20Poly1305::new(encryption_key.expose_secret().as_bytes().into());
 
     // Generate a random nonce of 7 bytes
     let mut nonce_bytes = [0u8; 7];
     rng().fill_bytes(&mut nonce_bytes);
 
-    Ok((cipher, nonce_bytes))
+    (cipher, nonce_bytes)
 }
 
 /// Initialize multipart upload
@@ -221,7 +218,7 @@ async fn setup_progress(
                     pb.set_position(new);
                 }
 
-                log::debug!("Progress channel closed — total uploaded: {}", uploaded);
+                log::debug!("Progress channel closed — total uploaded: {uploaded}");
 
                 pb.finish();
             });
@@ -235,7 +232,7 @@ async fn setup_progress(
                 pb.set_message(ByteSize(uploaded as u64).to_string());
             }
 
-            log::debug!("Progress channel closed — total uploaded: {}", uploaded);
+            log::debug!("Progress channel closed — total uploaded: {uploaded}");
 
             pb.finish();
         });
@@ -245,7 +242,7 @@ async fn setup_progress(
 }
 
 /// Create the initial stream with nonce header
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn create_initial_stream<'a>(
     upload_id: &'a str,
     tmp_dir: &Path,
@@ -289,6 +286,9 @@ fn create_initial_stream<'a>(
 }
 
 /// Write data to stream and update counters/hashes
+///
+/// # Errors
+/// Returns `Err` if writing to the temporary file fails
 pub fn write_to_stream(stream: &mut Stream<'_>, data: &[u8]) -> Result<()> {
     stream.tmp_file.write_all(data)?;
     stream.sha.update(data);
@@ -298,11 +298,15 @@ pub fn write_to_stream(stream: &mut Stream<'_>, data: &[u8]) -> Result<()> {
 }
 
 /// Create encryption nonce header
+#[must_use]
 pub fn create_nonce_header(nonce_bytes: &[u8; 7]) -> Vec<u8> {
     [&[7_u8], nonce_bytes.as_slice()].concat()
 }
 
 /// Encrypt a chunk of data
+///
+/// # Errors
+/// Returns `Err` if encryption fails or if the encrypted chunk exceeds 4GB
 pub fn encrypt_chunk(
     encryptor: &mut EncryptorBE32<ChaCha20Poly1305>,
     chunk: &[u8],
@@ -313,7 +317,8 @@ pub fn encrypt_chunk(
         .map_err(|e| anyhow!("Encryption error: {e}"))?;
 
     // Format: [encrypted_data_length(4 bytes)][encrypted_data]
-    let encrypted_len = encrypted_chunk.len() as u32;
+    let encrypted_len = u32::try_from(encrypted_chunk.len())
+        .map_err(|_| anyhow!("Encrypted chunk size exceeds 4GB"))?;
     let mut result = Vec::with_capacity(4 + encrypted_chunk.len());
     result.extend_from_slice(&encrypted_len.to_be_bytes());
     result.extend_from_slice(&encrypted_chunk);
@@ -321,6 +326,9 @@ pub fn encrypt_chunk(
 }
 
 /// Check if we need to upload current part and start a new one
+///
+/// # Errors
+/// Returns `Err` if streaming the part fails or if creating a new temporary file fails
 pub async fn maybe_upload_part(stream: &mut Stream<'_>, buffer_size: usize) -> Result<(), Error> {
     if stream.count >= buffer_size {
         let etag = try_stream_part(stream)
@@ -333,7 +341,7 @@ pub async fn maybe_upload_part(stream: &mut Stream<'_>, buffer_size: usize) -> R
             "Part {} uploaded, total bytes: {}, etag: {}",
             stream.part_number,
             stream.count,
-            stream.etags.last().unwrap_or(&"".to_string())
+            stream.etags.last().unwrap_or(&String::new())
         );
 
         // Reset for next part
@@ -361,7 +369,11 @@ async fn complete_multipart_upload(
         .into_iter()
         .enumerate()
         .map(|(index, etag)| {
-            let part_number = (index + 1) as u16;
+            // S3 supports max 10,000 parts, which fits in u16 (max 65,535)
+            // If this fails, it indicates a serious bug in part size calculation
+            #[allow(clippy::expect_used)] // Intentional: should panic loudly if invariant violated
+            let part_number = u16::try_from(index + 1)
+                .expect("Part number overflow: exceeded maximum 10,000 parts");
             (
                 part_number,
                 actions::Part {
@@ -408,6 +420,13 @@ async fn upload_final_part(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region, S3};
@@ -480,8 +499,9 @@ mod tests {
     #[test]
     fn test_encrypt_chunk() {
         let key = secrecy::SecretString::new("0123456789abcdef0123456789abcdef".into());
-        let (cipher, nonce) = init_encryption(&key).unwrap();
-        let mut encryptor = EncryptorBE32::from_aead(cipher, (&nonce).into());
+        let (cipher, nonce) = init_encryption(&key);
+        let mut encryptor: EncryptorBE32<ChaCha20Poly1305> =
+            EncryptorBE32::from_aead(cipher, (&nonce).into());
 
         let data = b"Hello, world!";
         let encrypted = encrypt_chunk(&mut encryptor, data).unwrap();
@@ -627,6 +647,6 @@ mod tests {
         write_to_stream(&mut stream, &data).unwrap();
         let result = maybe_upload_part(&mut stream, buffer_size).await;
 
-        println!("Result: {:?}", result);
+        println!("Result: {result:?}");
     }
 }

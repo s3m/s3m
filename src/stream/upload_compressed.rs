@@ -58,7 +58,7 @@ pub async fn stream_compressed(
     // The accumulator for try_fold is a tuple: (UploadStream, EncryptorBE32).
     // After the fold, we map the Result to extract only the UploadStream state.
     let mut stream = FramedRead::new(file, BytesCodec::new())
-        .map_err(|e| anyhow!("Error reading file chunk: {}", e))
+        .map_err(|e| anyhow!("Error reading file chunk: {e}"))
         .try_fold(
             first_stream,
             |mut current_upload_state_acc, chunk| async move {
@@ -67,7 +67,7 @@ pub async fn stream_compressed(
 
                 // Write the encrypted chunk to our internal buffer/temp file
                 write_to_stream(&mut current_upload_state_acc, &compress_data)
-                    .map_err(|e| anyhow!("Error writing chunk to stream: {}", e))?;
+                    .map_err(|e| anyhow!("Error writing chunk to stream: {e}"))?;
 
                 // Check if a part needs to be uploaded to S3
                 maybe_upload_part(&mut current_upload_state_acc, STDIN_BUFFER_SIZE).await?;

@@ -44,7 +44,7 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
     // The nonce length is expected to be 7 bytes for ChaCha20Poly1305
     let nonce_len = nonce_len_buf[0] as usize;
     if nonce_len != 7 {
-        return Err(anyhow!("Expected nonce length 7, got {}", nonce_len));
+        return Err(anyhow!("Expected nonce length 7, got {nonce_len}"));
     }
 
     // Read the nonce bytes
@@ -64,14 +64,13 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
         let mut len_buf = [0u8; 4];
 
         match encrypted_file.read_exact(&mut len_buf) {
-            Ok(_) => {}
+            Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 break;
             }
             Err(e) => {
                 return Err(e).context(format!(
-                    "Chunk {}: Failed to read encrypted length",
-                    chunk_idx
+                    "Chunk {chunk_idx}: Failed to read encrypted length"
                 ));
             }
         }
@@ -81,16 +80,16 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
         let mut encrypted_chunk = vec![0u8; chunk_len];
         encrypted_file
             .read_exact(&mut encrypted_chunk)
-            .with_context(|| format!("Chunk {}: Failed to read encrypted chunk", chunk_idx))?;
+            .with_context(|| format!("Chunk {chunk_idx}: Failed to read encrypted chunk"))?;
 
         let mut decrypted_chunk = encrypted_chunk.clone();
         decryptor
             .decrypt_next_in_place(&[], &mut decrypted_chunk)
-            .map_err(|e| anyhow::anyhow!("Chunk {}: Decryption failed: {:?}", chunk_idx, e))?;
+            .map_err(|e| anyhow::anyhow!("Chunk {chunk_idx}: Decryption failed: {e:?}"))?;
 
         decrypted_file
             .write_all(&decrypted_chunk)
-            .with_context(|| format!("Chunk {}: Failed to write decrypted chunk", chunk_idx))?;
+            .with_context(|| format!("Chunk {chunk_idx}: Failed to write decrypted chunk"))?;
 
         total_decrypted_bytes += decrypted_chunk.len() as u64;
 
@@ -107,6 +106,13 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use std::fs;
@@ -142,7 +148,7 @@ mod tests {
 
         // Call the decrypt function
         let result = decrypt(&enc_file, enc_key);
-        assert!(result.is_ok(), "Decryption failed: {:?}", result);
+        assert!(result.is_ok(), "Decryption failed: {result:?}");
 
         // Check if the decrypted file was created
         let decrypted_file = enc_file.with_extension("decrypted");

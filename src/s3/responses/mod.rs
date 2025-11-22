@@ -49,7 +49,7 @@ pub struct Object {
     /// contents of an object, not its metadata.
     pub e_tag: String,
     #[serde(rename = "StorageClass")]
-    /// STANDARD | STANDARD_IA | REDUCED_REDUNDANCY | GLACIER
+    /// STANDARD | `STANDARD_IA` | `REDUCED_REDUNDANCY` | GLACIER
     pub storage_class: String,
     #[serde(rename = "Key")]
     /// The object's key
@@ -271,7 +271,7 @@ pub struct Grantee {
     pub uri: Option<String>,
 }
 
-/// ListVersionsResult
+/// `ListVersionsResult`
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ListVersionsResult {
@@ -323,6 +323,13 @@ pub struct DeleteMarker {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use serde_yaml_ng as serde_yaml;
@@ -356,8 +363,7 @@ mod tests {
             let msg = e.to_string();
             assert!(
                 msg.contains("got yes, but expected `true` or `false`"),
-                "unexpected error message: {}",
-                msg
+                "unexpected error message: {msg}"
             );
         }
     }
@@ -407,7 +413,7 @@ EncodingType: null
 
     #[test]
     fn test_list_versions_result_deserialization() {
-        let yaml = r#"
+        let yaml = r"
 Name: versioned-bucket
 Prefix: null
 KeyMarker: start
@@ -416,7 +422,7 @@ MaxKeys: 100
 IsTruncated: false
 Version: []
 DeleteMarker: []
-"#;
+";
         let parsed: ListVersionsResult = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(parsed.name, "versioned-bucket");
         assert_eq!(parsed.key_marker, "start");

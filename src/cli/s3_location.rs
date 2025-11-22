@@ -18,29 +18,29 @@ impl S3Location {
     ) -> Result<Self> {
         let parts: Vec<&str> = location.splitn(3, '/').collect();
 
-        log::info!("Parts: {:?}", parts);
+        log::info!("Parts: {parts:?}");
 
-        let host = parts
+        let host = (*parts
             .first()
             .filter(|h| !h.is_empty())
-            .ok_or_else(|| anyhow!("Host cannot be empty"))?
-            .to_string();
+            .ok_or_else(|| anyhow!("Host cannot be empty"))?)
+        .to_string();
 
         let bucket = match parts.get(1) {
             Some(b) if !b.is_empty() => {
                 Self::validate_bucket_name(b, validate_bucket_name)?;
-                Some(b.to_string())
+                Some((*b).to_string())
             }
 
             Some(_) if allow_missing_bucket => None,
 
             _ => {
-                if !allow_missing_bucket {
+                if allow_missing_bucket {
+                    None
+                } else {
                     return Err(anyhow!(
                         "Bucket name missing, expected format: <s3 provider>/<bucket name>"
                     ));
-                } else {
-                    None
                 }
             }
         };
@@ -58,7 +58,7 @@ impl S3Location {
                     return Ok(None);
                 }
 
-                Ok(Some(k.to_string()))
+                Ok(Some((*k).to_string()))
             })
             .transpose()?
             .unwrap_or_default();
@@ -72,23 +72,21 @@ impl S3Location {
     fn validate_bucket_name(bucket: &str, validate_bucket_name: bool) -> Result<()> {
         if bucket.len() < 3 || bucket.len() > 63 {
             return Err(anyhow!(
-                "Invalid bucket name '{}'. Must be 3-63 characters long",
-                bucket
+                "Invalid bucket name '{bucket}'. Must be 3-63 characters long"
             ));
         }
 
         if !validate_bucket_name {
-            log::debug!("Skipping bucket name validation for '{}'", bucket);
+            log::debug!("Skipping bucket name validation for '{bucket}'");
             return Ok(());
         }
 
-        let bucket_regex =
-            Regex::new(r"^[a-z0-9][\.\-a-z0-9]{1,61}[a-z0-9]$").expect("Invalid regex pattern");
+        let bucket_regex = Regex::new(r"^[a-z0-9][\.\-a-z0-9]{1,61}[a-z0-9]$")
+            .map_err(|e| anyhow!("Failed to compile regex pattern: {e}"))?;
 
         if !bucket_regex.is_match(bucket) {
             return Err(anyhow!(
-                "Invalid bucket name '{}'. Must match pattern: [a-z0-9][\\.-a-z0-9]{{1,61}}[a-z0-9]",
-                bucket
+                "Invalid bucket name '{bucket}'. Must match pattern: [a-z0-9][\\.-a-z0-9]{{1,61}}[a-z0-9]"
             ));
         }
 
@@ -101,8 +99,7 @@ impl S3Location {
     fn validate_object_key(key: &str) -> Result<()> {
         if key.len() > 1024 {
             return Err(anyhow!(
-                "Object key '{}' is too long. Maximum length is 1024 characters",
-                key
+                "Object key '{key}' is too long. Maximum length is 1024 characters"
             ));
         }
 
@@ -115,7 +112,7 @@ impl S3Location {
             return Err(anyhow!("Object key cannot contain null bytes"));
         }
 
-        if key.chars().any(|c| c.is_control()) {
+        if key.chars().any(char::is_control) {
             log::warn!(
                 "Object key '{key}' contains control characters (including newline, tab, etc.) which may cause issues"
             );
@@ -129,7 +126,7 @@ impl S3Location {
 pub fn host_bucket_key(matches: &ArgMatches) -> Result<S3Location> {
     let subcommand = matches.subcommand_name();
 
-    log::debug!("Subcommand: {:?}", subcommand);
+    log::debug!("Subcommand: {subcommand:?}");
 
     match subcommand {
         Some(cmd @ ("acl" | "get" | "ls" | "cb" | "rm" | "share")) => {
@@ -140,22 +137,22 @@ pub fn host_bucket_key(matches: &ArgMatches) -> Result<S3Location> {
 }
 
 fn parse_subcommand_args(matches: &ArgMatches, subcommand: &str) -> Result<S3Location> {
-    log::info!("Processing subcommand: {}", subcommand);
+    log::info!("Processing subcommand: {subcommand}");
 
     let args = get_subcommand_arguments(matches, subcommand)?;
 
-    log::info!("Arguments for subcommand '{}': {:?}", subcommand, args);
+    log::info!("Arguments for subcommand '{subcommand}': {args:?}");
 
     let s3_location = args
         .first()
         .ok_or_else(|| anyhow!("Missing S3 location argument"))?;
 
-    log::info!("Parsed S3 location: {}", s3_location);
+    log::info!("Parsed S3 location: {s3_location}");
 
     // For 'ls' command, allow missing bucket (for listing buckets)
     let allow_missing_bucket = subcommand == "ls";
 
-    log::info!("Allow missing bucket: {}", allow_missing_bucket);
+    log::info!("Allow missing bucket: {allow_missing_bucket}");
 
     // Only validate bucket names when creating buckets
     let validate_bucket = subcommand == "cb";
@@ -169,11 +166,13 @@ fn parse_put_object_args(matches: &ArgMatches) -> Result<S3Location> {
     let s3_location = match args.len() {
         2 => {
             // Format: s3m /path/to/file host/bucket/key
-            args[1]
+            args.get(1)
+                .ok_or_else(|| anyhow!("Missing S3 location argument"))?
         }
         1 if matches.contains_id("pipe") => {
             // Format: s3m host/bucket/key (with --pipe)
-            args[0]
+            args.first()
+                .ok_or_else(|| anyhow!("Missing S3 location argument"))?
         }
         _ => {
             return Err(anyhow!(
@@ -182,7 +181,7 @@ fn parse_put_object_args(matches: &ArgMatches) -> Result<S3Location> {
         }
     };
 
-    log::info!("Parsed S3 location for put object: {}", s3_location);
+    log::info!("Parsed S3 location for put object: {s3_location}");
 
     S3Location::parse(s3_location, false, false)
 }
@@ -202,6 +201,7 @@ fn get_subcommand_arguments<'a>(
         .collect())
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn get_main_arguments(matches: &ArgMatches) -> Result<Vec<&str>> {
     Ok(matches
         .get_many::<String>("arguments")
@@ -211,6 +211,13 @@ fn get_main_arguments(matches: &ArgMatches) -> Result<Vec<&str>> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
 

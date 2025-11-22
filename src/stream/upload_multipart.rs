@@ -87,7 +87,7 @@ pub async fn upload_multipart(
 
     let mut tasks = FuturesUnordered::new();
 
-    log::info!("Max concurrent requests: {}", max_requests);
+    log::info!("Max concurrent requests: {max_requests}");
 
     for part in db_parts.iter().values().filter_map(Result::ok).map(|p| {
         decode_from_slice(&p[..], bincode::config::standard())
@@ -147,7 +147,7 @@ where
     // limit to num_cpus - 2 or 1
     while tasks.len() >= max_requests {
         if let Some(r) = tasks.next().await {
-            r.map_err(|e| anyhow!("{}", e))?;
+            r.map_err(|e| anyhow!("{e}"))?;
             increment_progress_bar(pb, chunk_size, None);
         }
     }
@@ -167,7 +167,7 @@ where
     log::debug!("Remaining tasks: {}", tasks.len());
 
     while let Some(r) = tasks.next().await {
-        r.map_err(|e| anyhow!("{}", e))?;
+        r.map_err(|e| anyhow!("{e}"))?;
         increment_progress_bar(pb, chunk_size, None);
     }
     Ok(())
@@ -206,11 +206,7 @@ async fn upload_part(
     for attempt in 1..=globals.retries {
         let backoff_time = 2u64.pow(attempt - 1);
         if attempt > 1 {
-            log::warn!(
-                "Error uploading part: {}, retrying in {} seconds",
-                part_number,
-                backoff_time
-            );
+            log::warn!("Error uploading part: {part_number}, retrying in {backoff_time} seconds");
 
             sleep(Duration::from_secs(backoff_time)).await;
         }
@@ -258,8 +254,6 @@ async fn upload_part(
                     // If it's the last attempt, return the error without incrementing attempt
                     return Err(e);
                 }
-
-                continue;
             }
         }
     }
@@ -305,7 +299,7 @@ async fn try_upload_part(
         additional_checksum.as_mut(),
     );
 
-    log::debug!("Uploading part: {}", number);
+    log::debug!("Uploading part: {number}");
 
     action.request(s3, &globals).await
 }

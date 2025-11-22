@@ -46,6 +46,13 @@ impl Iterator for PartIterator {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use crate::s3::tools;
@@ -179,6 +186,6 @@ mod tests {
 
         let (number, seek, chunk) = PartIterator::new(file_size, part_size).last().unwrap();
         assert_eq!(file_size, seek + chunk);
-        assert_eq!(file_size.div_ceil(part_size), number as u64)
+        assert_eq!(file_size.div_ceil(part_size), u64::from(number));
     }
 }

@@ -50,7 +50,7 @@ impl<'a> CreateMultipartUpload<'a> {
             let body = response.text().await?;
 
             // Log the response body for debugging purposes
-            log::debug!("Response body: {}", body);
+            log::debug!("Response body: {body}");
 
             // Parse the XML response into InitiateMultipartUploadResult
             let upload_req: InitiateMultipartUploadResult = from_str(&body)?;
@@ -108,6 +108,13 @@ impl Action for CreateMultipartUpload<'_> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use crate::s3::{

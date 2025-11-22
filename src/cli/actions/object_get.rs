@@ -19,6 +19,7 @@ use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 
 /// # Errors
 /// Will return an error if the action fails
+#[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
 pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> {
     if let Action::GetObject {
         key,
@@ -62,7 +63,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
 
         // check if file exists
         if path.is_file() && !force {
-            return Err(anyhow!("file {:?} already exists", path));
+            return Err(anyhow!("file {} already exists", path.display()));
         }
 
         let mut file = create_output_file(&path, force).await?;
@@ -99,20 +100,20 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                             break;
                         }
 
-                        let nonce_len = buffer[0] as usize;
+                        let nonce_len =
+                            *buffer.first().context("Failed to read nonce length")? as usize;
 
                         if nonce_len != 7 {
                             return Err(anyhow::anyhow!(
-                                "Expected nonce length 7, got {}",
-                                nonce_len
+                                "Expected nonce length 7, got {nonce_len}"
                             ));
                         }
-                        let nonce = &buffer[1..8];
+                        let nonce = buffer.get(1..8).context("Failed to get nonce bytes")?;
 
-                        decryptor = Some(DecryptorBE32::from_aead(
-                            cipher.clone().unwrap(),
-                            nonce.into(),
-                        ));
+                        let cipher_instance = cipher
+                            .clone()
+                            .context("Cipher not initialized for decryption")?;
+                        decryptor = Some(DecryptorBE32::from_aead(cipher_instance, nonce.into()));
 
                         buffer.advance(8);
 
@@ -124,17 +125,25 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                         break;
                     }
 
-                    let len = u32::from_be_bytes(buffer[..4].try_into().unwrap()) as usize;
+                    let len_bytes = buffer.get(..4).context("Failed to read chunk length")?;
+                    let len = u32::from_be_bytes(
+                        len_bytes
+                            .try_into()
+                            .map_err(|_| anyhow::anyhow!("Invalid chunk length bytes"))?,
+                    ) as usize;
                     if buffer.len() < 4 + len {
                         break;
                     }
 
-                    let mut encrypted_chunk = buffer[4..4 + len].to_vec();
+                    let mut encrypted_chunk = buffer
+                        .get(4..4 + len)
+                        .context("Failed to read encrypted chunk")?
+                        .to_vec();
 
                     // decrypt_next_in_place modifies the slice in place and returns ()
                     decryptor
                         .as_mut()
-                        .unwrap()
+                        .context("Decryptor not initialized")?
                         .decrypt_next_in_place(&[], &mut encrypted_chunk)
                         .map_err(|_| {
                             anyhow::anyhow!("Decryption failed, check your encryption key")
@@ -186,7 +195,12 @@ async fn handle_metadata(s3: &S3, key: &str, version: Option<String>) -> Result<
     let action = actions::HeadObject::new(key, version);
     let headers = action.request(s3).await?;
 
-    let max_key_len = headers.keys().map(|k| k.len()).max().unwrap_or(0) + 1;
+    let max_key_len = headers
+        .keys()
+        .map(std::string::String::len)
+        .max()
+        .unwrap_or(0)
+        + 1;
 
     for (k, v) in headers {
         println!(
@@ -205,7 +219,7 @@ async fn handle_versions(s3: &S3, key: &str) -> Result<()> {
     let result = action.request(s3).await?;
 
     if result.versions.is_empty() {
-        println!("No versions found for key: {}", key);
+        println!("No versions found for key: {key}");
         return Ok(());
     }
 
@@ -219,7 +233,7 @@ async fn handle_versions(s3: &S3, key: &str) -> Result<()> {
             if version.is_latest {
                 format!("{} (latest)", version.key)
             } else {
-                version.key.to_string()
+                version.key.clone()
             },
             version.version_id
         );
@@ -307,11 +321,17 @@ pub fn is_s3m_encrypted(headers: &HeaderMap) -> bool {
     headers
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|ct| ct.starts_with("application/vnd.s3m.encrypted"))
-        .unwrap_or(false)
+        .is_some_and(|ct| ct.starts_with("application/vnd.s3m.encrypted"))
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use anyhow::Result;
@@ -375,16 +395,14 @@ mod tests {
                 Ok(res) => {
                     if test.error_expected {
                         // If an error was not expected but the test passed, fail the test
-                        panic!("Expected an error, but got: {:?}", res);
+                        panic!("Expected an error, but got: {res:?}");
                     } else {
                         assert_eq!(res, test.expected.unwrap());
                     }
                 }
                 Err(_) => {
-                    if !test.error_expected {
-                        // If an error was not expected but the test failed, fail the test
-                        panic!("Unexpected error");
-                    }
+                    // If an error was not expected but the test failed, fail the test
+                    assert!(test.error_expected, "Unexpected error");
                 }
             }
         }

@@ -59,6 +59,7 @@ pub fn validator_is_dir() -> ValueParser {
     })
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn new(config_path: &Path) -> Command {
     // get config file path (default: ~/.config/s3m/config.yml)
     let config_file_path = config_path.join("config.yml");
@@ -241,6 +242,13 @@ pub fn new(config_path: &Path) -> Command {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use anyhow::Result;
@@ -248,13 +256,13 @@ mod tests {
     use std::io::Write;
     use tempfile::Builder;
 
-    const CONF: &str = r#"---
+    const CONF: &str = r"---
 hosts:
   s3:
     region: xx-region-y
     access_key: XXX
     secret_key: YYY
-    bucket: my-bucket"#;
+    bucket: my-bucket";
 
     fn get_config() -> Result<PathBuf> {
         let tmp_dir = Builder::new().prefix("test-s3m-").tempdir()?;
@@ -277,7 +285,7 @@ hosts:
             m.get_one::<String>("arguments").map(String::as_str),
             Some("test")
         );
-        assert_eq!(m.get_one::<usize>("buffer").copied(), Some(10485760));
+        assert_eq!(m.get_one::<usize>("buffer").copied(), Some(10_485_760));
         assert_eq!(m.get_one::<bool>("clean").copied(), Some(false));
         assert_eq!(
             m.get_one::<PathBuf>("config")

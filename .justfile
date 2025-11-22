@@ -2,7 +2,7 @@ test: clippy fmt
   cargo test
 
 clippy:
-  cargo clippy --all-targets --all-features -- -D warnings
+  cargo clippy --all-targets --all-features
 
 fmt:
   cargo fmt --all -- --check

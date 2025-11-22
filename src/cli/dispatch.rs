@@ -9,6 +9,7 @@ use std::{
 };
 
 // return Action based on the command or subcommand
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 pub fn dispatch(
     hbk: S3Location,
     buf_size: usize,
@@ -42,7 +43,7 @@ pub fn dispatch(
 
             let sub_m = sub_m("acl")?;
 
-            let acl = sub_m.get_one("acl").map(|s: &String| s.to_string());
+            let acl = sub_m.get_one("acl").cloned();
 
             Ok(Action::ACL { key, acl })
         }
@@ -67,11 +68,11 @@ pub fn dispatch(
 
             let versions = sub_m.get_one("versions").copied().unwrap_or(false);
 
-            let version = sub_m.get_one("version").map(|s: &String| s.to_string());
+            let version = sub_m.get_one("version").cloned();
 
             // get destination file/path
             let dest = if args.len() == 2 {
-                Some(args[1].to_string())
+                args.get(1).map(|s| (*s).to_string())
             } else {
                 None
             };
@@ -91,13 +92,15 @@ pub fn dispatch(
         Some("ls") => {
             let sub_m = sub_m("ls")?;
 
-            let prefix = sub_m.get_one("prefix").map(|s: &String| s.to_string());
+            let prefix = sub_m.get_one("prefix").cloned();
 
-            let start_after = sub_m.get_one("start-after").map(|s: &String| s.to_string());
+            let start_after = sub_m.get_one("start-after").cloned();
 
             // option -n/--number
             // convert max_keys to string and default to None
-            let max_kub = sub_m.get_one::<usize>("max-kub").map(|s| s.to_string());
+            let max_kub = sub_m
+                .get_one::<usize>("max-kub")
+                .map(std::string::ToString::to_string);
 
             Ok(Action::ListObjects {
                 bucket: hbk.bucket.clone(),
@@ -116,7 +119,7 @@ pub fn dispatch(
             let sub_m = sub_m("cb")?;
             let acl = sub_m
                 .get_one("acl")
-                .map_or_else(|| String::from("private"), |s: &String| s.to_string());
+                .map_or_else(|| String::from("private"), |s: &String| s.clone());
             Ok(Action::CreateBucket { acl })
         }
 
@@ -128,7 +131,7 @@ pub fn dispatch(
 
             let upload_id = sub_m
                 .get_one("UploadId")
-                .map_or_else(String::new, |s: &String| s.to_string());
+                .map_or_else(String::new, |s: &String| s.clone());
 
             let bucket = sub_m.get_one("bucket").copied().unwrap_or(false);
 
@@ -164,15 +167,14 @@ pub fn dispatch(
                 .map(String::as_str)
                 .collect();
 
-            if args.len() == 2 {
-                src = Some(args[0].to_string());
+            if args.len() == 2
+                && let Some(arg) = args.first()
+            {
+                src = Some((*arg).to_string());
 
                 // if src is provided, check if it exists
-                if !Path::new(&src.as_ref().unwrap()).exists() {
-                    return Err(anyhow!(
-                        "Source file does not exist: {}",
-                        src.as_ref().unwrap().red()
-                    ));
+                if !Path::new(arg).exists() {
+                    return Err(anyhow!("Source file does not exist: {}", arg.red()));
                 }
             }
 
@@ -186,17 +188,17 @@ pub fn dispatch(
                 Ok(k) => k,
                 Err(e) => {
                     if let Some(src) = &src {
-                        src.to_string()
+                        src.clone()
                     } else {
                         return Err(e);
                     }
                 }
             };
 
-            log::info!("Key: {}", key);
+            log::info!("Key: {key}");
 
             // get ACL to apply to the object
-            let acl = matches.get_one("acl").map(|s: &String| s.to_string());
+            let acl = matches.get_one("acl").cloned();
 
             // get x-amz-meta- to apply to the object
             let meta = if let Some(meta_str) = matches.get_one::<String>("meta") {
@@ -208,8 +210,7 @@ pub fn dispatch(
                         }
                         None => {
                             return Err(anyhow!(
-                                "Invalid metadata format: '{}'. Expected 'key=value' pairs separated by ';'",
-                                item
+                                "Invalid metadata format: '{item}'. Expected 'key=value' pairs separated by ';'"
                             ));
                         }
                     }
@@ -237,7 +238,7 @@ pub fn dispatch(
                     || std::env::temp_dir().join(format!("s3m-{}", std::process::id())),
                     ToOwned::to_owned,
                 ),
-                checksum_algorithm: matches.get_one("checksum").map(|s: &String| s.to_string()),
+                checksum_algorithm: matches.get_one("checksum").cloned(),
                 number: matches.get_one::<u8>("number").copied().unwrap_or(1),
             })
         }
@@ -245,6 +246,7 @@ pub fn dispatch(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::cli::{
@@ -256,18 +258,17 @@ mod tests {
         start::get_host,
     };
     use clap::Command;
-    use std::cmp;
     use std::fs::File;
     use std::io::Write;
     use tempfile::Builder;
 
-    const CONF: &str = r#"---
+    const CONF: &str = r"---
 hosts:
   s3:
     region: xx-region-y
     access_key: XXX
     secret_key: YYY
-    bucket: my-bucket"#;
+    bucket: my-bucket";
 
     #[test]
     fn test_dispatch_bad_bucket() {
@@ -573,7 +574,7 @@ hosts:
 
         let err = s3_location.unwrap_err().to_string();
 
-        println!("{}", err);
+        println!("{err}");
 
         assert!(err.contains("Bucket name missing"));
     }
@@ -737,7 +738,7 @@ hosts:
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
-                    cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
+                    u8::try_from((num_cpus::get_physical() - 2).max(1)).unwrap_or(u8::MAX)
                 );
                 assert!(!globals.compress);
             }
@@ -821,7 +822,7 @@ hosts:
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
-                    cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
+                    u8::try_from((num_cpus::get_physical() - 2).max(1)).unwrap_or(u8::MAX)
                 );
                 assert!(!globals.compress);
             }
@@ -1026,7 +1027,7 @@ hosts:
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
-                    cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
+                    u8::try_from((num_cpus::get_physical() - 2).max(1)).unwrap_or(u8::MAX)
                 );
                 assert!(globals.compress);
             }
@@ -1093,7 +1094,7 @@ hosts:
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
-                    cmp::min((num_cpus::get_physical() - 2).max(1) as u8, u8::MAX)
+                    u8::try_from((num_cpus::get_physical() - 2).max(1)).unwrap_or(u8::MAX)
                 );
                 assert!(globals.compress);
             }

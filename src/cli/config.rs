@@ -53,23 +53,31 @@ impl Host {
     /// # Errors
     /// Will return an error if the region is not found
     pub fn get_region(&self) -> Result<Region> {
-        Ok(match &self.region {
-            Some(r) => r.parse::<Region>()?,
-            None => {
-                let r = self
-                    .endpoint
-                    .as_ref()
-                    .context("could not parse host need an endpoint or region")?;
-                Region::Custom {
-                    name: String::new(),
-                    endpoint: r.to_string(),
-                }
+        Ok(if let Some(r) = &self.region {
+            r.parse::<Region>()?
+        } else {
+            let r = self
+                .endpoint
+                .as_ref()
+                .context("could not parse host need an endpoint or region")?;
+            Region::Custom {
+                name: String::new(),
+                endpoint: r.clone(),
             }
         })
     }
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps,
+    clippy::too_many_lines,
+    clippy::format_push_string
+)]
 mod tests {
     use super::*;
     use crate::s3::Region;
@@ -78,61 +86,61 @@ mod tests {
     use std::str::FromStr;
     use tempfile::NamedTempFile;
 
-    const CONF: &str = r#"---
+    const CONF: &str = r"---
 hosts:
   s3:
     region: xx-region-y.foo
     access_key: XXX
     secret_key: YYY
-    bucket: my-bucket"#;
+    bucket: my-bucket";
 
-    const CONF_AWS: &str = r#"---
+    const CONF_AWS: &str = r"---
 hosts:
   s3:
     region: eu-central-2
     access_key: XXX
     secret_key: YYY
-    bucket: my-bucket"#;
+    bucket: my-bucket";
 
-    const CONF_OTHER: &str = r#"---
+    const CONF_OTHER: &str = r"---
 hosts:
   s3:
     endpoint: s3.us-west-000.backblazeb2.com
     access_key: XXX
     secret_key: YYY
-    bucket: my-bucket"#;
+    bucket: my-bucket";
 
-    const CONF_NO_REGION: &str = r#"---
+    const CONF_NO_REGION: &str = r"---
 hosts:
   s3:
     access_key: XXX
     secret_key: YYY
-    bucket: my-bucket"#;
+    bucket: my-bucket";
 
-    const CONF_X_REGION: &str = r#"---
+    const CONF_X_REGION: &str = r"---
 hosts:
   s3:
     region: x
     access_key: XXX
     secret_key: YYY
-    bucket: my-bucket"#;
+    bucket: my-bucket";
 
-    const CONF_COMPRESS: &str = r#"---
+    const CONF_COMPRESS: &str = r"---
 hosts:
   s3:
     region: us-east-2
     access_key: XXX
     secret_ke: YYY
-    compress: true"#;
+    compress: true";
 
-    const CONF_ENCRYPT: &str = r#"---
+    const CONF_ENCRYPT: &str = r"---
 hosts:
   s3:
     region: us-east-2
     access_key: XXX
     secret_ke: YYY
     compress: true
-    enc_key: secret"#;
+    enc_key: secret";
 
     #[test]
     fn test_config_get_host() {
@@ -175,7 +183,7 @@ hosts:
         assert!(h.is_ok());
         let h = h.unwrap();
         let r = h.get_region();
-        println!("{:?}", r);
+        println!("{r:?}");
     }
 
     #[test]
@@ -436,11 +444,8 @@ hosts:
 
         let mut yaml_content = "---\nhosts:\n".to_string();
         for (name, region, _) in &aws_s3_regions {
-            let formatted_name = name.replace(" ", "_");
-            yaml_content.push_str(&format!(
-                "  {}:\n    region: {}\n\n",
-                formatted_name, region
-            ));
+            let formatted_name = name.replace(' ', "_");
+            yaml_content.push_str(&format!("  {formatted_name}:\n    region: {region}\n\n"));
         }
         let mut tmp_file = NamedTempFile::new().unwrap();
         tmp_file.write_all(yaml_content.as_bytes()).unwrap();
@@ -449,19 +454,15 @@ hosts:
         let c = c.unwrap();
 
         for (name, region, endpoint) in &aws_s3_regions {
-            let formatted_name = name.replace(" ", "_");
+            let formatted_name = name.replace(' ', "_");
             let h = c.get_host(&formatted_name);
             assert!(h.is_ok());
             let h = h.unwrap();
             let r = h.get_region();
-            assert!(
-                r.is_ok(),
-                "Expected region to parse for '{}'",
-                formatted_name
-            );
+            assert!(r.is_ok(), "Expected region to parse for '{formatted_name}'");
             let r = r.unwrap();
             assert_eq!(r, Region::from_str(region).unwrap());
-            assert_eq!(r.endpoint(), endpoint.to_string())
+            assert_eq!(r.endpoint(), (*endpoint).to_string());
         }
     }
 }

@@ -208,6 +208,13 @@ pub async fn sha256_md5_digest_multipart(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use base64ct::{Base64, Encoding};
@@ -308,7 +315,7 @@ mod tests {
         hasher.update(b"hello world");
         let result = Box::new(hasher).finalize();
         assert_eq!(
-            format!("{:x}", result),
+            format!("{result:x}"),
             Bytes::from("5eb63bbbe01eeed093cb22bb8f5acdc3")
         );
 
@@ -316,7 +323,7 @@ mod tests {
         hasher.update(b"hello world");
         let result = Box::new(hasher).finalize();
         assert_eq!(
-            format!("{:x}", result),
+            format!("{result:x}"),
             Bytes::from("2aae6c35c94fcfb415dbe95f408b9ce91ee846ed")
         );
 
@@ -324,7 +331,7 @@ mod tests {
         hasher.update(b"hello world");
         let result = Box::new(hasher).finalize();
         assert_eq!(
-            format!("{:x}", result),
+            format!("{result:x}"),
             Bytes::from("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")
         );
     }

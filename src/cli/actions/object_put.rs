@@ -25,6 +25,7 @@ const MAX_FILE_SIZE: u64 = 5_497_558_138_880;
 
 /// # Errors
 /// Will return an error if the action fails
+#[allow(clippy::too_many_lines)]
 pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> {
     if let Action::PutObject {
         acl,
@@ -145,7 +146,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                             println!("{etag}");
                         }
                         return Ok(());
-                    };
+                    }
 
                     // upload the file in parts if it is bigger than the chunk size (buf_size)
                     if file_size > part_size as u64 {
@@ -208,7 +209,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
     Ok(())
 }
 
-/// Print the ETag if not in quiet mode
+/// Print the `ETag` if not in quiet mode
 fn print_etag(etag: &str, quiet: bool) {
     if !quiet {
         println!("ETag: {etag}");
@@ -237,7 +238,7 @@ pub fn blake3_checksum(file: &Path, quiet: bool) -> Result<String> {
 
 async fn additional_checksum(file: &Path, algorithm: String, calculate: bool) -> Result<Checksum> {
     let algorithm = ChecksumAlgorithm::from_str(&algorithm.to_lowercase())
-        .map_err(|()| anyhow!("invalid checksum algorithm: {}", algorithm))?;
+        .map_err(|()| anyhow!("invalid checksum algorithm: {algorithm}"))?;
 
     let mut checksum = Checksum::new(algorithm);
 

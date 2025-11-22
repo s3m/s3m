@@ -62,7 +62,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
 
     if let Some([enc_path, enc_key]) = matches
         .get_many::<String>("decrypt")
-        .map(|vals| vals.collect::<Vec<_>>())
+        .map(std::iter::Iterator::collect::<Vec<_>>)
         .as_deref()
     {
         let enc_path = PathBuf::from(enc_path);
@@ -81,7 +81,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
         buf_size = 10_485_760;
     }
 
-    log::info!("buffer size: {}", buf_size);
+    log::info!("buffer size: {buf_size}");
 
     // define global args
     let mut global_args = GlobalArgs::new();
@@ -109,7 +109,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     // load the config file
     let config = Config::new(config_file)?;
 
-    log::debug!("config: {:#?}", config);
+    log::debug!("config: {config:#?}");
 
     // show config
     if matches.subcommand_matches("show").is_some() {
@@ -178,7 +178,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
         &mut global_args,
     )?;
 
-    log::debug!("globals: {:#?}, action: {:#?}", global_args, action);
+    log::debug!("globals: {global_args:#?}, action: {action:#?}");
 
     Ok((s3, action, global_args))
 }
@@ -207,18 +207,25 @@ pub fn get_host<'a>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
 mod tests {
     use super::*;
     use crate::{cli::commands::new, s3::Region};
     use std::{fs::File, io::Write, str::FromStr};
     use tempfile::TempDir;
 
-    const CONF: &str = r#"---
+    const CONF: &str = r"---
 hosts:
   aws:
     region: us-east-1
     access_key: XXX
-    secret_key: YYY"#;
+    secret_key: YYY";
 
     #[test]
     fn test_get_config_path() {

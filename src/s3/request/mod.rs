@@ -33,8 +33,11 @@ static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_P
 /// Duration to wait after processing each chunk
 fn calculate_duration_per_chunk(bandwidth_kb_per_sec: usize, chunk_size: usize) -> Duration {
     let bandwidth_bytes_per_sec = bandwidth_kb_per_sec * 1024;
-    let duration_secs = chunk_size as f64 / bandwidth_bytes_per_sec as f64;
-    Duration::from_secs_f64(duration_secs)
+    // Calculate duration in nanoseconds using integer arithmetic
+    // duration = (chunk_size * 1_000_000_000) / bandwidth_bytes_per_sec
+    let nanos = (u128::from(chunk_size as u64) * 1_000_000_000)
+        / u128::from(bandwidth_bytes_per_sec as u64);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 /// # Errors
@@ -130,7 +133,7 @@ pub async fn multipart_upload(
 
     let file = file.take(chunk);
 
-    log::debug!("Chunk size: {}", chunk);
+    log::debug!("Chunk size: {chunk}");
 
     let stream =
         FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
@@ -183,6 +186,17 @@ pub async fn upload(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps,
+    clippy::cast_precision_loss,
+    clippy::large_stack_arrays,
+    clippy::missing_errors_doc,
+    clippy::float_cmp
+)]
 mod tests {
     use super::*;
     use mockito::Server;
@@ -239,7 +253,7 @@ mod tests {
 
         let response = upload(url, reqwest::Method::POST, &headers, body).await;
 
-        println!("Response: {:?}", response);
+        println!("Response: {response:?}");
 
         assert!(response.is_ok());
         let response = response.unwrap();

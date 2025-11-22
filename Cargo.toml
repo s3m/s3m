@@ -12,9 +12,34 @@ categories = ["command-line-utilities", "command-line-interface"]
 license = "BSD-3-Clause"
 edition = "2024"
 
-[features]
-default = []
-musl = ["openssl/vendored"]
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+# Allow unstable/opinionated lints (lower priority so individual lints can override)
+nursery = { level = "allow", priority = -1 }
+
+# Enforce pedantic lints
+pedantic = "deny"
+
+# Core lint groups
+all = "deny"
+correctness = "deny"
+suspicious = "deny"
+perf = "deny"
+complexity = "deny"
+
+# Safety-critical lints
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+await_holding_lock = "deny"
+
+# Performance + memory reliability
+needless_borrow = "deny"
+needless_collect = "deny"
+large_stack_arrays = "deny"
 
 [dependencies]
 anyhow = "1"
@@ -38,12 +63,11 @@ indicatif = "0.18"
 log = "0.4"
 md5 = "0.8"
 num_cpus = "1.17"
-openssl = { version = "0.10", optional = true, features = ["vendored"] }
 percent-encoding = "2.3"
 quick-xml = { version = "0.38", features = ["serialize"] }
 rand = "0.9.1"
 regex = "1.11"
-reqwest = { version = "0.12", features = ["stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
 ring = "0.17"
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

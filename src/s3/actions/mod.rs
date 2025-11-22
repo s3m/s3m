@@ -110,7 +110,7 @@ pub trait Action {
         if let Some(path) = self.path() {
             for p in path {
                 url.path_segments_mut()
-                    .map_err(|e| anyhow!("cannot be base: {:#?}", e))?
+                    .map_err(|e| anyhow!("cannot be base: {e:#?}"))?
                     .push(p);
             }
         }
@@ -164,7 +164,7 @@ pub async fn response_error(response: Response) -> Result<String> {
         }
         Err(e) => {
             // If we can't read the body, still report what we know
-            log::warn!("Failed to read error response body: {}", e);
+            log::warn!("Failed to read error response body: {e}");
             error.insert(
                 "Note",
                 "Connection closed before response body could be read".to_string(),
