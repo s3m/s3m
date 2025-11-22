@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod checksum;
 pub mod credentials;
+pub mod limits;
 pub mod region;
 pub mod request;
 pub mod responses;

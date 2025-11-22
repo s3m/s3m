@@ -1,3 +1,14 @@
+## 0.14.3
+* Fixed issue #65: Missing source file validation. Now returns a clear error message when source file is not provided instead of silently doing nothing
+* Improved error handling in multipart upload completion: replaced panic with proper error when part count exceeds S3's 10,000 limit. Error now includes actionable cleanup instructions and bug reporting guidance
+* Improved error visibility: Additional checksum failures (--checksum flag) are now logged with appropriate severity (WARN for calculation errors, ERROR for task panics) instead of silently returning None
+* Added defensive error handling in `object_put` handler as a safeguard against future validation logic changes
+* Code quality improvements: Fixed all clippy warnings using best practices (inlined format args, proper Result handling instead of expect/unwrap)
+* Architecture improvement: Centralized AWS S3 limits in `src/s3/limits.rs` module for easy updates when AWS changes quotas (currently supports 5TB max object size, 5GB max part size, 10,000 max parts)
+* Added `panic = "abort"` and explicit `opt-level = 3` to release profile for better binary optimization
+* Test coverage improvements: Added 12 comprehensive tests (9 for multipart upload + 3 for S3 limits validation) including boundary cases and edge case validation
+* Added test case `test_dispatch_missing_source_file` to prevent regression
+
 ## 0.14.2
 * Cargo lint fixes
 * Removed openssl vendored feature

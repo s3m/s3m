@@ -3,6 +3,7 @@ use crate::{
     s3::{
         S3,
         checksum::{Checksum, ChecksumAlgorithm},
+        limits::MAX_OBJECT_SIZE_BYTES,
         tools,
     },
     stream::{
@@ -20,8 +21,6 @@ use std::{
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
-
-const MAX_FILE_SIZE: u64 = 5_497_558_138_880;
 
 /// # Errors
 /// Will return an error if the action fails
@@ -113,7 +112,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 }
                 (false, false) => {
                     // we check here and not before because compressing the file changes the file size
-                    if file_size > MAX_FILE_SIZE {
+                    if file_size > MAX_OBJECT_SIZE_BYTES {
                         log::error!("object size limit 5 TB");
                         return Err(anyhow!("object size limit 5 TB"));
                     }
@@ -203,6 +202,13 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                     }
                 }
             }
+        } else {
+            // This should never happen due to validation in dispatch.rs,
+            // but we return an error defensively in case validation logic changes
+            return Err(anyhow!(
+                "Invalid state: neither pipe mode nor source file specified. \
+                This indicates a validation bug in dispatch logic."
+            ));
         }
     }
 
@@ -268,9 +274,22 @@ async fn calculate_additional_checksum(
 
         // Await the spawned task and handle all errors by returning None
         match handle.await {
-            Ok(Ok(checksum)) => Some(checksum),
-            Ok(Err(_checksum_error)) => None, // Checksum calculation failed
-            Err(_join_error) => None,         // Task join failed
+            Ok(Ok(checksum)) => {
+                log::debug!("Additional checksum calculated successfully: {checksum:?}");
+                Some(checksum)
+            }
+            Ok(Err(checksum_error)) => {
+                log::warn!(
+                    "Failed to calculate additional checksum: {checksum_error}. Upload will continue without it."
+                );
+                None
+            }
+            Err(join_error) => {
+                log::error!(
+                    "Checksum task panicked or failed to join: {join_error}. Upload will continue without additional checksum."
+                );
+                None
+            }
         }
     } else {
         None

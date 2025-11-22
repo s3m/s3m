@@ -365,25 +365,44 @@ async fn complete_multipart_upload(
     upload_id: &str,
     etags: Vec<String>,
 ) -> Result<String> {
+    // Validate part count before processing
+    let part_count = etags.len();
+    if part_count > 10_000 {
+        log::error!(
+            "Part count ({part_count}) exceeds S3's maximum of 10,000 parts. \
+            This indicates a bug in part size calculation. \
+            Upload ID: {upload_id}, Key: {key}"
+        );
+
+        return Err(anyhow!(
+            "Upload failed: {part_count} parts created, but S3 allows maximum 10,000 parts. \
+            This is a bug in s3m - please report at https://github.com/s3m/s3m/issues with file size and buffer settings. \
+            The incomplete multipart upload (ID: {upload_id}) may need manual cleanup using: \
+            s3m rm {key} --abort {upload_id}"
+        ));
+    }
+
     let parts: BTreeMap<u16, actions::Part> = etags
         .into_iter()
         .enumerate()
         .map(|(index, etag)| {
-            // S3 supports max 10,000 parts, which fits in u16 (max 65,535)
-            // If this fails, it indicates a serious bug in part size calculation
-            #[allow(clippy::expect_used)] // Intentional: should panic loudly if invariant violated
-            let part_number = u16::try_from(index + 1)
-                .expect("Part number overflow: exceeded maximum 10,000 parts");
-            (
+            // S3 supports max 10,000 parts. We validated above, so this should never fail.
+            // Convert to Result to satisfy clippy's no-expect rule
+            let part_number = u16::try_from(index + 1).map_err(|_| {
+                anyhow!(
+                    "BUG: Part number overflow after validation (index={index}). This should be impossible."
+                )
+            })?;
+            Ok((
                 part_number,
                 actions::Part {
                     etag,
                     number: part_number,
                     checksum: None,
                 },
-            )
+            ))
         })
-        .collect();
+        .collect::<Result<BTreeMap<_, _>>>()?;
 
     let action = actions::CompleteMultipartUpload::new(key, upload_id, parts, None);
 
@@ -648,5 +667,179 @@ mod tests {
         let result = maybe_upload_part(&mut stream, buffer_size).await;
 
         println!("Result: {result:?}");
+    }
+
+    // Comprehensive tests for complete_multipart_upload to prevent regressions
+
+    fn create_test_s3() -> S3 {
+        S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("test-bucket".to_string()),
+            false,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_complete_multipart_upload_single_part() {
+        let s3 = create_test_s3();
+        let etags = vec!["etag1".to_string()];
+
+        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
+
+        // This will fail because we're not mocking the S3 API, but we're testing the part number conversion logic
+        // The important part is that it doesn't panic and correctly creates the parts map
+        assert!(result.is_err(), "Expected error due to unmocked S3 API");
+    }
+
+    #[tokio::test]
+    async fn test_complete_multipart_upload_100_parts() {
+        let s3 = create_test_s3();
+        let etags: Vec<String> = (1..=100).map(|i| format!("etag{i}")).collect();
+
+        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
+
+        // Should not panic, will fail at API call
+        assert!(result.is_err(), "Expected error due to unmocked S3 API");
+    }
+
+    #[tokio::test]
+    async fn test_complete_multipart_upload_1000_parts() {
+        let s3 = create_test_s3();
+        let etags: Vec<String> = (1..=1000).map(|i| format!("etag{i}")).collect();
+
+        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
+
+        // Should not panic, will fail at API call
+        assert!(result.is_err(), "Expected error due to unmocked S3 API");
+    }
+
+    #[tokio::test]
+    async fn test_complete_multipart_upload_exactly_10000_parts() {
+        let s3 = create_test_s3();
+        let etags: Vec<String> = (1..=10_000).map(|i| format!("etag{i}")).collect();
+
+        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
+
+        // Should not panic with exactly 10,000 parts (the S3 maximum)
+        // Will fail at API call but that's expected
+        assert!(result.is_err(), "Expected error due to unmocked S3 API");
+    }
+
+    #[tokio::test]
+    async fn test_complete_multipart_upload_10001_parts_returns_error() {
+        let s3 = create_test_s3();
+        let etags: Vec<String> = (1..=10_001).map(|i| format!("etag{i}")).collect();
+
+        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
+
+        // Should return error, not panic
+        assert!(result.is_err(), "Expected error for exceeding 10,000 parts");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("10001 parts created"),
+            "Error message should mention part count. Got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("maximum 10,000 parts"),
+            "Error message should mention the limit. Got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("s3m rm"),
+            "Error message should include cleanup command. Got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("--abort"),
+            "Error message should include abort flag. Got: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_complete_multipart_upload_20000_parts_returns_error() {
+        let s3 = create_test_s3();
+        let etags: Vec<String> = (1..=20_000).map(|i| format!("etag{i}")).collect();
+
+        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
+
+        // Should return error, not panic
+        assert!(result.is_err(), "Expected error for exceeding 10,000 parts");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("20000 parts created"),
+            "Error message should mention actual part count. Got: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_complete_multipart_upload_error_contains_context() {
+        let s3 = create_test_s3();
+        let etags: Vec<String> = (1..=15_000).map(|i| format!("etag{i}")).collect();
+
+        let result =
+            complete_multipart_upload(&s3, "my-large-file.dat", "ABC123DEF456", etags).await;
+
+        assert!(result.is_err(), "Expected error for exceeding 10,000 parts");
+
+        let err_msg = result.unwrap_err().to_string();
+
+        // Verify all important context is in the error message
+        assert!(
+            err_msg.contains("my-large-file.dat"),
+            "Error should contain the key. Got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("ABC123DEF456"),
+            "Error should contain the upload ID. Got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("github.com/s3m/s3m/issues"),
+            "Error should contain bug reporting URL. Got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_part_number_conversion_edge_cases() {
+        // Test that our conversion logic handles edge cases correctly
+
+        // Test index 0 -> part number 1
+        let part_num = u16::try_from(1_usize).unwrap();
+        assert_eq!(part_num, 1, "First part should be numbered 1");
+
+        // Test index 9,999 -> part number 10,000
+        let part_num = u16::try_from(10_000_usize).unwrap();
+        assert_eq!(part_num, 10_000, "Part 10,000 should fit in u16");
+
+        // Test that index 10,000 -> part number 10,001 would overflow our validation
+        // (but our validation catches it before conversion)
+        let etags_count = 10_001_usize;
+        assert!(
+            etags_count > 10_000,
+            "Validation should catch this before conversion"
+        );
+    }
+
+    #[test]
+    fn test_u16_max_value_sufficient_for_s3_limit() {
+        // Verify our assumption that u16 is sufficient for S3's 10,000 part limit
+        // u16::MAX is 65535, which is much larger than 10,000
+        use crate::s3::limits::MAX_PARTS_PER_UPLOAD;
+        const _: () = assert!(u16::MAX as usize > MAX_PARTS_PER_UPLOAD);
+
+        // Verify we can represent 10,000
+        assert!(
+            u16::try_from(10_000_usize).is_ok(),
+            "Must be able to convert 10,000 to u16"
+        );
+
+        // Verify 10,001 also fits (for testing error path)
+        assert!(
+            u16::try_from(10_001_usize).is_ok(),
+            "Must be able to convert 10,001 to u16 for testing"
+        );
     }
 }

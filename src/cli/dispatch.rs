@@ -225,6 +225,19 @@ pub fn dispatch(
                 global_args.compress = matches.get_one("compress").copied().unwrap_or(false);
             }
 
+            let pipe = matches.get_one("pipe").copied().unwrap_or(false);
+
+            // Validate that we have either a source file or pipe mode enabled
+            if src.is_none() && !pipe {
+                return Err(anyhow!(
+                    "Source file missing. Expected: {} {} {}\nFor more information try {}",
+                    "<source file>".red(),
+                    "<s3 provider>/<bucket>/<file name>".cyan(),
+                    "[OPTIONS]".yellow(),
+                    "--help".green()
+                ));
+            }
+
             Ok(Action::PutObject {
                 acl,
                 meta,
@@ -232,7 +245,7 @@ pub fn dispatch(
                 file: src,
                 s3m_dir,
                 key,
-                pipe: matches.get_one("pipe").copied().unwrap_or(false),
+                pipe,
                 quiet: matches.get_one("quiet").copied().unwrap_or(false),
                 tmp_dir: matches.get_one::<PathBuf>("tmp-dir").map_or_else(
                     || std::env::temp_dir().join(format!("s3m-{}", std::process::id())),
@@ -1160,5 +1173,31 @@ hosts:
         }
 
         assert_eq!(metadata.len(), 0);
+    }
+
+    #[test]
+    fn test_dispatch_missing_source_file() {
+        // Test that missing source file without pipe flag returns error
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+
+        let filepath = config_path.as_os_str().to_str().unwrap();
+
+        let cmd = new(&tmp_dir.keep());
+        let matches = cmd.try_get_matches_from(vec!["test", "--config", filepath, "s3/bucket/key"]);
+
+        assert!(matches.is_ok());
+
+        let matches = matches.unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals);
+
+        assert!(action.is_err());
+        let err = action.unwrap_err().to_string();
+        assert!(err.contains("Source file missing"));
     }
 }

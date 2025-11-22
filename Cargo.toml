@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.14.2"
+version = "0.14.3"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -101,6 +101,8 @@ name = "sha256_md5_digest_benchmark"
 harness = false
 
 [profile.release]
+opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+panic = "abort"

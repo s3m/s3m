@@ -1,3 +1,4 @@
+use crate::s3::limits::{MAX_PART_SIZE_BYTES, MAX_PARTS_PER_UPLOAD};
 use anyhow::{Result, anyhow};
 use base64ct::{Base64, Encoding};
 use ring::{digest, hmac};
@@ -7,9 +8,6 @@ use std::{
     path::Path,
 };
 use tokio::time::{Duration, sleep};
-
-const MAX_PART_SIZE: u64 = 5_368_709_120;
-const MAX_PARTS_PER_UPLOAD: usize = 10_000;
 
 #[must_use]
 pub fn sha256_digest(input: impl AsRef<[u8]>) -> digest::Digest {
@@ -58,7 +56,7 @@ pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
         part_size = part_size.saturating_mul(2);
     }
 
-    if part_size > MAX_PART_SIZE {
+    if part_size > MAX_PART_SIZE_BYTES {
         log::error!("max part size 5 GB");
         return Err(anyhow!("max part size 5 GB"));
     }
@@ -158,11 +156,10 @@ pub async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) -> Result
 )]
 mod tests {
     use super::*;
+    use crate::s3::limits::{MAX_OBJECT_SIZE_BYTES, MAX_PART_SIZE_BYTES, MAX_PARTS_PER_UPLOAD};
     use crate::stream::iterator::PartIterator;
     use std::io::Write;
     use tempfile::NamedTempFile;
-
-    const MAX_FILE_SIZE: u64 = 5_497_558_138_880;
 
     #[test]
     fn test_sha256_digest() {
@@ -212,7 +209,7 @@ mod tests {
         let file_size = 5 * 1024 * 1024 * 1000 * 1000;
         let buf_size = 10 * 1024 * 1024;
         let part_size = calculate_part_size(file_size, buf_size).unwrap();
-        assert!(part_size <= MAX_PART_SIZE);
+        assert!(part_size <= MAX_PART_SIZE_BYTES);
         assert_eq!(part_size, 671_088_640);
     }
 
@@ -221,7 +218,7 @@ mod tests {
         let file_size = 5 * 1024 * 1024 * 1000 * 1000;
         let buf_size = 512 * 1024 * 1024;
         let part_size = calculate_part_size(file_size, buf_size).unwrap();
-        assert!(part_size <= MAX_PART_SIZE);
+        assert!(part_size <= MAX_PART_SIZE_BYTES);
         assert_eq!(part_size, buf_size);
     }
 
@@ -233,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_calculate_part_size_exceeds_max_part_size() {
-        let result = calculate_part_size(1_000_000, MAX_PART_SIZE + 1);
+        let result = calculate_part_size(1_000_000, MAX_PART_SIZE_BYTES + 1);
         assert!(result.is_err());
         assert_eq!(result.err().unwrap().to_string(), "max part size 5 GB");
     }
@@ -243,7 +240,7 @@ mod tests {
         let file_size = 5 * 1024 * 1024 * 1000 * 1000;
         let buf_size = 1;
         let result = calculate_part_size(file_size, buf_size).unwrap();
-        assert_eq!(result, MAX_PART_SIZE / 10);
+        assert_eq!(result, MAX_PART_SIZE_BYTES / 10);
     }
 
     #[test]
@@ -251,14 +248,14 @@ mod tests {
         let file_size = 5 * 1024 * 1024 * 1000 * 1000;
         let buf_size = 1024 * 1024 * 1024;
         let result = calculate_part_size(file_size, buf_size).unwrap();
-        assert_eq!(result, MAX_PART_SIZE / 5);
+        assert_eq!(result, MAX_PART_SIZE_BYTES / 5);
     }
 
     #[test]
     fn test_calculate_part_size_max_part_size() {
         let file_size = 5 * 1024 * 1024 * 1000 * 1000;
-        let part_size = calculate_part_size(file_size, MAX_PART_SIZE).unwrap();
-        assert_eq!(part_size, MAX_PART_SIZE);
+        let part_size = calculate_part_size(file_size, MAX_PART_SIZE_BYTES).unwrap();
+        assert_eq!(part_size, MAX_PART_SIZE_BYTES);
         let (number, seek, chunk) = PartIterator::new(file_size, part_size).last().unwrap();
         assert_eq!(file_size, seek + chunk);
         assert!(usize::from(number) <= MAX_PARTS_PER_UPLOAD);
@@ -278,18 +275,22 @@ mod tests {
     #[test]
     fn test_calculate_part_size_max_part_per_upload() {
         let buf_size = 549_755_814;
-        let part_size = calculate_part_size(MAX_FILE_SIZE, buf_size).unwrap();
-        let (number, seek, chunk) = PartIterator::new(MAX_FILE_SIZE, part_size).last().unwrap();
-        assert_eq!(MAX_FILE_SIZE, seek + chunk);
+        let part_size = calculate_part_size(MAX_OBJECT_SIZE_BYTES, buf_size).unwrap();
+        let (number, seek, chunk) = PartIterator::new(MAX_OBJECT_SIZE_BYTES, part_size)
+            .last()
+            .unwrap();
+        assert_eq!(MAX_OBJECT_SIZE_BYTES, seek + chunk);
         assert!(usize::from(number) <= MAX_PARTS_PER_UPLOAD);
     }
 
     #[test]
     fn test_calculate_part_size_max_part_per_upload_1() {
         let buf_size = 1;
-        let part_size = calculate_part_size(MAX_FILE_SIZE, buf_size).unwrap();
-        let (number, seek, chunk) = PartIterator::new(MAX_FILE_SIZE, part_size).last().unwrap();
-        assert_eq!(MAX_FILE_SIZE, seek + chunk);
+        let part_size = calculate_part_size(MAX_OBJECT_SIZE_BYTES, buf_size).unwrap();
+        let (number, seek, chunk) = PartIterator::new(MAX_OBJECT_SIZE_BYTES, part_size)
+            .last()
+            .unwrap();
+        assert_eq!(MAX_OBJECT_SIZE_BYTES, seek + chunk);
         assert!(usize::from(number) <= MAX_PARTS_PER_UPLOAD);
     }
 
@@ -351,11 +352,13 @@ mod tests {
 
     #[test]
     fn test_calculate_part_size_buffer_size_0() {
-        let part_size = calculate_part_size(MAX_FILE_SIZE, 0).unwrap();
-        let (number, seek, chunk) = PartIterator::new(MAX_FILE_SIZE, part_size).last().unwrap();
-        assert_eq!(MAX_FILE_SIZE, seek + chunk);
+        let part_size = calculate_part_size(MAX_OBJECT_SIZE_BYTES, 0).unwrap();
+        let (number, seek, chunk) = PartIterator::new(MAX_OBJECT_SIZE_BYTES, part_size)
+            .last()
+            .unwrap();
+        assert_eq!(MAX_OBJECT_SIZE_BYTES, seek + chunk);
         assert!(usize::from(number) <= MAX_PARTS_PER_UPLOAD);
-        assert!((MAX_FILE_SIZE.div_ceil(part_size)) < 10_000);
+        assert!((MAX_OBJECT_SIZE_BYTES.div_ceil(part_size)) < 10_000);
     }
 
     #[tokio::test]
