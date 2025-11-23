@@ -14,6 +14,9 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
+  containers:
+    uses: ./.github/workflows/containers.yml
+
   coverage:
     uses: ./.github/workflows/coverage.yml
     secrets: inherit
@@ -21,7 +24,9 @@ jobs:
   build:
     name: Build
     runs-on: ${{ matrix.os }}
-    needs: test
+    needs:
+      - test
+      - containers
 
     strategy:
       matrix:
@@ -40,7 +45,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Branch name
         run: echo "${GITHUB_REF##*/}"

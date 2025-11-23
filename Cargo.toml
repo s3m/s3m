@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.14.3"
+version = "0.14.4"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -95,6 +95,7 @@ depends = ""
 [dev-dependencies]
 criterion = { version = "0.7", features = ["async_futures"] }
 mockito = "1.7.0"
+testcontainers = "0.25"
 
 [[bench]]
 name = "sha256_md5_digest_benchmark"
@@ -104,5 +105,5 @@ harness = false
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-strip = "symbols"
+strip = true
 panic = "abort"

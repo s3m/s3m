@@ -14,10 +14,15 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
+  containers:
+    uses: ./.github/workflows/containers.yml
+
   build:
     name: Build and release
     runs-on: ${{ matrix.os }}
-    needs: test
+    needs:
+      - test
+      - containers
 
     strategy:
       matrix:
@@ -36,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Get the release version from the tag
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
@@ -139,7 +144,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

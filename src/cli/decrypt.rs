@@ -14,7 +14,21 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
         .with_context(|| format!("Failed to open encrypted file: {}", enc_file.display()))?;
 
     if enc_key.len() != 32 {
-        return Err(anyhow!("Encryption key must be 32 characters long."));
+        return Err(anyhow!(
+            "Encryption key must be exactly 32 characters long.\n\
+            Generate a secure key with: openssl rand -hex 16"
+        ));
+    }
+
+    // Check for low-entropy keys (all same character)
+    // Since we verified length is 32, we know there's at least one character
+    if let Some(first_char) = enc_key.chars().next()
+        && enc_key.chars().all(|c| c == first_char)
+    {
+        return Err(anyhow!(
+            "Encryption key has insufficient entropy (all characters are identical).\n\
+            Generate a secure key with: openssl rand -hex 16"
+        ));
     }
 
     let decrypted_file = enc_file.with_extension("decrypted");

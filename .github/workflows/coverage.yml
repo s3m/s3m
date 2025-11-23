@@ -12,12 +12,38 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
 
-      - name: Run tests
+      - name: Pull MinIO Docker image
+        run: docker pull minio/minio:latest
+
+      - name: Start MinIO for integration coverage
+        run: |
+          docker rm -f s3m-coverage-minio 2>/dev/null || true
+          docker run -d --name s3m-coverage-minio \
+            -p 9000:9000 \
+            -p 9001:9001 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:latest server /data --console-address ":9001"
+
+      - name: Wait for MinIO readiness
+        run: |
+          set -euo pipefail
+          for _ in {1..30}; do
+            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO did not become ready in time" >&2
+          docker logs s3m-coverage-minio || true
+          exit 1
+
+      - name: Run unit tests with coverage
         run: cargo test --verbose -- --nocapture
         env:
           RUST_BACKTRACE: full
@@ -26,12 +52,30 @@ jobs:
           RUSTFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
           RUSTDOCFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
 
+      - name: Run integration tests with coverage
+        run: cargo test --tests -- --ignored --test-threads=1
+        env:
+          RUST_BACKTRACE: full
+          CARGO_INCREMENTAL: 0
+          LLVM_PROFILE_FILE: coverage-int-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
+          RUSTDOCFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
+          MINIO_ENDPOINT: http://127.0.0.1:9000
+          MINIO_ACCESS_KEY: minioadmin
+          MINIO_SECRET_KEY: minioadmin
+
       - name: Install grcov
         run: if [[ ! -e ~/.cargo/bin/grcov ]]; then cargo install grcov; fi
 
       - name: Run grcov
         run: grcov . --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing
           --ignore '../**' --ignore '/*' -o coverage.lcov
+
+      - name: Stop MinIO
+        if: always()
+        run: |
+          docker ps -aq | xargs -r docker stop
+          docker ps -aq | xargs -r docker rm
 
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v5

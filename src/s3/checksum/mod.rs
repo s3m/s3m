@@ -95,13 +95,7 @@ impl Checksum {
     /// # Errors
     /// Will return an error if the file cannot be opened
     pub async fn calculate(&mut self, file: &Path) -> Result<String> {
-        let mut hasher: Box<dyn ChecksumHasher> = match self.algorithm {
-            ChecksumAlgorithm::Crc32 => Box::new(Crc32Hasher::new()),
-            ChecksumAlgorithm::Crc32c => Box::new(Crc32cHasher::new()),
-            ChecksumAlgorithm::Md5 => Box::new(Md5Hasher::new()),
-            ChecksumAlgorithm::Sha1 => Box::new(Sha1Hasher::new()),
-            ChecksumAlgorithm::Sha256 => Box::new(Sha256Hasher::new()),
-        };
+        let mut hasher = self.hasher();
 
         // Buffer size is 256KB
         let mut stream =
@@ -118,13 +112,7 @@ impl Checksum {
     /// # Errors
     /// Will return an error if the file cannot be opened
     pub fn digest(&mut self, data: &[u8]) -> Result<String> {
-        let mut hasher: Box<dyn ChecksumHasher> = match self.algorithm {
-            ChecksumAlgorithm::Crc32 => Box::new(Crc32Hasher::new()),
-            ChecksumAlgorithm::Crc32c => Box::new(Crc32cHasher::new()),
-            ChecksumAlgorithm::Md5 => Box::new(Md5Hasher::new()),
-            ChecksumAlgorithm::Sha1 => Box::new(Sha1Hasher::new()),
-            ChecksumAlgorithm::Sha256 => Box::new(Sha256Hasher::new()),
-        };
+        let mut hasher = self.hasher();
 
         hasher.update(data);
 

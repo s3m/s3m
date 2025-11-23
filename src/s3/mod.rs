@@ -75,10 +75,22 @@ impl S3 {
     /// # Errors
     /// Will return an error if the endpoint is invalid
     pub fn endpoint(&self) -> Result<Url> {
+        let endpoint_str = self.region.endpoint();
+
+        // Check if endpoint already has a scheme (http:// or https://)
+        let base_url =
+            if endpoint_str.starts_with("http://") || endpoint_str.starts_with("https://") {
+                // Endpoint already has scheme, use it as-is
+                endpoint_str
+            } else {
+                // No scheme, prepend https://
+                format!("https://{endpoint_str}")
+            };
+
         let url = if let Some(bucket) = &self.bucket {
-            Url::parse(&format!("https://{}/{}", &self.region.endpoint(), bucket))?
+            Url::parse(&format!("{base_url}/{bucket}"))?
         } else {
-            Url::parse(&format!("https://{}", &self.region.endpoint()))?
+            Url::parse(&base_url)?
         };
 
         Ok(url)

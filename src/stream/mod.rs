@@ -21,7 +21,7 @@ use chacha20poly1305::{
     aead::{KeyInit, stream::EncryptorBE32},
 };
 use crossbeam::channel::{Sender, unbounded};
-use rand::{RngCore, rng};
+use rand::{Rng, RngCore, rng};
 use ring::digest::{Context, SHA256};
 use secrecy::ExposeSecret;
 use std::{
@@ -107,15 +107,23 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     };
 
     for attempt in 1..=part.retries {
-        let backoff_time = 2u64.pow(attempt - 1);
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
+        const MAX_BACKOFF_SECS: u64 = 30;
+        let backoff_time = std::cmp::min(2u64.pow(attempt - 1), MAX_BACKOFF_SECS);
+
         if attempt > 1 {
+            // Add jitter (0-1000ms) to prevent thundering herd
+            let jitter_ms = rng().random_range(0_u64..1000);
+            let total_backoff =
+                Duration::from_secs(backoff_time) + Duration::from_millis(jitter_ms);
+
             log::warn!(
-                "Error streaming part number {}, retrying in {} seconds",
+                "Error streaming part number {}, retrying in {:.1} seconds",
                 part.part_number,
-                backoff_time
+                total_backoff.as_secs_f64()
             );
 
-            sleep(Duration::from_secs(backoff_time)).await;
+            sleep(total_backoff).await;
         }
 
         let action = actions::StreamPart::new(

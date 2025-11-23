@@ -47,6 +47,22 @@ impl Region {
         }
     }
 
+    /// Get the host (without scheme) for use in Host header
+    #[must_use]
+    pub fn host(&self) -> String {
+        match self {
+            Self::Aws(region) => format!("s3.{region}.amazonaws.com"),
+            Self::Custom { endpoint, .. } => {
+                // Strip http:// or https:// if present
+                endpoint
+                    .strip_prefix("http://")
+                    .or_else(|| endpoint.strip_prefix("https://"))
+                    .unwrap_or(endpoint)
+                    .to_string()
+            }
+        }
+    }
+
     /// Check if this is a valid AWS region
     #[must_use]
     pub fn is_aws_region(&self) -> bool {

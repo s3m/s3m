@@ -1,3 +1,33 @@
+## 0.14.4
+* **Test Infrastructure Overhaul**: Refactored e2e tests from single 1200+ line file into organized, maintainable structure:
+  - `tests/common/mod.rs` - Shared helpers (MinioContext, config, binary, hash utilities)
+  - `tests/e2e_put.rs` - Upload tests (23 tests)
+  - `tests/e2e_get.rs` - Download tests (3 tests)
+  - `tests/e2e_cb.rs` - Create bucket tests (1 test)
+  - `tests/e2e_ls.rs` - List objects tests (1 test)
+  - `tests/e2e_rm.rs` - Delete object tests (1 test)
+  - `tests/e2e_misc.rs` - Binary tests (3 tests)
+* **New File Size Tests**: Added 6 comprehensive tests to verify single-shot vs multipart upload behavior:
+  - Tiny file (1MB) - single PUT
+  - Small file (9MB < 10MB buffer) - single PUT
+  - Edge case (exactly 10MB) - boundary testing
+  - Large file (11MB > 10MB buffer) - multipart upload
+  - Very large file (25MB, ~3 parts) - multipart upload
+  - Custom buffer test (3MB file with 2MB buffer) - demonstrates testing multipart with smaller files
+* **Progress Bar Tests**: Added 4 tests to verify progress bar functionality:
+  - Default progress bar behavior (enabled)
+  - Progress suppression with --quiet flag
+  - Progress bar with multipart uploads
+  - --quiet flag with get command
+* **Documentation**: Added comprehensive buffer size documentation explaining default 10MB buffer (10485760 bytes) and upload behavior (single-shot vs multipart)
+* **Test Fixes**: Fixed encryption tests to use config files (`enc_key` and `compress` fields) instead of non-existent `--encrypt` and `--enc-key` CLI flags
+* **CI/CD Updates**: Updated GitHub Actions workflow to run all refactored test files with correct test counts
+* **Dependencies**: Upgraded testcontainers from 0.23 to 0.25
+* **Test Coverage**: 32 e2e tests + 17 API tests = 49 total integration tests, 255 unit tests
+* All tests include blake3 hash verification for file integrity validation
+* Tests use production code (`s3m::s3::tools::blake3`) for hash calculation - eating our own dog food
+* Benefits: Easy to find/add tests, no code duplication, each file focused on specific command
+
 ## 0.14.3
 * Fixed issue #65: Missing source file validation. Now returns a clear error message when source file is not provided instead of silently doing nothing
 * Improved error handling in multipart upload completion: replaced panic with proper error when part count exceeds S3's 10,000 limit. Error now includes actionable cleanup instructions and bug reporting guidance
