@@ -77,13 +77,13 @@ s3m uses the format: `/host/bucket/file`
 
 ```bash
 # Upload file
-s3m file.dat /s3/my-bucket/file.dat
+s3m file.dat /s3/my-bucket/
 
 # Upload with different name
 s3m local-file.dat /s3/my-bucket/remote-name.dat
 
 # Stream from STDIN
-mysqldump database | s3m /s3/backups/db-backup.sql
+mariadb-dump database | s3m --pipe /s3/backups/db-backup.sql
 ```
 
 ### Download a file
@@ -96,29 +96,29 @@ s3m get /s3/my-bucket/file.dat
 
 ```bash
 # List all buckets
-s3m ls /s3
+s3m ls s3
 
 # List objects in bucket
-s3m ls /s3/my-bucket
+s3m ls s3/my-bucket
 
 # List with prefix
-s3m ls /s3/my-bucket/path/
+s3m ls s3/my-bucket/path/
 ```
 
 ### Create bucket
 
 ```bash
-s3m cb /s3/new-bucket
+s3m cb s3/new-bucket
 ```
 
 ### Delete
 
 ```bash
 # Delete object
-s3m rm /s3/my-bucket/file.dat
+s3m rm s3/my-bucket/file.dat
 
 # Delete bucket
-s3m rm -b /s3/empty-bucket
+s3m rm -b s3/empty-bucket
 ```
 
 ## Compression & Encryption
@@ -127,7 +127,7 @@ s3m rm -b /s3/empty-bucket
 
 ```bash
 # Compress before upload (uses Zstandard)
-s3m --compress mysqldump.sql /s3/backups/db.sql.zst
+s3m --compress mysqldump.sql s3/backups/db.sql.zst
 ```
 
 ### Encryption
@@ -137,10 +137,10 @@ s3m --compress mysqldump.sql /s3/backups/db.sql.zst
 openssl rand -hex 16 > encryption.key
 
 # Encrypt during upload
-s3m --encrypt --enc-key "$(cat encryption.key)" file.dat /s3/secure/file.dat.enc
+s3m --encrypt --enc-key "$(cat encryption.key)" file.dat s3/secure/file.dat.enc
 
 # Decrypt during download
-s3m get /s3/secure/file.dat.enc --enc-key "$(cat encryption.key)"
+s3m get s3/secure/file.dat.enc --enc-key "$(cat encryption.key)"
 ```
 
 ## Advanced Options
@@ -149,21 +149,21 @@ s3m get /s3/secure/file.dat.enc --enc-key "$(cat encryption.key)"
 
 ```bash
 # Adjust part size for multipart uploads (in MB)
-s3m --buffer 50 big-file.dat /s3/large/huge-file.dat
+s3m --buffer 50 big-file.dat s3/large/huge-file.dat
 ```
 
 ### Bandwidth throttling
 
 ```bash
 # Limit upload speed (in KB/s)
-s3m --throttle 10240 file.dat /s3/backups/file.dat  # 10MB/s
+s3m --throttle 10240 file.dat s3/backups/file.dat  # 10MB/s
 ```
 
 ### Retries
 
 ```bash
 # Configure retry attempts for failed parts
-s3m --retries 5 file.dat /s3/bucket/file.dat
+s3m --retries 5 file.dat s3/bucket/file.dat
 ```
 
 ## Development
@@ -208,6 +208,6 @@ Coverage: **80%+** with 255+ tests
 ### Contributing
 
 1. Write tests for new features
-2. Run: `cargo test`
-3. Run: `cargo clippy -- -D warnings`
+2. Run: `just test` (to run the containerized integration tests)
+3. Run: `cargo clippy --all-targets --all-features`
 4. Run: `cargo fmt`
