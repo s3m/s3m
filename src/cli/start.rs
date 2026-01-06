@@ -18,7 +18,7 @@ use std::{
 };
 
 pub fn get_config_path() -> Result<PathBuf> {
-    let home_dir = dirs::home_dir().map_or_else(|| PathBuf::from("/tmp"), |h| h);
+    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
 
     let config_path = Path::new(&home_dir).join(".config").join("s3m");
     fs::create_dir_all(&config_path)

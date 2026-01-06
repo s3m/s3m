@@ -1,9 +1,8 @@
 use anyhow::Result;
 use base64ct::{Base64, Encoding};
-use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 use std::{io::SeekFrom, path::Path, str::FromStr};
 use tokio::{
     fs::File,
@@ -18,7 +17,8 @@ use self::hasher::{
 
 pub mod digest;
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Eq, PartialEq, Archive, Serialize, Deserialize)]
+#[rkyv(compare(PartialEq), derive(Debug))]
 pub enum ChecksumAlgorithm {
     Crc32,
     Crc32c,
@@ -65,7 +65,8 @@ impl FromStr for ChecksumAlgorithm {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[rkyv(derive(Debug))]
 pub struct Checksum {
     pub algorithm: ChecksumAlgorithm,
     pub checksum: String, // Base64 encoded
@@ -371,6 +372,76 @@ mod tests {
         assert_eq!(checksum.clone().unwrap().algorithm.as_algorithm(), "SHA256");
         assert_eq!(
             checksum.unwrap().checksum,
+            "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+        );
+    }
+
+    #[test]
+    fn test_checksum_rkyv_serialize_deserialize() {
+        use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
+
+        let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
+        checksum.checksum = "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=".to_string();
+
+        let bytes = to_bytes::<RkyvError>(&checksum).unwrap();
+        let deserialized: Checksum = from_bytes::<Checksum, RkyvError>(&bytes).unwrap();
+
+        assert_eq!(deserialized.algorithm, ChecksumAlgorithm::Sha256);
+        assert_eq!(
+            deserialized.checksum,
+            "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+        );
+    }
+
+    #[test]
+    fn test_checksum_algorithm_rkyv_roundtrip() {
+        use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
+
+        for algorithm in [
+            ChecksumAlgorithm::Crc32,
+            ChecksumAlgorithm::Crc32c,
+            ChecksumAlgorithm::Sha1,
+            ChecksumAlgorithm::Sha256,
+            ChecksumAlgorithm::Md5,
+        ] {
+            let mut checksum = Checksum::new(algorithm.clone());
+            checksum.checksum = "test_value".to_string();
+
+            let bytes = to_bytes::<RkyvError>(&checksum).unwrap();
+            let deserialized: Checksum = from_bytes::<Checksum, RkyvError>(&bytes).unwrap();
+
+            assert_eq!(deserialized.algorithm, algorithm);
+            assert_eq!(deserialized.checksum, "test_value");
+        }
+    }
+
+    #[test]
+    fn test_checksum_rkyv_empty_checksum_value() {
+        use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
+
+        let checksum = Checksum::new(ChecksumAlgorithm::Crc32c);
+
+        let bytes = to_bytes::<RkyvError>(&checksum).unwrap();
+        let deserialized: Checksum = from_bytes::<Checksum, RkyvError>(&bytes).unwrap();
+
+        assert_eq!(deserialized.algorithm, ChecksumAlgorithm::Crc32c);
+        assert_eq!(deserialized.checksum, "");
+    }
+
+    #[test]
+    fn test_checksum_rkyv_long_checksum_value() {
+        use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
+
+        let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
+        // SHA256 base64 encoded is 44 characters
+        checksum.checksum = "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=".to_string();
+
+        let bytes = to_bytes::<RkyvError>(&checksum).unwrap();
+        let deserialized: Checksum = from_bytes::<Checksum, RkyvError>(&bytes).unwrap();
+
+        assert_eq!(deserialized.checksum.len(), 44);
+        assert_eq!(
+            deserialized.checksum,
             "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
         );
     }

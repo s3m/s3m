@@ -1,3 +1,11 @@
+## 0.14.5
+* **Replaced bincode with rkyv**: Migrated serialization from bincode to rkyv for zero-copy deserialization
+  - Faster reads from sled database (no allocations on deserialize)
+  - Lower memory pressure for constrained environments
+  - rkyv is actively maintained (bincode becoming unmaintained)
+* **Breaking change**: Existing sled databases with pending uploads won't be readable. Run `s3m --clean` to clear old data before upgrading
+* **Test coverage**: Added 13 new tests for rkyv serialization (268 total unit tests)
+
 ## 0.14.4
 * **Test Infrastructure Overhaul**: Refactored e2e tests from single 1200+ line file into organized, maintainable structure:
   - `tests/common/mod.rs` - Shared helpers (MinioContext, config, binary, hash utilities)

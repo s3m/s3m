@@ -3,7 +3,7 @@ use crate::{
     stream::part::Part,
 };
 use anyhow::Result;
-use bincode::{decode_from_slice, encode_to_vec};
+use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 use std::{collections::BTreeMap, convert::Into, path::Path};
 
 pub const DB_PARTS: &str = "parts";
@@ -109,8 +109,10 @@ impl Db {
         checksum: Option<Checksum>,
     ) -> Result<Option<sled::IVec>> {
         let part = Part::new(number, seek, chunk, checksum);
-        let cbor_part = encode_to_vec(&part, bincode::config::standard())?;
-        Ok(self.db_parts()?.insert(number.to_be_bytes(), cbor_part)?)
+        let bytes = to_bytes::<RkyvError>(&part)?;
+        Ok(self
+            .db_parts()?
+            .insert(number.to_be_bytes(), bytes.as_slice())?)
     }
 
     /// # Errors
@@ -120,10 +122,7 @@ impl Db {
         let part = &self
             .db_parts()?
             .get(number.to_be_bytes())?
-            .map(|part| {
-                decode_from_slice(&part[..], bincode::config::standard())
-                    .map(|(decoded, _)| decoded)
-            })
+            .map(|part| from_bytes::<Part, RkyvError>(&part))
             .transpose()?;
         Ok(part.clone())
     }
@@ -137,8 +136,8 @@ impl Db {
             .values()
             .flat_map(|part| {
                 part.map(|part| {
-                    decode_from_slice(&part[..], bincode::config::standard())
-                        .map(|(p, _): (Part, usize)| {
+                    from_bytes::<Part, RkyvError>(&part)
+                        .map(|p| {
                             (
                                 p.get_number(),
                                 actions::Part {
@@ -283,6 +282,134 @@ mod tests {
             None
         );
         assert_eq!(db.db_uploaded()?.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_db_part_rkyv_roundtrip() -> Result<()> {
+        let dir = tempdir()?;
+        let path = PathBuf::from(dir.path());
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+        let db = Db::new(&s3, "key", "checksum", 0, &path)?;
+
+        // Create a part with all fields populated
+        let checksum =
+            crate::s3::checksum::Checksum::new(crate::s3::checksum::ChecksumAlgorithm::Sha256);
+        db.create_part(1, 1024, 5_242_880, Some(checksum))?;
+
+        // Retrieve and verify
+        let part = db.get_part(1)?.unwrap();
+        assert_eq!(part.get_number(), 1);
+        assert_eq!(part.get_seek(), 1024);
+        assert_eq!(part.get_chunk(), 5_242_880);
+        assert!(part.get_checksum().is_some());
+        assert_eq!(
+            part.get_checksum().unwrap().algorithm,
+            crate::s3::checksum::ChecksumAlgorithm::Sha256
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_db_part_rkyv_multiple_parts() -> Result<()> {
+        let dir = tempdir()?;
+        let path = PathBuf::from(dir.path());
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+        let db = Db::new(&s3, "key", "checksum", 0, &path)?;
+
+        // Create multiple parts with different checksums
+        for i in 1..=10 {
+            let checksum =
+                crate::s3::checksum::Checksum::new(crate::s3::checksum::ChecksumAlgorithm::Crc32c);
+            db.create_part(i, u64::from(i) * 5_242_880, 5_242_880, Some(checksum))?;
+        }
+
+        // Verify all parts
+        for i in 1..=10 {
+            let part = db.get_part(i)?.unwrap();
+            assert_eq!(part.get_number(), i);
+            assert_eq!(part.get_seek(), u64::from(i) * 5_242_880);
+            assert_eq!(part.get_chunk(), 5_242_880);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_db_part_rkyv_without_checksum() -> Result<()> {
+        let dir = tempdir()?;
+        let path = PathBuf::from(dir.path());
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+        let db = Db::new(&s3, "key", "checksum", 0, &path)?;
+
+        // Create part without checksum
+        db.create_part(1, 0, 1024, None)?;
+
+        let part = db.get_part(1)?.unwrap();
+        assert_eq!(part.get_number(), 1);
+        assert!(part.get_checksum().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_db_uploaded_parts_rkyv() -> Result<()> {
+        use rkyv::{rancor::Error as RkyvError, to_bytes};
+
+        let dir = tempdir()?;
+        let path = PathBuf::from(dir.path());
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+        let db = Db::new(&s3, "key", "checksum", 0, &path)?;
+
+        // Manually insert serialized parts into uploaded tree
+        let mut checksum =
+            crate::s3::checksum::Checksum::new(crate::s3::checksum::ChecksumAlgorithm::Crc32c);
+        checksum.checksum = "yZRlqg==".to_string();
+
+        let part = Part::new(1, 0, 5_242_880, Some(checksum))
+            .set_etag("\"d41d8cd98f00b204e9800998ecf8427e\"".to_string());
+
+        let bytes = to_bytes::<RkyvError>(&part)?;
+        db.db_uploaded()?
+            .insert(1_u16.to_be_bytes(), bytes.as_slice())?;
+
+        // Verify uploaded_parts() can deserialize
+        let uploaded = db.uploaded_parts()?;
+        assert_eq!(uploaded.len(), 1);
+        let action_part = uploaded.get(&1).unwrap();
+        assert_eq!(action_part.number, 1);
+        assert_eq!(action_part.etag, "\"d41d8cd98f00b204e9800998ecf8427e\"");
+        assert!(action_part.checksum.is_some());
         Ok(())
     }
 }

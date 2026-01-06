@@ -1,7 +1,8 @@
 use crate::s3::checksum::Checksum;
-use bincode::{Decode, Encode};
+use rkyv::{Archive, Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Encode, Decode)]
+#[derive(Debug, Default, Clone, Archive, Serialize, Deserialize)]
+#[rkyv(derive(Debug))]
 pub struct Part {
     etag: String,
     number: u16,
@@ -71,6 +72,7 @@ impl Part {
 mod tests {
     use super::*;
     use crate::s3::checksum::{Checksum, ChecksumAlgorithm};
+    use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 
     #[test]
     fn test_part() {
@@ -97,5 +99,90 @@ mod tests {
             ChecksumAlgorithm::Crc32c
         );
         assert_eq!(part.get_checksum().unwrap().checksum, "");
+    }
+
+    #[test]
+    fn test_part_rkyv_serialize_deserialize_basic() {
+        let part = Part::new(1, 1024, 4096, None);
+        let bytes = to_bytes::<RkyvError>(&part).unwrap();
+        let deserialized: Part = from_bytes::<Part, RkyvError>(&bytes).unwrap();
+
+        assert_eq!(deserialized.get_number(), 1);
+        assert_eq!(deserialized.get_seek(), 1024);
+        assert_eq!(deserialized.get_chunk(), 4096);
+        assert_eq!(deserialized.get_etag(), "");
+        assert!(deserialized.get_checksum().is_none());
+    }
+
+    #[test]
+    fn test_part_rkyv_serialize_deserialize_with_etag() {
+        let part = Part::new(42, 0, 5_242_880, None)
+            .set_etag("\"d41d8cd98f00b204e9800998ecf8427e\"".to_string());
+        let bytes = to_bytes::<RkyvError>(&part).unwrap();
+        let deserialized: Part = from_bytes::<Part, RkyvError>(&bytes).unwrap();
+
+        assert_eq!(deserialized.get_number(), 42);
+        assert_eq!(
+            deserialized.get_etag(),
+            "\"d41d8cd98f00b204e9800998ecf8427e\""
+        );
+    }
+
+    #[test]
+    fn test_part_rkyv_serialize_deserialize_with_checksum() {
+        let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
+        checksum.checksum = "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=".to_string();
+        let part = Part::new(100, 52_428_800, 5_242_880, Some(checksum));
+        let bytes = to_bytes::<RkyvError>(&part).unwrap();
+        let deserialized: Part = from_bytes::<Part, RkyvError>(&bytes).unwrap();
+
+        assert_eq!(deserialized.get_number(), 100);
+        assert_eq!(deserialized.get_seek(), 52_428_800);
+        assert_eq!(deserialized.get_chunk(), 5_242_880);
+        let checksum = deserialized.get_checksum().unwrap();
+        assert_eq!(checksum.algorithm, ChecksumAlgorithm::Sha256);
+        assert_eq!(
+            checksum.checksum,
+            "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek="
+        );
+    }
+
+    #[test]
+    fn test_part_rkyv_serialize_deserialize_full() {
+        let mut checksum = Checksum::new(ChecksumAlgorithm::Crc32c);
+        checksum.checksum = "yZRlqg==".to_string();
+        let part = Part::new(9999, u64::MAX, u64::MAX - 1, Some(checksum))
+            .set_etag("\"abc123\"".to_string());
+        let bytes = to_bytes::<RkyvError>(&part).unwrap();
+        let deserialized: Part = from_bytes::<Part, RkyvError>(&bytes).unwrap();
+
+        assert_eq!(deserialized.get_number(), 9999);
+        assert_eq!(deserialized.get_seek(), u64::MAX);
+        assert_eq!(deserialized.get_chunk(), u64::MAX - 1);
+        assert_eq!(deserialized.get_etag(), "\"abc123\"");
+        let checksum = deserialized.get_checksum().unwrap();
+        assert_eq!(checksum.algorithm, ChecksumAlgorithm::Crc32c);
+        assert_eq!(checksum.checksum, "yZRlqg==");
+    }
+
+    #[test]
+    fn test_part_rkyv_roundtrip_all_checksum_algorithms() {
+        for algorithm in [
+            ChecksumAlgorithm::Crc32,
+            ChecksumAlgorithm::Crc32c,
+            ChecksumAlgorithm::Sha1,
+            ChecksumAlgorithm::Sha256,
+            ChecksumAlgorithm::Md5,
+        ] {
+            let mut checksum = Checksum::new(algorithm.clone());
+            checksum.checksum = "test_checksum_value".to_string();
+            let part = Part::new(1, 0, 1024, Some(checksum));
+            let bytes = to_bytes::<RkyvError>(&part).unwrap();
+            let deserialized: Part = from_bytes::<Part, RkyvError>(&bytes).unwrap();
+
+            let recovered_checksum = deserialized.get_checksum().unwrap();
+            assert_eq!(recovered_checksum.algorithm, algorithm);
+            assert_eq!(recovered_checksum.checksum, "test_checksum_value");
+        }
     }
 }

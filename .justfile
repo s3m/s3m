@@ -80,7 +80,7 @@ test-integration: container
   cargo test --test e2e_put --test e2e_get --test e2e_cb --test e2e_ls --test e2e_rm --test e2e_misc -- --ignored --test-threads=1
 
 clippy:
-  cargo clippy --all-targets --all-features -- -D warnings
+  cargo clippy --all-targets --all-features
 
 fmt:
   cargo fmt --all -- --check

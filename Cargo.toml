@@ -44,7 +44,7 @@ large_stack_arrays = "deny"
 [dependencies]
 anyhow = "1"
 base64ct = { version = "1.8", features = ["alloc"] }
-bincode = "2.0"
+rkyv = { version = "0.8", features = ["bytecheck"] }
 blake3 = "1"
 bytes = "1"
 bytesize = "2"
@@ -67,7 +67,7 @@ percent-encoding = "2.3"
 quick-xml = { version = "0.38", features = ["serialize"] }
 rand = "0.9.1"
 regex = "1.11"
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
 ring = "0.17"
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -93,9 +93,9 @@ assets = [
 depends = ""
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["async_futures"] }
+criterion = { version = "0.8", features = ["async_futures"] }
 mockito = "1.7.0"
-testcontainers = "0.25"
+testcontainers = "0.26"
 
 [[bench]]
 name = "sha256_md5_digest_benchmark"
