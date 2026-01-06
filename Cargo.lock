@@ -2609,7 +2609,7 @@ checksum = "a50f4cf475b65d88e057964e0e9bb1f0aa9bbb2036dc65c64596b42932536984"
 
 [[package]]
 name = "s3m"
-version = "0.14.4"
+version = "0.14.5"
 dependencies = [
  "anyhow",
  "base64ct",
