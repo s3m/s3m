@@ -53,7 +53,7 @@ chrono = "0.4"
 clap = { version = "4", features = ["env", "string"] }
 colored = "3"
 crc32c = "0.6"
-crc32fast = "1.4"
+crc32fast = "1.5"
 crossbeam = "0.8"
 dirs = "6"
 env_logger = "0.11"
@@ -65,8 +65,8 @@ md5 = "0.8"
 num_cpus = "1.17"
 percent-encoding = "2.3"
 quick-xml = { version = "0.38", features = ["serialize"] }
-rand = "0.9.1"
-regex = "1.11"
+rand = "0.9.2"
+regex = "1.12"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
 ring = "0.17"
 secrecy = { version = "0.10.3", features = ["serde"] }
@@ -76,7 +76,7 @@ sled = "0.34"
 temp-env = "0.3.6"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1.17"
+tokio-stream = "0.1.18"
 tokio-util = { version = "0.7", features = ["codec"] }
 url = "2.5"
 zstd = "0.13"
@@ -94,7 +94,7 @@ depends = ""
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_futures"] }
-mockito = "1.7.0"
+mockito = "1.7.2"
 testcontainers = "0.26"
 
 [[bench]]
