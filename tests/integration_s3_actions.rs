@@ -6,7 +6,7 @@
     clippy::unnecessary_wraps
 )]
 
-use mockito::Server;
+use mockito::{Matcher, Server};
 use s3m::{
     cli::globals::GlobalArgs,
     s3::{
@@ -35,6 +35,7 @@ async fn test_delete_actions_request_success_and_error() {
     let mut server = Server::new_async().await;
     let _abort = server
         .mock("DELETE", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "upload-1".into()))
         .with_status(200)
         .with_body("")
         .create_async()
@@ -53,6 +54,7 @@ async fn test_delete_actions_request_success_and_error() {
         .await;
     let _abort_error = server
         .mock("DELETE", "/bucket/missing")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "upload-2".into()))
         .with_status(404)
         .with_header("content-type", "application/xml")
         .with_body(
@@ -98,12 +100,14 @@ async fn test_bucket_and_acl_actions_request_success() {
         .await;
     let _put_acl = server
         .mock("PUT", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("acl".into(), String::new()))
         .with_status(200)
         .with_header("ETag", "\"etag-value\"")
         .create_async()
         .await;
     let _get_acl = server
         .mock("GET", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("acl".into(), String::new()))
         .with_status(200)
         .with_header("content-type", "application/xml")
         .with_body("<AccessControlPolicy/>")
@@ -129,6 +133,7 @@ async fn test_object_metadata_actions_request_success() {
     let mut server = Server::new_async().await;
     let _attributes = server
         .mock("GET", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("attributes".into(), String::new()))
         .with_status(200)
         .with_body("<GetObjectAttributesOutput/>")
         .create_async()
@@ -184,6 +189,7 @@ async fn test_listing_actions_request_success() {
         .await;
     let _list_uploads = server
         .mock("GET", "/bucket")
+        .match_query(Matcher::UrlEncoded("uploads".into(), String::new()))
         .with_status(200)
         .with_header("content-type", "application/xml")
         .with_body(
@@ -198,6 +204,7 @@ async fn test_listing_actions_request_success() {
         .await;
     let _list_objects = server
         .mock("GET", "/bucket")
+        .match_query(Matcher::UrlEncoded("list-type".into(), "2".into()))
         .with_status(200)
         .with_header("content-type", "application/xml")
         .with_body(
@@ -213,6 +220,10 @@ async fn test_listing_actions_request_success() {
         .await;
     let _list_versions = server
         .mock("GET", "/bucket")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("prefix".into(), "prefix".into()),
+            Matcher::UrlEncoded("versions".into(), String::new()),
+        ]))
         .with_status(200)
         .with_header("content-type", "application/xml")
         .with_body(
@@ -256,6 +267,7 @@ async fn test_create_multipart_upload_request_success() {
     let mut server = Server::new_async().await;
     let _create_multipart = server
         .mock("POST", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploads".into(), String::new()))
         .with_status(200)
         .with_header("content-type", "application/xml")
         .with_body(
