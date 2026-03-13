@@ -3,15 +3,18 @@ use clap::{Arg, Command};
 pub fn command() -> Command {
     Command::new("cb")
         .about("Create a bucket")
+        .after_long_help("Examples:\n  s3m cb s3/new-bucket\n  s3m cb s3/new-bucket --acl private")
         .arg(
             Arg::new("arguments")
-                .help("<s3 provider>/<bucket name>")
+                .help("host/bucket")
+                .long_help("Bucket to create.\n\nExample:\n  s3/new-bucket")
                 .required(true)
                 .num_args(1),
         )
         .arg(
             Arg::new("acl")
                 .help("The canned ACL to apply to the object example")
+                .long_help("Set the canned ACL for the new bucket.")
                 .long("acl")
                 .value_parser([
                     "private",

@@ -2,16 +2,21 @@ use clap::{Arg, Command};
 
 pub fn command() -> Command {
     Command::new("acl")
-        .about("PUT or GET object ACL")
+        .about("Get or set an object's ACL")
+        .after_long_help(
+            "Examples:\n  s3m acl s3/my-bucket/file.dat\n  s3m acl s3/my-bucket/file.dat --acl public-read",
+        )
         .arg(
             Arg::new("arguments")
-                .help("<s3 provider>/<bucket>/<file>")
+                .help("host/bucket/object")
+                .long_help("Object path.\n\nExample:\n  s3/my-bucket/file.dat")
                 .required(true)
                 .num_args(1),
         )
         .arg(
             Arg::new("acl")
                 .help("The canned ACL to apply to the object example")
+                .long_help("Set a canned ACL on the object. If omitted, the current ACL is retrieved.")
                 .long("acl")
                 .value_parser([
                     "private",

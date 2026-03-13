@@ -4,15 +4,20 @@ use clap::{Arg, Command};
 pub fn command() -> Command {
     Command::new("share")
         .about("Share object using a presigned URL")
+        .after_long_help(
+            "Examples:\n  s3m share s3/my-bucket/file.dat\n  s3m share s3/my-bucket/file.dat --expire 3600",
+        )
         .arg(
             Arg::new("arguments")
-                .help("<s3 provider>/<bucket>/<file>")
+                .help("host/bucket/object")
+                .long_help("Object to share.\n\nExample:\n  s3/my-bucket/file.dat")
                 .required(true)
                 .num_args(1),
         )
         .arg(
             Arg::new("expire")
                 .help("Time period in seconds, max value 604800 (seven days)")
+                .long_help("Presigned URL expiration in seconds.\n\nMaximum: 604800 (7 days). Default: 43200 (12 hours).")
                 .long("expire")
                 .short('e')
                 .default_value("43200")

@@ -43,8 +43,16 @@ impl<'a> CreateMultipartUpload<'a> {
     pub async fn request(&self, s3: &S3) -> Result<InitiateMultipartUploadResult> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
 
-        let response =
-            request::request(url.clone(), self.http_method()?, headers, None, None, None).await?;
+        let response = request::request(
+            s3.client(),
+            url.clone(),
+            self.http_method()?,
+            headers,
+            None,
+            None,
+            None,
+        )
+        .await?;
 
         if response.status().is_success() {
             let body = response.text().await?;

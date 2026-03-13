@@ -154,8 +154,14 @@ impl<'a> CompleteMultipartUpload<'a> {
         // sign the request
         let (url, headers) = &self.sign(s3, digest.as_ref(), None, Some(body.len()))?;
 
-        let response =
-            request::upload(url.clone(), self.http_method()?, headers, Bytes::from(body)).await?;
+        let response = request::upload(
+            s3.client(),
+            url.clone(),
+            self.http_method()?,
+            headers,
+            Bytes::from(body),
+        )
+        .await?;
 
         if response.status().is_success() {
             let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;

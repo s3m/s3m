@@ -101,6 +101,7 @@ impl<'a> UploadPart<'a> {
         let (url, headers) = &self.sign(s3, sha256.as_ref(), Some(md5.as_ref()), Some(length))?;
 
         let response = request::multipart_upload(
+            s3.client(),
             url.clone(),
             self.http_method()?,
             headers,

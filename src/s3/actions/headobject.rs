@@ -28,8 +28,16 @@ impl<'a> HeadObject<'a> {
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: &S3) -> Result<BTreeMap<String, String>> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
-        let response =
-            request::request(url.clone(), self.http_method()?, headers, None, None, None).await?;
+        let response = request::request(
+            s3.client(),
+            url.clone(),
+            self.http_method()?,
+            headers,
+            None,
+            None,
+            None,
+        )
+        .await?;
         if response.status().is_success() {
             let mut h: BTreeMap<String, String> = BTreeMap::new();
             for (key, value) in response.headers() {

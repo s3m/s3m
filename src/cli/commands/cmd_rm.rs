@@ -2,16 +2,21 @@ use clap::{Arg, Command};
 
 pub fn command() -> Command {
     Command::new("rm")
-        .about("Delete objects, bucket (-b) and aborts a multipart upload")
+        .about("Delete an object, a bucket, or abort a multipart upload")
+        .after_long_help(
+            "Examples:\n  s3m rm s3/my-bucket/file.dat\n  s3m rm -b s3/my-bucket\n  s3m rm s3/my-bucket/file.dat --abort <upload-id>",
+        )
         .arg(
             Arg::new("arguments")
-                .help("<s3 provider>/<bucket>/<file>")
+                .help("host/bucket/object or host/bucket")
+                .long_help("Object or bucket target.\n\nExamples:\n  s3/my-bucket/file.dat\n  s3/my-bucket")
                 .required(true)
                 .num_args(1),
         )
         .arg(
             Arg::new("UploadId")
                 .help("aborts a multipart upload")
+                .long_help("Abort an in-progress multipart upload by upload ID.")
                 .long("abort")
                 .short('a')
                 .num_args(1),
@@ -19,6 +24,7 @@ pub fn command() -> Command {
         .arg(
             Arg::new("bucket")
                 .help("Delete bucket (All objects in the bucket must be deleted before it can be deleted)")
+                .long_help("Delete the bucket itself. The bucket must already be empty.")
                 .long("bucket")
                 .short('b')
                 .num_args(0),

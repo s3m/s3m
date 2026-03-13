@@ -1,3 +1,12 @@
+## 0.14.7
+* **HTTP client reuse**: Reuse a shared `reqwest::Client` across requests instead of creating a new client per operation. This improves connection pooling and TLS session reuse during multipart uploads and downloads.
+* **Progress handling cleanup**: Replaced the blocking progress channel path with Tokio-native async channels so progress reporting no longer blocks Tokio worker threads.
+* **CLI help improvements**: Kept `-h` short while expanding `--help` with clearer S3 path syntax, beginner-friendly wording, and practical examples for the main command and common subcommands.
+* **STDIN documentation**: Documented that regular file multipart uploads are resumable, but `STDIN` / `--pipe` uploads are not resumable after interruption and use fixed `512 MiB` multipart parts when the input size is unknown.
+* **Regression tests**: Added coverage for progress task shutdown/byte accumulation and for reusing the same HTTP client across multiple requests.
+* **Benchmarks**: Added benchmarks for the progress channel path and a more realistic read/hash/progress hot path. Results confirm progress signaling overhead is negligible compared with hashing and I/O.
+* **Dependencies**: Removed unused `crossbeam`, upgraded `quick-xml` to `0.39`, `rand` to `0.10.0`, and `testcontainers` to `0.27`.
+
 ## 0.14.5
 * **Replaced bincode with rkyv**: Migrated serialization from bincode to rkyv for zero-copy deserialization
   - Faster reads from sled database (no allocations on deserialize)

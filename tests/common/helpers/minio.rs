@@ -20,7 +20,10 @@
     clippy::missing_errors_doc
 )]
 
-use s3m::s3::{Credentials, Region, S3};
+use s3m::s3::{
+    Credentials, Region, S3,
+    actions::{CreateBucket, ListBuckets},
+};
 use secrecy::SecretString;
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
@@ -98,8 +101,10 @@ impl MinioContainer {
             &SecretString::new(self.secret_key.clone().into()),
         );
 
-        // Parse the endpoint to get the region (MinIO doesn't care about region)
-        let region = "us-east-1".parse::<Region>().expect("valid region");
+        let region = Region::Custom {
+            name: String::new(),
+            endpoint: self.endpoint.clone(),
+        };
 
         S3::new(&credentials, &region, bucket, false)
     }
@@ -119,48 +124,22 @@ impl MinioContainer {
     ///
     /// Result indicating success or failure
     pub async fn create_bucket(&self, bucket_name: &str) -> anyhow::Result<()> {
-        // Use reqwest to make a PUT request to create the bucket
-        let url = format!("{}/{}", self.endpoint, bucket_name);
-        let port = self.endpoint.split(':').next_back().unwrap_or("9000");
-        let response = reqwest::Client::new()
-            .put(&url)
-            .header("Host", format!("127.0.0.1:{port}"))
-            .send()
-            .await?;
-
-        if response.status().is_success() || response.status().as_u16() == 409 {
-            // 409 means bucket already exists, which is fine
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!(
-                "Failed to create bucket: {} - {}",
-                response.status(),
-                response.text().await?
-            ))
-        }
+        let s3 = self.create_s3_client(Some(bucket_name.to_string()));
+        CreateBucket::new("private").request(&s3).await?;
+        Ok(())
     }
 
     /// List all buckets in `MinIO`
     #[allow(dead_code)]
     pub async fn list_buckets(&self) -> anyhow::Result<Vec<String>> {
-        let url = &self.endpoint;
-        let port = self.endpoint.split(':').next_back().unwrap_or("9000");
-        let response = reqwest::Client::new()
-            .get(url)
-            .header("Host", format!("127.0.0.1:{port}"))
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            // Parse XML response to get bucket names
-            // For now, just return empty vec as this is a helper
-            Ok(Vec::new())
-        } else {
-            Err(anyhow::anyhow!(
-                "Failed to list buckets: {}",
-                response.status()
-            ))
-        }
+        let s3 = self.create_s3_client(None);
+        let buckets = ListBuckets::new(None).request(&s3).await?;
+        Ok(buckets
+            .buckets
+            .bucket
+            .into_iter()
+            .map(|bucket| bucket.name)
+            .collect())
     }
 
     /// Wait for `MinIO` to be ready to accept connections

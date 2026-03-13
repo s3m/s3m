@@ -20,8 +20,8 @@ use chacha20poly1305::{
     ChaCha20Poly1305,
     aead::{KeyInit, stream::EncryptorBE32},
 };
-use crossbeam::channel::{Sender, unbounded};
-use rand::{Rng, RngCore, rng};
+use indicatif::ProgressBar;
+use rand::{Rng, RngExt, rng};
 use ring::digest::{Context, SHA256};
 use secrecy::ExposeSecret;
 use std::{
@@ -32,7 +32,11 @@ use std::{
 };
 use tempfile::{Builder, NamedTempFile};
 use tokio::time::{Duration, sleep};
-use tokio::{io::Error, task};
+use tokio::{
+    io::Error,
+    sync::mpsc::{UnboundedSender, unbounded_channel},
+    task,
+};
 use zstd::stream::encode_all;
 
 // 512MB  to upload 5TB (the current max object size)
@@ -48,7 +52,7 @@ pub struct Stream<'a> {
     upload_id: &'a str,
     sha: ring::digest::Context,
     md5: md5::Context,
-    channel: Option<Sender<usize>>,
+    channel: Option<UnboundedSender<usize>>,
     tmp_dir: PathBuf,
     throttle: Option<usize>,
     retries: u32,
@@ -205,48 +209,53 @@ async fn initiate_multipart_upload(
     Ok(response.upload_id)
 }
 
-async fn setup_progress(
-    quiet: bool,
-    size: Option<u64>,
-) -> Option<crossbeam::channel::Sender<usize>> {
+async fn setup_progress(quiet: bool, size: Option<u64>) -> Option<UnboundedSender<usize>> {
     if quiet {
         return None;
     }
 
-    let (sender, receiver) = unbounded::<usize>();
+    let (sender, receiver) = unbounded_channel::<usize>();
 
     if let Some(size) = size {
         if let Some(pb) = Bar::new(size).progress {
-            tokio::spawn(async move {
-                let mut uploaded = 0;
-
-                while let Ok(bytes_count) = receiver.recv() {
-                    let new = min(uploaded + bytes_count as u64, size);
-                    uploaded = new;
-                    pb.set_position(new);
-                }
-
-                log::debug!("Progress channel closed — total uploaded: {uploaded}");
-
-                pb.finish();
-            });
+            spawn_progress_task(receiver, pb, Some(size));
+            return Some(sender);
         }
-    } else if let Some(pb) = Bar::new_spinner_stream().progress {
-        tokio::spawn(async move {
-            let mut uploaded = 0;
-
-            while let Ok(bytes_count) = receiver.recv() {
-                uploaded += bytes_count;
-                pb.set_message(ByteSize(uploaded as u64).to_string());
-            }
-
-            log::debug!("Progress channel closed — total uploaded: {uploaded}");
-
-            pb.finish();
-        });
+        return None;
     }
 
-    Some(sender)
+    if let Some(pb) = Bar::new_spinner_stream().progress {
+        spawn_progress_task(receiver, pb, None);
+        return Some(sender);
+    }
+
+    None
+}
+
+fn spawn_progress_task(
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<usize>,
+    pb: ProgressBar,
+    size: Option<u64>,
+) -> task::JoinHandle<u64> {
+    tokio::spawn(async move {
+        let mut uploaded = 0;
+
+        while let Some(bytes_count) = receiver.recv().await {
+            if let Some(size) = size {
+                let new = min(uploaded + bytes_count as u64, size);
+                uploaded = new;
+                pb.set_position(new);
+            } else {
+                uploaded += bytes_count as u64;
+                pb.set_message(ByteSize(uploaded).to_string());
+            }
+        }
+
+        log::debug!("Progress channel closed — total uploaded: {uploaded}");
+
+        pb.finish();
+        uploaded
+    })
 }
 
 /// Create the initial stream with nonce header
@@ -256,7 +265,7 @@ fn create_initial_stream<'a>(
     tmp_dir: &Path,
     key: &'a str,
     s3: &'a S3,
-    progress_sender: Option<crossbeam::channel::Sender<usize>>,
+    progress_sender: Option<UnboundedSender<usize>>,
     globals: &GlobalArgs,
     header_data: Option<&[u8]>,
 ) -> Result<Stream<'a>> {
@@ -458,7 +467,9 @@ mod tests {
     use super::*;
     use crate::s3::{Credentials, Region, S3};
     use chacha20poly1305::aead::stream::EncryptorBE32;
+    use indicatif::ProgressBar;
     use secrecy::SecretString;
+    use tokio::{sync::mpsc::unbounded_channel, time::timeout};
 
     #[test]
     fn test_get_key() {
@@ -675,6 +686,40 @@ mod tests {
         let result = maybe_upload_part(&mut stream, buffer_size).await;
 
         println!("Result: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_progress_task_finishes_when_sender_dropped() {
+        let (sender, receiver) = unbounded_channel();
+        let handle = spawn_progress_task(receiver, ProgressBar::hidden(), Some(10));
+
+        sender.send(4).unwrap();
+        sender.send(10).unwrap();
+        drop(sender);
+
+        let uploaded = timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(uploaded, 10);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_progress_task_accumulates_stream_bytes() {
+        let (sender, receiver) = unbounded_channel();
+        let handle = spawn_progress_task(receiver, ProgressBar::hidden(), None);
+
+        sender.send(4).unwrap();
+        sender.send(5).unwrap();
+        drop(sender);
+
+        let uploaded = timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(uploaded, 9);
     }
 
     // Comprehensive tests for complete_multipart_upload to prevent regressions

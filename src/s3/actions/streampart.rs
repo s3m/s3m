@@ -4,9 +4,9 @@ use crate::{
     s3::{S3, request},
 };
 use anyhow::{Result, anyhow};
-use crossbeam::channel::Sender;
 use reqwest::Method;
 use std::{collections::BTreeMap, path::Path};
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Clone)]
 pub struct StreamPart<'a> {
@@ -16,7 +16,7 @@ pub struct StreamPart<'a> {
     upload_id: &'a str,
     length: usize,
     digest: (&'a [u8], &'a [u8]),
-    sender: Option<Sender<usize>>,
+    sender: Option<UnboundedSender<usize>>,
 }
 
 impl<'a> StreamPart<'a> {
@@ -28,7 +28,7 @@ impl<'a> StreamPart<'a> {
         upload_id: &'a str,
         length: usize,
         digest: (&'a [u8], &'a [u8]),
-        sender: Option<Sender<usize>>,
+        sender: Option<UnboundedSender<usize>>,
     ) -> Self {
         let pn = part_number.to_string();
         Self {
@@ -50,6 +50,7 @@ impl<'a> StreamPart<'a> {
             &self.sign(s3, self.digest.0, Some(self.digest.1), Some(self.length))?;
 
         let response = request::request(
+            s3.client(),
             url.clone(),
             self.http_method()?,
             headers,

@@ -32,6 +32,7 @@ impl<'a> GetObject<'a> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
 
         let response = request::request(
+            s3.client(),
             url.clone(),
             self.http_method()?,
             headers,

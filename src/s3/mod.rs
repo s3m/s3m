@@ -11,6 +11,7 @@ pub use self::{credentials::Credentials, region::Region, signature::Signature};
 
 use crate::s3::tools::{sha256_digest, write_hex_bytes};
 use anyhow::Result;
+use reqwest::Client;
 use std::fmt;
 use url::Url;
 
@@ -24,6 +25,8 @@ pub struct S3 {
     bucket: Option<String>,
     // sign request
     no_sign_request: bool,
+    // shared HTTP client for connection pooling and TLS session reuse
+    client: Client,
 }
 
 impl fmt::Display for S3 {
@@ -52,7 +55,13 @@ impl S3 {
             region: region.clone(),
             bucket,
             no_sign_request,
+            client: Client::new(),
         }
+    }
+
+    #[must_use]
+    pub const fn client(&self) -> &Client {
+        &self.client
     }
 
     // use it to identify the connection and keep track of the uploaded files so that the same file

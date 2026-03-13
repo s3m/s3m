@@ -166,6 +166,13 @@ s3m --throttle 10240 file.dat s3/backups/file.dat  # 10MB/s
 s3m --retries 5 file.dat s3/bucket/file.dat
 ```
 
+## Notes for `STDIN` / `--pipe`
+
+- Regular file multipart uploads can be resumed.
+- `STDIN` / `--pipe` uploads are not resumable after interruption because the original input stream cannot be replayed safely.
+- When the input size is unknown, `s3m` uses a fixed multipart buffer of `512 MiB` per part.
+- For interrupted or failed multipart uploads from streaming paths, configure bucket lifecycle rules to clean up incomplete multipart uploads automatically.
+
 ## Development
 
 ### Running Tests

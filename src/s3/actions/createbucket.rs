@@ -31,8 +31,14 @@ impl<'a> CreateBucket<'a> {
         );
 
         let (url, headers) = &self.sign(s3, tools::sha256_digest(&xml).as_ref(), None, None)?;
-        let response =
-            request::upload(url.clone(), self.http_method()?, headers, Bytes::from(xml)).await?;
+        let response = request::upload(
+            s3.client(),
+            url.clone(),
+            self.http_method()?,
+            headers,
+            Bytes::from(xml),
+        )
+        .await?;
 
         if response.status().is_success() {
             let mut h: BTreeMap<&str, String> = BTreeMap::new();

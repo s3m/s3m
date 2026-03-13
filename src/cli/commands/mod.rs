@@ -59,6 +59,31 @@ pub fn validator_is_dir() -> ValueParser {
     })
 }
 
+const LONG_ABOUT: &str =
+    "Store files and streams in S3-compatible object storage using a named host from config.yml.";
+
+const LONG_AFTER_HELP: &str = "\
+Path format:
+  host/bucket/object
+
+What is 'host'?
+  A host is a named entry in ~/.config/s3m/config.yml, for example:
+    aws
+    minio
+    backblaze
+
+Examples:
+  s3m file.dat s3/my-bucket/file.dat
+  mariadb-dump db | s3m --pipe s3/backups/db.sql
+  s3m --compress dump.sql s3/backups/dump.sql.zst
+  s3m get s3/my-bucket/file.dat /tmp/file.dat
+
+Notes:
+  File multipart uploads can be resumed.
+  STDIN / --pipe uploads cannot be resumed after interruption.
+  Unknown-size STDIN uploads use fixed 512 MiB multipart parts.
+";
+
 #[allow(clippy::too_many_lines)]
 pub fn new(config_path: &Path) -> Command {
     // get config file path (default: ~/.config/s3m/config.yml)
@@ -78,6 +103,9 @@ pub fn new(config_path: &Path) -> Command {
 
     Command::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
+        .about("Store files and streams in S3-compatible object storage")
+        .long_about(LONG_ABOUT)
+        .after_long_help(LONG_AFTER_HELP)
         .subcommand_negates_reqs(true)
         .color(ColorChoice::Auto)
         .styles(styles)
@@ -85,11 +113,16 @@ pub fn new(config_path: &Path) -> Command {
             Arg::new("clean")
             .long("clean")
             .help(format!("remove {} directory", config_streams_path.display()))
+            .long_help(format!(
+                "Remove the local resume/cache directory used for multipart state.\n\nPath: {}",
+                config_streams_path.display()
+            ))
             .num_args(0)
         )
         .arg(
             Arg::new("checksum")
             .help("Additional checksums algorithms")
+            .long_help("Request an additional object checksum.\n\nSupported values: crc32, crc32c, sha1, sha256.\nOnly applies to file uploads, not --pipe.")
             .long("checksum")
             .value_parser([
                 "crc32",
@@ -106,11 +139,13 @@ pub fn new(config_path: &Path) -> Command {
             .long("quiet")
             .short('q')
             .help("Don't show progress bar")
+            .long_help("Disable progress output. Useful for scripts and cron jobs.")
             .num_args(0)
         )
         .arg(
             Arg::new("acl")
             .help("The canned ACL to apply to the object example")
+            .long_help("Apply a canned ACL to the uploaded object or bucket.\n\nCommon values: private, public-read, bucket-owner-full-control.")
             .long("acl")
             .value_parser([
                 "private",
@@ -128,7 +163,8 @@ pub fn new(config_path: &Path) -> Command {
             Arg::new("meta")
             .long("meta")
             .short('m')
-            .help("User-defined object metadata \"x-amz-meta-*\", example: \"key1=value1;key2=value2\"")
+            .help("Object metadata, example: \"key1=value1;key2=value2\"")
+            .long_help("Attach user-defined object metadata.\n\nFormat:\n  key1=value1;key2=value2\n\nThis becomes x-amz-meta-* headers on upload.")
             .value_parser(validator_key_value())
             .num_args(1)
         )
@@ -137,12 +173,14 @@ pub fn new(config_path: &Path) -> Command {
             .long("pipe")
             .short('p')
             .help("Read from STDIN")
+            .long_help("Read upload data from STDIN instead of a local file.\n\nUseful for pipelines such as pg_dump, mariadb-dump or backup tools.\nSTDIN uploads are not resumable after interruption.")
             .num_args(0)
         )
         .arg(
             Arg::new("buffer")
             .default_value("10485760")
             .help("Buffer \"part size\" in bytes, doesn't apply when reading from STDIN (--pipe option)")
+            .long_help("Multipart part size in bytes for file uploads.\n\nDefault: 10485760 (10 MiB).\nDoes not apply to --pipe, which uses a fixed streaming buffer.")
             .long("buffer")
             .short('b')
             .num_args(1)
@@ -152,6 +190,7 @@ pub fn new(config_path: &Path) -> Command {
             Arg::new("config")
             .default_value(config_file_path.into_os_string())
             .long("config")
+            .long_help("Path to config.yml.\n\nDefault:\n  ~/.config/s3m/config.yml")
             .num_args(1)
             .short('c')
             .value_parser(validator_is_file())
@@ -159,13 +198,15 @@ pub fn new(config_path: &Path) -> Command {
         )
         .arg(
             Arg::new("arguments")
-            .help("/path/to/file <s3 provider>/<bucket>/<file>")
+            .help("/path/to/file host/bucket/object")
+            .long_help("Upload syntax:\n  /path/to/file host/bucket/object\n\nExamples:\n  file.dat s3/my-bucket/file.dat\n  /backups/db.sql minio/backups/db.sql\n\nWhen using --pipe, only the destination object path is required:\n  s3/backups/db.sql")
             .required_unless_present_any(["clean", "decrypt"])
             .num_args(1..=2)
         )
         .arg(
             Arg::new("tmp-dir")
             .help("Specify a directory for temporarily storing the STDIN buffer")
+            .long_help("Directory used for temporary streaming buffers.\n\nThis matters mainly for --pipe, compression and encryption paths.")
             .short('t')
             .long("tmp-dir")
             .default_value(std::env::temp_dir().into_os_string())
@@ -175,6 +216,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("verbose")
             .help("Verbosity level")
+            .long_help("Increase log verbosity.\n\n-v for info, -vv for debug, -vvv for trace.")
             .short('v')
             .long("verbose")
             .global(true)
@@ -183,6 +225,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("number")
             .help("Number of max concurrent requests")
+            .long_help("Maximum number of concurrent multipart requests.\n\nDefault is based on available CPUs.")
             .short('n')
             .long("number")
             .default_value(num_threads)
@@ -192,6 +235,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("no-sign-request")
             .help("Make requests as anonymous user (no credentials used)")
+            .long_help("Make unsigned requests. Useful for public buckets or anonymous endpoints.")
             .long("no-sign-request")
             .global(true)
             .num_args(0)
@@ -199,6 +243,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("throttle")
             .help("Bandwidth throttle in kilobytes per second, 0 to disable")
+            .long_help("Limit upload/download bandwidth in kilobytes per second.\n\nUse 0 to disable throttling.")
             .long("kilobytes")
             .short('k')
             .default_value("0")
@@ -210,6 +255,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("retries")
             .help("Number of retries")
+            .long_help("Number of retry attempts for failed upload parts or streaming requests.")
             .long("retries")
             .short('r')
             .default_value("3")
@@ -219,6 +265,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("compress")
             .help("Compress")
+            .long_help("Compress input using zstd before upload.")
             .long("compress")
             .short('x')
             .num_args(0)
@@ -227,6 +274,7 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("decrypt")
             .help("Decrypt encrypted file with s3m, need to provide the key")
+            .long_help("Decrypt a file previously encrypted by s3m.\n\nUsage:\n  s3m --decrypt file.enc <32-byte-key>")
             .long("decrypt")
             .short('d')
             .num_args(2)
@@ -346,6 +394,31 @@ hosts:
         // get matches
         let m = m.unwrap();
         assert_eq!(m.get_one::<bool>("pipe").copied(), Some(true));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_short_help_stays_compact() -> Result<()> {
+        let config = get_config().unwrap();
+        let mut cmd = new(&config);
+        let short_help = cmd.render_help().to_string();
+
+        assert!(!short_help.contains("Examples:"));
+        assert!(!short_help.contains("STDIN / --pipe uploads cannot be resumed"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_long_help_contains_examples_and_notes() -> Result<()> {
+        let config = get_config().unwrap();
+        let mut cmd = new(&config);
+        let long_help = cmd.render_long_help().to_string();
+
+        assert!(long_help.contains("Examples:"));
+        assert!(long_help.contains("mariadb-dump db | s3m --pipe"));
+        assert!(long_help.contains("STDIN / --pipe uploads cannot be resumed"));
 
         Ok(())
     }

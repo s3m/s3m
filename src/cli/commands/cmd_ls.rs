@@ -3,15 +3,20 @@ use clap::{Arg, Command};
 pub fn command() -> Command {
     Command::new("ls")
         .about("List objects and in-progress multipart uploads")
+        .after_long_help(
+            "Examples:\n  s3m ls s3\n  s3m ls s3/my-bucket\n  s3m ls s3/my-bucket --prefix backups/\n  s3m ls s3/my-bucket --multipart",
+        )
         .arg(
             Arg::new("arguments")
-                .help("<s3 provider> (referred to as 'host') to list all buckets, or \"host/bucket\" to list the contents of a specific bucket")
+                .help("host or host/bucket")
+                .long_help("List all buckets for a host, or list the contents of one bucket.\n\nExamples:\n  s3\n  s3/my-bucket")
                 .required(true)
                 .num_args(1),
         )
         .arg(
             Arg::new("ListMultipartUploads")
                 .help("Lists in-progress multipart uploads")
+                .long_help("List in-progress multipart uploads instead of normal objects.")
                 .long("multipart")
                 .short('m')
                 .num_args(0),
@@ -19,6 +24,7 @@ pub fn command() -> Command {
         .arg(
             Arg::new("prefix")
                 .help("Limits the response to keys that begin with the specified prefix")
+                .long_help("Only list keys that start with the given prefix.")
                 .long("prefix")
                 .short('p')
                 .num_args(1),
@@ -26,6 +32,7 @@ pub fn command() -> Command {
         .arg(
             Arg::new("start-after")
                 .help("Starts listing after this specified key")
+                .long_help("Start listing after the specified key.")
                 .long("start-after")
                 .short('a')
                 .num_args(1),
@@ -33,6 +40,7 @@ pub fn command() -> Command {
         .arg(
             Arg::new("max-kub")
                 .help("Limits the number of keys, uploads or buckets returned in the response")
+                .long_help("Maximum number of buckets, objects or uploads to return.")
                 .long("number")
                 .short('n')
                 .value_name("NUMBER")

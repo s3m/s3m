@@ -3,7 +3,6 @@
 
 use anyhow::Result;
 use bytes::Bytes;
-use crossbeam::channel::Sender;
 use futures::stream::TryStreamExt;
 use reqwest::{
     Body, Client, Response,
@@ -14,6 +13,7 @@ use tokio::time::Duration;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
+    sync::mpsc::UnboundedSender,
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
@@ -44,11 +44,12 @@ fn calculate_duration_per_chunk(bandwidth_kb_per_sec: usize, chunk_size: usize) 
 ///
 /// Will return `Err` if can not make the request
 pub async fn request(
+    client: &Client,
     url: Url,
     method: reqwest::Method,
     headers: &BTreeMap<String, String>,
     file: Option<&Path>,
-    sender: Option<Sender<usize>>,
+    sender: Option<UnboundedSender<usize>>,
     throttle: Option<usize>,
 ) -> Result<Response> {
     let headers = headers
@@ -57,8 +58,6 @@ pub async fn request(
         .collect::<Result<HeaderMap>>()?;
 
     log::debug!("HTTP method: {method}, Headers: {headers:#?}");
-
-    let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
 
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
@@ -71,8 +70,8 @@ pub async fn request(
                     if let Some(tx) = &sender {
                         log::trace!("Sending {} bytes", chunk.len());
 
-                        if let Err(e) = tx.send(chunk.len()) {
-                            eprintln!("{} - {}", e, chunk.len());
+                        if tx.send(chunk.len()).is_err() {
+                            log::trace!("Progress receiver dropped");
                         }
                     }
                 })
@@ -92,14 +91,25 @@ pub async fn request(
 
             let body = Body::wrap_stream(rate_limited_stream);
 
-            client.request(method, url).headers(headers).body(body)
+            client
+                .request(method, url)
+                .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+                .headers(headers)
+                .body(body)
         } else {
             let body = Body::wrap_stream(stream);
 
-            client.request(method, url).headers(headers).body(body)
+            client
+                .request(method, url)
+                .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+                .headers(headers)
+                .body(body)
         }
     } else {
-        client.request(method, url).headers(headers)
+        client
+            .request(method, url)
+            .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+            .headers(headers)
     };
 
     Ok(request.send().await?)
@@ -108,7 +118,9 @@ pub async fn request(
 /// # Errors
 ///
 /// Will return `Err` if can not make the request
+#[allow(clippy::too_many_arguments)]
 pub async fn multipart_upload(
+    client: &Client,
     url: Url,
     method: reqwest::Method,
     headers: &BTreeMap<String, String>,
@@ -123,8 +135,6 @@ pub async fn multipart_upload(
         .collect::<Result<HeaderMap>>()?;
 
     log::debug!("HTTP method: {method}, Headers: {headers:#?}");
-
-    let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
 
     // async read
     let mut file = File::open(&file).await?;
@@ -152,11 +162,19 @@ pub async fn multipart_upload(
 
         let body = Body::wrap_stream(rate_limited_stream);
 
-        client.request(method, url).headers(headers).body(body)
+        client
+            .request(method, url)
+            .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+            .headers(headers)
+            .body(body)
     } else {
         let body = Body::wrap_stream(stream);
 
-        client.request(method, url).headers(headers).body(body)
+        client
+            .request(method, url)
+            .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+            .headers(headers)
+            .body(body)
     };
 
     Ok(request.send().await?)
@@ -166,6 +184,7 @@ pub async fn multipart_upload(
 ///
 /// Will return `Err` if can not make the request
 pub async fn upload(
+    client: &Client,
     url: Url,
     method: reqwest::Method,
     headers: &BTreeMap<String, String>,
@@ -178,9 +197,11 @@ pub async fn upload(
 
     log::debug!("HTTP method: {method}, Headers: {headers:#?}");
 
-    let client = Client::builder().user_agent(APP_USER_AGENT).build()?;
-
-    let request = client.request(method, url).headers(headers).body(body);
+    let request = client
+        .request(method, url)
+        .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+        .headers(headers)
+        .body(body);
 
     Ok(request.send().await?)
 }
@@ -225,10 +246,11 @@ mod tests {
 
         let headers = BTreeMap::new();
         let body = Bytes::from("test data");
+        let client = Client::new();
 
         let url = format!("{}/test", server.url()).parse::<Url>().unwrap();
 
-        let response = upload(url, reqwest::Method::GET, &headers, body).await;
+        let response = upload(&client, url, reqwest::Method::GET, &headers, body).await;
 
         assert!(response.is_ok());
         let response = response.unwrap();
@@ -248,15 +270,63 @@ mod tests {
 
         let headers = BTreeMap::new();
         let body = Bytes::from("test data");
+        let client = Client::new();
 
         let url = format!("{}/test", server.url()).parse::<Url>().unwrap();
 
-        let response = upload(url, reqwest::Method::POST, &headers, body).await;
+        let response = upload(&client, url, reqwest::Method::POST, &headers, body).await;
 
         println!("Response: {response:?}");
 
         assert!(response.is_ok());
         let response = response.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_upload_reuses_same_client_for_multiple_requests() {
+        let mut server = Server::new_async().await;
+        let _first = server
+            .mock("POST", "/first")
+            .with_status(200)
+            .match_header("User-Agent", APP_USER_AGENT)
+            .match_body("first")
+            .create_async()
+            .await;
+        let _second = server
+            .mock("POST", "/second")
+            .with_status(200)
+            .match_header("User-Agent", APP_USER_AGENT)
+            .match_body("second")
+            .create_async()
+            .await;
+
+        let client = Client::new();
+        let headers = BTreeMap::new();
+
+        let first_url = format!("{}/first", server.url()).parse::<Url>().unwrap();
+        let second_url = format!("{}/second", server.url()).parse::<Url>().unwrap();
+
+        let first = upload(
+            &client,
+            first_url,
+            reqwest::Method::POST,
+            &headers,
+            Bytes::from("first"),
+        )
+        .await
+        .unwrap();
+        let second = upload(
+            &client,
+            second_url,
+            reqwest::Method::POST,
+            &headers,
+            Bytes::from("second"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
     }
 }

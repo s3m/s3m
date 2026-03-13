@@ -8,10 +8,10 @@ use crate::{
     },
 };
 use anyhow::{Result, anyhow};
-use crossbeam::channel::Sender;
 use reqwest::Method;
 use std::collections::BTreeMap;
 use std::path::Path;
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug)]
 pub struct PutObject<'a> {
@@ -19,7 +19,7 @@ pub struct PutObject<'a> {
     file: &'a Path,
     acl: Option<String>,
     meta: Option<BTreeMap<String, String>>,
-    sender: Option<Sender<usize>>,
+    sender: Option<UnboundedSender<usize>>,
     additional_checksum: Option<Checksum>,
 }
 
@@ -30,7 +30,7 @@ impl<'a> PutObject<'a> {
         file: &'a Path,
         acl: Option<String>,
         meta: Option<BTreeMap<String, String>>,
-        sender: Option<Sender<usize>>,
+        sender: Option<UnboundedSender<usize>>,
         additional_checksum: Option<Checksum>,
     ) -> Self {
         Self {
@@ -52,6 +52,7 @@ impl<'a> PutObject<'a> {
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
 
         let response = request::request(
+            s3.client(),
             url.clone(),
             self.http_method()?,
             headers,
