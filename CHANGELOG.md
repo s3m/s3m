@@ -1,3 +1,8 @@
+## 0.14.8
+* **Regression tests**: Added direct action-layer `request()` coverage against mocked S3 responses to reduce the coverage drop caused by the shared `reqwest::Client` refactor.
+* **E2E test helper fixes**: Updated the MinIO test helpers to create buckets through signed S3 actions instead of unsigned raw HTTP, restoring the ignored MinIO/Podman-backed end-to-end suite.
+* **CI maintenance**: Updated `actions/cache` to `v5` in the container integration workflow to stay compatible with GitHub Actions Node.js 24.
+
 ## 0.14.7
 * **HTTP client reuse**: Reuse a shared `reqwest::Client` across requests instead of creating a new client per operation. This improves connection pooling and TLS session reuse during multipart uploads and downloads.
 * **Progress handling cleanup**: Replaced the blocking progress channel path with Tokio-native async channels so progress reporting no longer blocks Tokio worker threads.
