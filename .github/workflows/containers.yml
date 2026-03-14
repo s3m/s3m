@@ -85,7 +85,7 @@ jobs:
         run: cargo build --bin s3m
 
       - name: Run integration test suite
-        run: cargo test --tests -- --ignored --test-threads=1
+        run: cargo test --tests -- --test-threads=1
         env:
           RUST_BACKTRACE: 1
           RUST_LOG: debug
@@ -107,7 +107,7 @@ jobs:
         run: |
           if [ "${{ needs.minio-tests.result }}" == "success" ]; then
             echo "✅ All container integration tests passed!"
-            echo "- MinIO-backed integration suite completed (all ignored tests)"
+            echo "- MinIO-backed integration suite completed"
           else
             echo "❌ Container integration tests failed"
             exit 1

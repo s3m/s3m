@@ -71,6 +71,10 @@ pub use self::abortmultipartupload::AbortMultipartUpload;
 mod deleteobject;
 pub use self::deleteobject::DeleteObject;
 
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html>
+mod deleteobjects;
+pub use self::deleteobjects::{DeleteObjects, ObjectIdentifier};
+
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html>
 mod createbucket;
 pub use self::createbucket::CreateBucket;

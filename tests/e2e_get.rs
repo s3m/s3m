@@ -24,7 +24,6 @@ use std::process::Command;
 use tempfile::{NamedTempFile, TempDir};
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_put_and_get_object() {
     let minio = MinioContext::get_or_start().await;
 
@@ -65,7 +64,6 @@ async fn test_e2e_put_and_get_object() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_decrypt_and_verify_hash() {
     let minio = MinioContext::get_or_start().await;
 
@@ -140,7 +138,6 @@ async fn test_e2e_decrypt_and_verify_hash() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_decompress_and_verify_hash() {
     let minio = MinioContext::get_or_start().await;
 

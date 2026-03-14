@@ -14,7 +14,6 @@ use std::io::Write;
 use tempfile::NamedTempFile;
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_delete_object() {
     let minio = MinioContext::get_or_start().await;
 

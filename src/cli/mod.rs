@@ -2,6 +2,7 @@ mod config;
 pub use self::config::{Config, Host};
 
 pub mod actions;
+pub mod age_filter;
 pub mod globals;
 pub mod progressbar;
 

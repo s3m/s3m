@@ -183,28 +183,26 @@ print_info "  MINIO_SECRET_KEY=${MINIO_SECRET_KEY}"
 echo ""
 
 # Run the tests
-print_info "Running end-to-end binary tests..."
+print_info "Running integration tests against MinIO..."
 echo ""
 
-# Build the test command - run e2e tests only
+# Build the test command
 if [ $# -gt 0 ]; then
-    # User provided specific test filter
-    TEST_CMD="cargo test --test e2e_binary -- --ignored $*"
+    TEST_CMD=(cargo test "$@")
 else
-    # Run all ignored tests
-    TEST_CMD="cargo test --test e2e_binary -- --ignored"
+    TEST_CMD=(cargo test --tests -- --test-threads=1)
 fi
 
-print_info "Executing: $TEST_CMD"
+print_info "Executing: ${TEST_CMD[*]}"
 echo ""
 
 # Run the tests
-if eval "$TEST_CMD"; then
+if "${TEST_CMD[@]}"; then
     echo ""
     print_info "✓ All tests passed!"
     echo ""
     print_info "Test Summary:"
-    print_info "  - End-to-end binary tests: 16 tests"
+    print_info "  - Integration and e2e tests completed against external MinIO"
     echo ""
     print_info "MinIO container '${MINIO_CONTAINER_NAME}' is still running for faster subsequent test runs"
     print_info "To stop it: podman stop ${MINIO_CONTAINER_NAME}"

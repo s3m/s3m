@@ -1,3 +1,16 @@
+## 0.15.0 🚀
+* **Multi-object delete**: Added low-level S3 `DeleteObjects` support, including XML request generation, response parsing for deleted objects and per-object errors, and request batching up to `1000` objects.
+* **`rm` improvements**: `s3m rm` now accepts multiple object paths. A single object still uses `DeleteObject`; `2+` object targets use `DeleteObjects`, grouped by host/bucket and split into `1000`-key batches as needed.
+* **Bucket delete orchestration**: Added CLI-side recursive bucket deletion support that removes bucket contents in batches before issuing `DeleteBucket`, while keeping the low-level bucket delete action thin.
+* **Multipart stream state commands**: Added `s3m streams`, `streams ls`, `streams show <id>`, `streams resume <id>`, and `streams clean` for inspecting and managing local resumable multipart upload state. Legacy `--clean` now uses the same conservative cleanup path.
+* **Stream state output improvements**: `streams ls` now prints copyable stream IDs, a header row, truncated upload IDs for list view, and colorized statuses to make broken/resumable/active state easier to scan quickly.
+* **`du` command**: Added `s3m du` to summarize object count and total bytes for a bucket or prefix using paginated `ListObjectsV2` aggregation without storing every object in memory.
+* **`du --group-by day`**: Added per-day usage summaries grouped by each object's `LastModified` UTC calendar day, with deterministic date ordering and a final total row.
+* **Retention filters**: Added `--older-than` filtering for `ls` and object-mode `rm` using each object's `LastModified`, with positive-only duration parsing for `Nd`, `Nh`, and `Nm`.
+* **JSON output**: Added `--json` output for `ls`, `get --meta`, `get --versions`, `du`, `streams`, `streams ls`, `streams show`, and `streams clean`, keeping text output unchanged by default and emitting valid machine-readable JSON only when requested.
+* **Documentation**: Updated the README and the `s3m.stream` docs site to cover `du`, `streams`, retention-oriented delete/list filtering, and the new JSON output mode.
+* **Regression tests**: Added unit, action-layer, binary integration, and mocked S3 coverage for `DeleteObjects`, multi-object `rm` grouping/batching/error handling, recursive bucket deletion orchestration, stream state commands, and `du` including grouped day summaries.
+
 ## 0.14.8
 * **Regression tests**: Added direct action-layer `request()` coverage against mocked S3 responses to reduce the coverage drop caused by the shared `reqwest::Client` refactor.
 * **E2E test helper fixes**: Updated the MinIO test helpers to create buckets through signed S3 actions instead of unsigned raw HTTP, restoring the ignored MinIO/Podman-backed end-to-end suite.

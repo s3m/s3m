@@ -5,11 +5,13 @@
 //!
 //! ## Usage with Podman
 //!
-//! Set the following environment variables before running tests:
+//! The test harness auto-detects common Podman socket paths. You can also
+//! point tests at an already-running external `MinIO` via:
 //! ```bash
-//! export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
-//! export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/run/user/$(id -u)/podman/podman.sock
-//! cargo test --test integration_minio_real
+//! export MINIO_ENDPOINT=http://127.0.0.1:9000
+//! export MINIO_ACCESS_KEY=minioadmin
+//! export MINIO_SECRET_KEY=minioadmin
+//! cargo test --tests -- --test-threads=1
 //! ```
 
 #![allow(
@@ -65,7 +67,7 @@ impl MinioContainer {
         let container = image
             .start()
             .await
-            .expect("Failed to start MinIO container");
+            .expect(crate::minio_runtime::STARTUP_HINT);
 
         let port = container
             .get_host_port_ipv4(ContainerPort::Tcp(9000))

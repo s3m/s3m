@@ -7,11 +7,16 @@ use crate::{
         tools,
     },
     stream::{
-        db::Db, upload_compressed::stream_compressed,
-        upload_compressed_encrypted::stream_compressed_encrypted, upload_default::upload,
-        upload_encrypted::stream_encrypted, upload_multipart::upload_multipart,
+        db::Db,
+        state::{StreamMetadata, StreamMode, write_metadata},
+        upload_compressed::stream_compressed,
+        upload_compressed_encrypted::stream_compressed_encrypted,
+        upload_default::upload,
+        upload_encrypted::stream_encrypted,
+        upload_multipart::upload_multipart,
         upload_stdin::stream_stdin,
         upload_stdin_compressed_encrypted::stream_stdin_compressed_encrypted,
+        upload_stdin_encrypted::stream_stdin_encrypted,
     },
 };
 use anyhow::{Context, Result, anyhow};
@@ -31,6 +36,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         meta,
         buf_size,
         file,
+        host,
         key,
         pipe,
         s3m_dir,
@@ -43,15 +49,21 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         if pipe {
             log::debug!("PIPE - streaming from stdin");
 
-            let etag = if globals.compress && globals.encrypt {
-                log::info!(
-                    "COMPRESS + ENCRYPT - streaming compressed and encrypted data from stdin"
-                );
+            let etag = match (globals.compress, globals.encrypt) {
+                (true, true) => {
+                    log::info!(
+                        "COMPRESS + ENCRYPT - streaming compressed and encrypted data from stdin"
+                    );
 
-                stream_stdin_compressed_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals)
-                    .await?
-            } else {
-                stream_stdin(s3, &key, acl, meta, quiet, tmp_dir, globals).await?
+                    stream_stdin_compressed_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals)
+                        .await?
+                }
+                (false, true) => {
+                    log::info!("ENCRYPT - streaming encrypted data from stdin");
+
+                    stream_stdin_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals).await?
+                }
+                _ => stream_stdin(s3, &key, acl, meta, quiet, tmp_dir, globals).await?,
             };
 
             print_etag(&etag, quiet);
@@ -133,6 +145,36 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                     // keep track of the uploaded parts
                     let db = Db::new(s3, &key, &blake3_checksum, file_mtime, &s3m_dir)
                         .context("could not create stream tree, try option \"--clean\"")?;
+
+                    if file_size > part_size {
+                        let created_at = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|duration| duration.as_secs())
+                            .unwrap_or_default();
+                        write_metadata(
+                            &s3m_dir,
+                            &StreamMetadata {
+                                version: 1,
+                                id: blake3_checksum.clone(),
+                                host,
+                                bucket: s3.bucket().unwrap_or_default().to_string(),
+                                key: key.clone(),
+                                source_path: file_path.to_path_buf(),
+                                checksum: blake3_checksum.clone(),
+                                file_size,
+                                file_mtime,
+                                part_size,
+                                db_key: db.state_key().to_string(),
+                                created_at,
+                                updated_at: Some(created_at),
+                                pipe: false,
+                                compress: false,
+                                encrypt: false,
+                                mode: StreamMode::FileMultipart,
+                            },
+                        )
+                        .context("could not write stream state metadata")?;
+                    }
 
                     // check if file has been uploaded already
                     let etag = &db

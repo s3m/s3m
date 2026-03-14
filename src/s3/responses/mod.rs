@@ -187,6 +187,33 @@ pub struct CompleteMultipartUploadResult {
     pub checksum_sha256: Option<String>,
 }
 
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename = "DeleteResult")]
+pub struct DeleteObjectsResult {
+    #[serde(rename = "Deleted", default)]
+    pub deleted: Vec<DeletedObject>,
+    #[serde(rename = "Error", default)]
+    pub errors: Vec<DeleteError>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub struct DeletedObject {
+    pub key: String,
+    #[serde(default)]
+    pub version_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub struct DeleteError {
+    pub key: String,
+    #[serde(default)]
+    pub version_id: Option<String>,
+    pub code: String,
+    pub message: String,
+}
+
 #[derive(Deserialize, Debug)]
 pub struct ListMultipartUploadsResult {
     #[serde(rename = "Bucket")]

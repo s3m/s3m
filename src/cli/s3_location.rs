@@ -122,6 +122,14 @@ impl S3Location {
     }
 }
 
+pub(crate) fn parse_location(
+    location: &str,
+    allow_missing_bucket: bool,
+    validate_bucket_name: bool,
+) -> Result<S3Location> {
+    S3Location::parse(location, allow_missing_bucket, validate_bucket_name)
+}
+
 /// Returns the host, bucket and key from the command line arguments
 pub fn host_bucket_key(matches: &ArgMatches) -> Result<S3Location> {
     let subcommand = matches.subcommand_name();
@@ -129,7 +137,7 @@ pub fn host_bucket_key(matches: &ArgMatches) -> Result<S3Location> {
     log::debug!("Subcommand: {subcommand:?}");
 
     match subcommand {
-        Some(cmd @ ("acl" | "get" | "ls" | "cb" | "rm" | "share")) => {
+        Some(cmd @ ("acl" | "du" | "get" | "ls" | "cb" | "rm" | "share")) => {
             parse_subcommand_args(matches, cmd)
         }
         _ => parse_put_object_args(matches),

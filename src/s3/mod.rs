@@ -64,6 +64,11 @@ impl S3 {
         &self.client
     }
 
+    #[must_use]
+    pub fn bucket(&self) -> Option<&str> {
+        self.bucket.as_deref()
+    }
+
     // use it to identify the connection and keep track of the uploaded files so that the same file
     // could be uploaded into multiple provider/buckets
     #[must_use]

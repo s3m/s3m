@@ -1,3 +1,4 @@
+use crate::cli::commands::validator_age_filter;
 use clap::{Arg, Command};
 
 pub fn command() -> Command {
@@ -46,6 +47,22 @@ pub fn command() -> Command {
                 .value_name("NUMBER")
                 .value_parser(clap::value_parser!(usize))
                 .num_args(1),
+        )
+        .arg(
+            Arg::new("older-than")
+                .help("Only include objects whose LastModified is strictly older than the given duration")
+                .long_help("Filter listed objects by age using LastModified.\n\nSupported forms:\n  30d\n  12h\n  45m")
+                .long("older-than")
+                .value_name("DURATION")
+                .value_parser(validator_age_filter())
+                .conflicts_with("ListMultipartUploads")
+                .num_args(1),
+        )
+        .arg(
+            Arg::new("json")
+                .help("Emit machine-readable JSON output")
+                .long("json")
+                .num_args(0),
         )
 }
 
@@ -132,6 +149,44 @@ mod tests {
         // get matches
         let m = m.unwrap();
         assert_eq!(m.get_one::<usize>("max-kub").map_or_else(|| 0, |v| *v), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_older_than() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--older-than", "30d"]);
+        assert!(m.is_ok());
+
+        let m = m.unwrap();
+        assert_eq!(
+            m.get_one::<crate::cli::age_filter::AgeFilter>("older-than")
+                .copied()
+                .map(crate::cli::age_filter::AgeFilter::duration),
+            Some(chrono::Duration::days(30))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_reject_invalid_older_than() {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--older-than", "30x"]);
+        assert!(m.is_err());
+    }
+
+    #[test]
+    fn test_reject_negative_older_than() {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--older-than=-1d"]);
+        assert!(m.is_err());
+    }
+
+    #[test]
+    fn test_check_json() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--json"])?;
+        assert_eq!(m.get_one::<bool>("json").copied(), Some(true));
         Ok(())
     }
 }

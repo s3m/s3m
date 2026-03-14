@@ -1,6 +1,7 @@
 pub mod db;
 pub mod iterator;
 pub mod part;
+pub mod state;
 pub mod upload_compressed;
 pub mod upload_compressed_encrypted;
 pub mod upload_default;
@@ -8,6 +9,7 @@ pub mod upload_encrypted;
 pub mod upload_multipart;
 pub mod upload_stdin;
 pub mod upload_stdin_compressed_encrypted;
+pub mod upload_stdin_encrypted;
 
 use crate::{
     cli::{globals::GlobalArgs, progressbar::Bar},

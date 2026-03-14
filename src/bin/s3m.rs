@@ -14,6 +14,10 @@ async fn main() -> Result<()> {
             actions::bucket::handle(&s3, action).await?;
         }
 
+        Action::DiskUsage { .. } => {
+            actions::object_du::handle(&s3, action).await?;
+        }
+
         Action::ListObjects { .. } => {
             actions::object_list::handle(&s3, action).await?;
         }
@@ -32,6 +36,10 @@ async fn main() -> Result<()> {
 
         Action::PutObject { .. } => {
             actions::object_put::handle(&s3, action, globals).await?;
+        }
+
+        Action::Streams { .. } => {
+            actions::streams::handle(action, globals).await?;
         }
     }
 

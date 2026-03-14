@@ -105,6 +105,63 @@ s3m ls s3/my-bucket
 s3m ls s3/my-bucket/path/
 ```
 
+### Usage summary
+
+```bash
+# Bucket summary
+s3m du s3/my-bucket
+
+# Prefix summary grouped by UTC day
+s3m du s3/my-bucket/backups/ --group-by day
+```
+
+### Stream state
+
+```bash
+# List resumable multipart state
+s3m streams
+
+# Show one entry
+s3m streams show <id>
+
+# Clean broken/completed entries
+s3m streams clean
+```
+
+### Delete multiple objects
+
+```bash
+# One object uses DeleteObject
+s3m rm s3/my-bucket/file.dat
+
+# Multiple objects use DeleteObjects grouped by bucket
+s3m rm s3/my-bucket/a.txt s3/my-bucket/b.txt
+s3m rm s3/bucket-a/a.txt s3/bucket-b/b.txt
+```
+
+### Recursive bucket delete
+
+```bash
+# Delete all objects in the bucket, then delete the bucket
+s3m rm -b --recursive s3/my-bucket
+```
+
+### JSON output for automation
+
+```bash
+# List objects as JSON
+s3m ls s3/my-bucket --json
+
+# Get object metadata as JSON
+s3m get -m s3/my-bucket/file.dat --json
+
+# Usage summary as JSON
+s3m du s3/my-bucket --json
+
+# Stream state as JSON
+s3m streams ls --json
+```
+
 ### Create bucket
 
 ```bash
@@ -117,8 +174,14 @@ s3m cb s3/new-bucket
 # Delete object
 s3m rm s3/my-bucket/file.dat
 
+# Delete multiple objects
+s3m rm s3/my-bucket/a.txt s3/my-bucket/b.txt
+
 # Delete bucket
 s3m rm -b s3/empty-bucket
+
+# Recursively delete bucket contents, then the bucket
+s3m rm -b --recursive s3/my-bucket
 ```
 
 ## Compression & Encryption
@@ -178,12 +241,12 @@ s3m --retries 5 file.dat s3/bucket/file.dat
 ### Running Tests
 
 ```bash
-# Unit tests (255 tests)
+# Unit + integration tests
 cargo test
 
 # Integration tests with MinIO (Podman)
 just container            # start MinIO (idempotent)
-just test-integration     # run ignored e2e tests against that MinIO
+just test-integration     # run MinIO-backed e2e tests against that MinIO
 # or in one go
 just container test-integration
 # full suite (fmt + clippy + unit + integration)
@@ -210,7 +273,7 @@ cargo install cargo-llvm-cov
 cargo llvm-cov --all-features --workspace
 ```
 
-Coverage: **80%+** with 255+ tests
+Coverage: **80%+**
 
 ### Contributing
 

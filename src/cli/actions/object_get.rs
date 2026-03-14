@@ -10,12 +10,50 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use http::{HeaderMap, header::CONTENT_TYPE};
 use secrecy::ExposeSecret;
+use serde::Serialize;
 use std::{
     cmp::min,
+    collections::BTreeMap,
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
 };
 use tokio::{fs::OpenOptions, io::AsyncWriteExt};
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MetadataJsonOutput {
+    bucket: Option<String>,
+    key: String,
+    version_id: Option<String>,
+    content_length: Option<u64>,
+    content_type: Option<String>,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    storage_class: Option<String>,
+    checksum_crc32: Option<String>,
+    checksum_crc32c: Option<String>,
+    checksum_sha1: Option<String>,
+    checksum_sha256: Option<String>,
+    metadata: BTreeMap<String, String>,
+    headers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct VersionsJsonOutput {
+    bucket: Option<String>,
+    key_prefix: String,
+    versions: Vec<VersionJsonEntry>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct VersionJsonEntry {
+    key: String,
+    version_id: String,
+    is_latest: bool,
+    last_modified: String,
+    size_bytes: u64,
+    etag: String,
+    storage_class: String,
+}
 
 /// # Errors
 /// Will return an error if the action fails
@@ -27,16 +65,17 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         dest,
         quiet,
         force,
+        json,
         versions,
         version,
     } = action
     {
         if metadata {
-            return handle_metadata(s3, &key, version).await;
+            return handle_metadata(s3, &key, version, json).await;
         }
 
         if versions {
-            return handle_versions(s3, &key).await;
+            return handle_versions(s3, &key, json).await;
         }
 
         let file_name = Path::new(&key)
@@ -191,9 +230,16 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
     Ok(())
 }
 
-async fn handle_metadata(s3: &S3, key: &str, version: Option<String>) -> Result<()> {
-    let action = actions::HeadObject::new(key, version);
+async fn handle_metadata(s3: &S3, key: &str, version: Option<String>, json: bool) -> Result<()> {
+    let action = actions::HeadObject::new(key, version.clone());
     let headers = action.request(s3).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_metadata_output(s3, key, version, headers)?)?
+        );
+        return Ok(());
+    }
 
     let max_key_len = headers
         .keys()
@@ -214,9 +260,33 @@ async fn handle_metadata(s3: &S3, key: &str, version: Option<String>) -> Result<
     Ok(())
 }
 
-async fn handle_versions(s3: &S3, key: &str) -> Result<()> {
+async fn handle_versions(s3: &S3, key: &str, json: bool) -> Result<()> {
     let action = actions::ListObjectVersions::new(key);
     let result = action.request(s3).await?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&VersionsJsonOutput {
+                bucket: s3.bucket().map(str::to_string),
+                key_prefix: key.to_string(),
+                versions: result
+                    .versions
+                    .into_iter()
+                    .map(|version| VersionJsonEntry {
+                        key: version.key,
+                        version_id: version.version_id,
+                        is_latest: version.is_latest,
+                        last_modified: version.last_modified,
+                        size_bytes: version.size,
+                        etag: version.e_tag,
+                        storage_class: version.storage_class,
+                    })
+                    .collect(),
+            })?
+        );
+        return Ok(());
+    }
 
     if result.versions.is_empty() {
         println!("No versions found for key: {key}");
@@ -324,6 +394,51 @@ pub fn is_s3m_encrypted(headers: &HeaderMap) -> bool {
         .is_some_and(|ct| ct.starts_with("application/vnd.s3m.encrypted"))
 }
 
+fn json_metadata_output(
+    s3: &S3,
+    key: &str,
+    version: Option<String>,
+    headers: BTreeMap<String, String>,
+) -> Result<MetadataJsonOutput> {
+    let metadata = headers
+        .iter()
+        .filter_map(|(header, value)| {
+            header
+                .strip_prefix("x-amz-meta-")
+                .map(|metadata_key| (metadata_key.to_string(), value.clone()))
+        })
+        .collect();
+
+    Ok(MetadataJsonOutput {
+        bucket: s3.bucket().map(str::to_string),
+        key: key.to_string(),
+        version_id: version,
+        content_length: headers
+            .get("content-length")
+            .and_then(|value| value.parse::<u64>().ok()),
+        content_type: headers.get("content-type").cloned(),
+        etag: headers.get("etag").cloned(),
+        last_modified: headers
+            .get("last-modified")
+            .map(|value| normalize_json_timestamp(value))
+            .transpose()?,
+        storage_class: headers.get("x-amz-storage-class").cloned(),
+        checksum_crc32: headers.get("x-amz-checksum-crc32").cloned(),
+        checksum_crc32c: headers.get("x-amz-checksum-crc32c").cloned(),
+        checksum_sha1: headers.get("x-amz-checksum-sha1").cloned(),
+        checksum_sha256: headers.get("x-amz-checksum-sha256").cloned(),
+        metadata,
+        headers,
+    })
+}
+
+fn normalize_json_timestamp(value: &str) -> Result<String> {
+    DateTime::parse_from_rfc2822(value)
+        .or_else(|_| DateTime::parse_from_rfc3339(value))
+        .map(|timestamp| timestamp.with_timezone(&Utc).to_rfc3339())
+        .map_err(|error| anyhow!("Failed to parse Last-Modified header '{value}': {error}"))
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -334,7 +449,10 @@ pub fn is_s3m_encrypted(headers: &HeaderMap) -> bool {
 )]
 mod tests {
     use super::*;
+    use crate::s3::{Credentials, Region, S3};
     use anyhow::Result;
+    use mockito::{Matcher, Server};
+    use secrecy::SecretString;
 
     struct Test {
         dest: Option<String>,
@@ -408,5 +526,130 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_json_metadata_output_extracts_fields() {
+        let mut headers = BTreeMap::new();
+        headers.insert("content-length".to_string(), "42".to_string());
+        headers.insert("content-type".to_string(), "text/plain".to_string());
+        headers.insert("etag".to_string(), "\"etag\"".to_string());
+        headers.insert(
+            "last-modified".to_string(),
+            "Sat, 14 Mar 2026 08:00:00 GMT".to_string(),
+        );
+        headers.insert("x-amz-meta-owner".to_string(), "alice".to_string());
+        let s3 = S3::new(
+            &crate::s3::Credentials::new("AKIA", &secrecy::SecretString::new("secret".into())),
+            &"us-east-1".parse::<crate::s3::Region>().unwrap(),
+            Some("bucket".to_string()),
+            false,
+        );
+
+        let output =
+            json_metadata_output(&s3, "path/file.txt", Some("v1".to_string()), headers).unwrap();
+        let rendered = serde_json::to_value(output).unwrap();
+
+        assert_eq!(rendered["bucket"], "bucket");
+        assert_eq!(rendered["key"], "path/file.txt");
+        assert_eq!(rendered["version_id"], "v1");
+        assert_eq!(rendered["content_length"], 42);
+        assert_eq!(rendered["last_modified"], "2026-03-14T08:00:00+00:00");
+        assert_eq!(rendered["metadata"]["owner"], "alice");
+    }
+
+    #[test]
+    fn test_json_metadata_output_rejects_invalid_last_modified() {
+        let mut headers = BTreeMap::new();
+        headers.insert("last-modified".to_string(), "not-a-date".to_string());
+        let s3 = S3::new(
+            &crate::s3::Credentials::new("AKIA", &secrecy::SecretString::new("secret".into())),
+            &"us-east-1".parse::<crate::s3::Region>().unwrap(),
+            Some("bucket".to_string()),
+            false,
+        );
+
+        let err = json_metadata_output(&s3, "path/file.txt", None, headers)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Failed to parse Last-Modified header"));
+    }
+
+    fn test_s3(endpoint: String) -> S3 {
+        S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &Region::custom("us-west-1", endpoint),
+            Some("bucket".to_string()),
+            false,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_handle_metadata_json_branch() {
+        let mut server = Server::new_async().await;
+        let _head = server
+            .mock("HEAD", "/bucket/file.txt")
+            .with_status(200)
+            .with_header("content-length", "42")
+            .with_header("content-type", "text/plain")
+            .with_header("etag", "\"head-etag\"")
+            .with_header("x-amz-meta-owner", "alice")
+            .create_async()
+            .await;
+
+        handle(
+            &test_s3(server.url()),
+            Action::GetObject {
+                dest: None,
+                metadata: true,
+                key: "file.txt".to_string(),
+                quiet: false,
+                force: false,
+                json: true,
+                versions: false,
+                version: None,
+            },
+            GlobalArgs::new(),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_handle_versions_json_branch() {
+        let mut server = Server::new_async().await;
+        let _versions = server
+            .mock("GET", "/bucket")
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("prefix".into(), "prefix".into()),
+                Matcher::UrlEncoded("versions".into(), String::new()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(
+                r#"<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult><Name>bucket</Name><Prefix>prefix</Prefix><KeyMarker></KeyMarker><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated><Version><Key>prefix</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest><LastModified>2026-03-14T00:00:00.000Z</LastModified><ETag>"etag"</ETag><Size>5</Size><Owner><ID>owner</ID></Owner><StorageClass>STANDARD</StorageClass></Version></ListVersionsResult>"#,
+            )
+            .create_async()
+            .await;
+
+        handle(
+            &test_s3(server.url()),
+            Action::GetObject {
+                dest: None,
+                metadata: false,
+                key: "prefix".to_string(),
+                quiet: false,
+                force: false,
+                json: true,
+                versions: true,
+                version: None,
+            },
+            GlobalArgs::new(),
+        )
+        .await
+        .unwrap();
     }
 }

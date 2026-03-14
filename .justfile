@@ -64,7 +64,7 @@ test-debug:
 
   echo ""
   echo "🧪 Running single test with debug output..."
-  cargo test --test e2e_binary test_binary_version -- --ignored --nocapture
+  cargo test --test e2e_binary test_binary_version -- --nocapture
 
 # Run e2e integration tests with MinIO (Podman)
 test-integration: container
@@ -77,7 +77,7 @@ test-integration: container
   export MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
 
   echo "🧪 Running e2e tests with MinIO..."
-  cargo test --test e2e_put --test e2e_get --test e2e_cb --test e2e_ls --test e2e_rm --test e2e_misc -- --ignored --test-threads=1
+  cargo test --tests -- --test-threads=1
 
 clippy:
   cargo clippy --all-targets --all-features

@@ -9,8 +9,11 @@
 #![allow(dead_code, clippy::indexing_slicing)]
 
 mod helpers;
+#[path = "../support/minio_runtime.rs"]
+mod minio_runtime;
 
 pub use helpers::minio::{MINIO_ROOT_PASSWORD, MINIO_ROOT_USER, MinioContainer};
+use minio_runtime::MinioRuntime;
 
 use std::env;
 use std::io::Write;
@@ -37,15 +40,14 @@ pub fn create_config_file_with_options(
         r"---
 hosts:
   s3:
-    endpoint: {}
-    access_key: {}
-    secret_key: {}
+    endpoint: {endpoint}
+    access_key: {access_key}
+    secret_key: {secret_key}
 ",
-        endpoint, access_key, secret_key
     );
 
     if let Some(key) = enc_key {
-        writeln!(&mut config_content, "    enc_key: {}", key).expect("Write failed");
+        writeln!(&mut config_content, "    enc_key: {key}").expect("Write failed");
     }
 
     if compress {
@@ -73,26 +75,26 @@ pub enum MinioContext {
 impl MinioContext {
     /// Get or start `MinIO` - uses external if `MINIO_ENDPOINT` is set, otherwise starts container
     pub async fn get_or_start() -> Self {
-        if let Ok(endpoint) = env::var("MINIO_ENDPOINT") {
-            // Use externally provided MinIO (e.g., from test-with-podman.sh)
-            let access_key =
-                env::var("MINIO_ACCESS_KEY").unwrap_or_else(|_| MINIO_ROOT_USER.to_string());
-            let secret_key =
-                env::var("MINIO_SECRET_KEY").unwrap_or_else(|_| MINIO_ROOT_PASSWORD.to_string());
+        match minio_runtime::resolve_minio_runtime(MINIO_ROOT_USER, MINIO_ROOT_PASSWORD) {
+            MinioRuntime::External(config) => {
+                println!("Using external MinIO at {}", config.endpoint);
 
-            println!("Using external MinIO at {endpoint}");
-
-            MinioContext::External {
-                endpoint,
-                access_key,
-                secret_key,
+                MinioContext::External {
+                    endpoint: config.endpoint,
+                    access_key: config.access_key,
+                    secret_key: config.secret_key,
+                }
             }
-        } else {
-            // Start testcontainer
-            println!("Starting MinIO testcontainer");
-            let container = MinioContainer::start().await;
-            container.wait_for_ready().await.expect("MinIO ready");
-            MinioContext::Container(Box::new(container))
+            MinioRuntime::ManagedContainer { podman_socket } => {
+                if let Some(socket) = podman_socket {
+                    println!("Auto-configured Podman socket at {}", socket.display());
+                }
+
+                println!("Starting MinIO testcontainer");
+                let container = MinioContainer::start().await;
+                container.wait_for_ready().await.expect("MinIO ready");
+                MinioContext::Container(Box::new(container))
+            }
         }
     }
 
@@ -121,7 +123,7 @@ impl MinioContext {
         match self {
             MinioContext::External { .. } => {
                 // Create bucket using s3m binary (which handles auth properly)
-                let output = run_s3m_with_minio(self, &["cb", &format!("s3/{}", bucket_name)]);
+                let output = run_s3m_with_minio(self, &["cb", &format!("s3/{bucket_name}")]);
 
                 if output.status.success() {
                     Ok(())
@@ -133,7 +135,7 @@ impl MinioContext {
                     {
                         Ok(())
                     } else {
-                        Err(anyhow::anyhow!("Failed to create bucket: {}", stderr))
+                        Err(anyhow::anyhow!("Failed to create bucket: {stderr}"))
                     }
                 }
             }

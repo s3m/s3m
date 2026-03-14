@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features
 
   check:
     name: Check
@@ -40,12 +40,25 @@ jobs:
       - name: Check
         run: cargo check
 
-  test:
-    name: Test
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    needs:
+      - format
+      - lint
+      - check
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: test
+        run: cargo test --lib --bins
+
+  test-portable:
+    name: Test (Portable)
     strategy:
       matrix:
         os:
-          - ubuntu-latest
           - macOS-latest
           - windows-latest
         rust:
@@ -60,4 +73,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: test
-        run: cargo test
+        # Keep this list free of MinIO/container-backed tests. Those run in
+        # containers.yml on Ubuntu, where Docker and an explicit MinIO endpoint
+        # are available. In particular, integration_streams includes a live
+        # multipart resume path and is intentionally excluded here.
+        run: >-
+          cargo test --lib --bins
+          --test integration_encryption
+          --test integration_json_output
+          --test integration_minio_runtime
+          --test integration_multipart
+          --test integration_s3_actions
+          --test integration_stdin

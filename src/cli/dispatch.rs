@@ -1,12 +1,72 @@
-use crate::cli::{actions::Action, globals::GlobalArgs, s3_location::S3Location};
+use crate::{
+    cli::{
+        Config,
+        actions::{Action, DeleteGroup, DuGroupBy, StreamCommand},
+        age_filter::AgeFilter,
+        globals::GlobalArgs,
+        s3_location::{S3Location, parse_location},
+        start::get_host,
+    },
+    s3::{Credentials, S3, actions::ObjectIdentifier},
+};
 use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use std::{
     borrow::ToOwned,
+    cmp,
     collections::BTreeMap,
     path::{Path, PathBuf},
     string::String,
 };
+
+/// # Errors
+/// Will return `Err` if the streams subcommand arguments are invalid
+pub fn dispatch_streams(
+    matches: &clap::ArgMatches,
+    s3m_dir: PathBuf,
+    config_file: PathBuf,
+) -> Result<Action> {
+    let streams = matches
+        .subcommand_matches("streams")
+        .context("streams arguments missing")?;
+
+    let command = match streams.subcommand() {
+        None | Some(("ls", _)) => StreamCommand::List,
+        Some(("show", sub_m)) => StreamCommand::Show {
+            id: sub_m
+                .get_one::<String>("id")
+                .cloned()
+                .context("id missing")?,
+        },
+        Some(("resume", sub_m)) => StreamCommand::Resume {
+            id: sub_m
+                .get_one::<String>("id")
+                .cloned()
+                .context("id missing")?,
+        },
+        Some(("clean", _)) => StreamCommand::Clean,
+        Some((other, _)) => return Err(anyhow!("unsupported streams subcommand: {other}")),
+    };
+
+    let json = streams.get_one::<bool>("json").copied().unwrap_or(false);
+    if json && matches!(command, StreamCommand::Resume { .. }) {
+        return Err(anyhow!("--json is not supported with `s3m streams resume`"));
+    }
+
+    Ok(Action::Streams {
+        command,
+        config_file,
+        json,
+        s3m_dir,
+        number: matches.get_one::<u8>("number").copied().unwrap_or_else(|| {
+            u8::try_from(cmp::min(
+                (num_cpus::get_physical() - 2).max(1),
+                u8::MAX as usize,
+            ))
+            .unwrap_or(u8::MAX)
+        }),
+    })
+}
 
 // return Action based on the command or subcommand
 #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -33,6 +93,17 @@ pub fn dispatch(
                 "<file name>".red(),
                 "--help".green()
             )),
+        }
+    };
+
+    let resolve_prefix = |sub_m: &clap::ArgMatches| -> Result<Option<String>> {
+        let flag_prefix = sub_m.get_one::<String>("prefix").cloned();
+        match (hbk.key.clone(), flag_prefix) {
+            (Some(_), Some(_)) => Err(anyhow!(
+                "Prefix provided twice. Use either host/bucket/prefix or --prefix, not both"
+            )),
+            (Some(prefix), None) | (None, Some(prefix)) => Ok(Some(prefix)),
+            (None, None) => Ok(None),
         }
     };
 
@@ -66,9 +137,16 @@ pub fn dispatch(
 
             let force = sub_m.get_one("force").copied().unwrap_or(false);
 
+            let json = sub_m.get_one("json").copied().unwrap_or(false);
             let versions = sub_m.get_one("versions").copied().unwrap_or(false);
 
             let version = sub_m.get_one("version").cloned();
+
+            if json && !metadata && !versions {
+                return Err(anyhow!(
+                    "--json is only supported with `s3m get --meta` or `s3m get --versions`"
+                ));
+            }
 
             // get destination file/path
             let dest = if args.len() == 2 {
@@ -80,6 +158,7 @@ pub fn dispatch(
             Ok(Action::GetObject {
                 dest,
                 force,
+                json,
                 key,
                 metadata,
                 quiet,
@@ -88,13 +167,42 @@ pub fn dispatch(
             })
         }
 
+        // DiskUsage
+        Some("du") => {
+            let bucket = hbk
+                .bucket
+                .clone()
+                .context("bucket name missing for du target")?;
+            let prefix = hbk.key.clone();
+            let group_by =
+                sub_m("du")?
+                    .get_one::<String>("group-by")
+                    .map(|value| match value.as_str() {
+                        "day" => DuGroupBy::Day,
+                        _ => unreachable!("clap validated group-by"),
+                    });
+            let json = sub_m("du")?.get_one("json").copied().unwrap_or(false);
+            let target = prefix.as_ref().map_or_else(
+                || format!("{}/{}", hbk.host, bucket),
+                |prefix| format!("{}/{}/{}", hbk.host, bucket, prefix),
+            );
+
+            Ok(Action::DiskUsage {
+                group_by,
+                json,
+                prefix,
+                target,
+            })
+        }
+
         // ListObjects
         Some("ls") => {
             let sub_m = sub_m("ls")?;
 
-            let prefix = sub_m.get_one("prefix").cloned();
-
+            let older_than = sub_m.get_one::<AgeFilter>("older-than").copied();
+            let prefix = resolve_prefix(sub_m)?;
             let start_after = sub_m.get_one("start-after").cloned();
+            let json = sub_m.get_one("json").copied().unwrap_or(false);
 
             // option -n/--number
             // convert max_keys to string and default to None
@@ -102,13 +210,21 @@ pub fn dispatch(
                 .get_one::<usize>("max-kub")
                 .map(std::string::ToString::to_string);
 
+            if older_than.is_some() && hbk.bucket.is_none() {
+                return Err(anyhow!(
+                    "--older-than requires a bucket or prefix target, for example s3/my-bucket or s3/my-bucket/prefix"
+                ));
+            }
+
             Ok(Action::ListObjects {
                 bucket: hbk.bucket.clone(),
+                json,
                 list_multipart_uploads: sub_m
                     .get_one("ListMultipartUploads")
                     .copied()
                     .unwrap_or(false),
                 max_kub,
+                older_than,
                 prefix,
                 start_after,
             })
@@ -125,24 +241,50 @@ pub fn dispatch(
 
         // DeleteObject or DeleteBucket
         Some("rm") => {
-            let mut key = String::new();
-
             let sub_m = sub_m("rm")?;
+            let older_than = sub_m.get_one::<AgeFilter>("older-than").copied();
 
             let upload_id = sub_m
                 .get_one("UploadId")
                 .map_or_else(String::new, |s: &String| s.clone());
 
             let bucket = sub_m.get_one("bucket").copied().unwrap_or(false);
+            let recursive = sub_m.get_one("recursive").copied().unwrap_or(false);
+            let key = if bucket {
+                String::new()
+            } else if older_than.is_some() {
+                if sub_m
+                    .get_many::<String>("arguments")
+                    .unwrap_or_default()
+                    .count()
+                    != 1
+                {
+                    return Err(anyhow!(
+                        "--older-than expects exactly one bucket or prefix target"
+                    ));
+                }
+                hbk.key.clone().unwrap_or_default()
+            } else {
+                get_key()?
+            };
 
-            if !bucket {
-                key = get_key()?;
+            if bucket && older_than.is_some() {
+                return Err(anyhow!(
+                    "--older-than is not supported with bucket deletion"
+                ));
+            }
+
+            if !upload_id.is_empty() && older_than.is_some() {
+                return Err(anyhow!("--older-than is not supported with --abort"));
             }
 
             Ok(Action::DeleteObject {
                 key,
                 upload_id,
                 bucket,
+                older_than,
+                recursive,
+                targets: Vec::new(),
             })
         }
 
@@ -243,6 +385,7 @@ pub fn dispatch(
                 meta,
                 buf_size,
                 file: src,
+                host: hbk.host,
                 s3m_dir,
                 key,
                 pipe,
@@ -258,13 +401,165 @@ pub fn dispatch(
     }
 }
 
+/// # Errors
+/// Will return an error if delete arguments are invalid or can not be resolved to hosts
+pub fn finalize_action(
+    action: Action,
+    matches: &clap::ArgMatches,
+    config: &Config,
+    config_path: &Path,
+) -> Result<Action> {
+    let Action::DeleteObject {
+        bucket,
+        key,
+        older_than,
+        recursive,
+        targets: _,
+        upload_id,
+    } = action
+    else {
+        return Ok(action);
+    };
+
+    if matches.subcommand_name() != Some("rm") {
+        return Ok(Action::DeleteObject {
+            bucket,
+            key,
+            older_than,
+            recursive,
+            targets: Vec::new(),
+            upload_id,
+        });
+    }
+
+    let sub_m = matches
+        .subcommand_matches("rm")
+        .context("Subcommand arguments missing")?;
+    let args: Vec<&str> = sub_m
+        .get_many::<String>("arguments")
+        .unwrap_or_default()
+        .map(String::as_str)
+        .collect();
+
+    if bucket {
+        if args.len() != 1 {
+            return Err(anyhow!("Bucket deletion expects exactly one bucket target"));
+        }
+
+        return Ok(Action::DeleteObject {
+            bucket,
+            key,
+            older_than,
+            recursive,
+            targets: Vec::new(),
+            upload_id,
+        });
+    }
+
+    if !upload_id.is_empty() {
+        if args.len() != 1 {
+            return Err(anyhow!(
+                "Abort multipart upload expects exactly one object target"
+            ));
+        }
+
+        return Ok(Action::DeleteObject {
+            bucket,
+            key,
+            older_than,
+            recursive,
+            targets: Vec::new(),
+            upload_id,
+        });
+    }
+
+    if older_than.is_some() {
+        if args.len() != 1 {
+            return Err(anyhow!(
+                "--older-than expects exactly one bucket or prefix target"
+            ));
+        }
+
+        return Ok(Action::DeleteObject {
+            bucket,
+            key,
+            older_than,
+            recursive,
+            targets: Vec::new(),
+            upload_id,
+        });
+    }
+
+    let no_sign_request = matches
+        .get_one::<bool>("no-sign-request")
+        .copied()
+        .unwrap_or(false);
+
+    Ok(Action::DeleteObject {
+        bucket,
+        key,
+        older_than,
+        recursive,
+        targets: build_delete_groups(&args, config, config_path, no_sign_request)?,
+        upload_id,
+    })
+}
+
+fn build_delete_groups(
+    args: &[&str],
+    config: &Config,
+    config_path: &Path,
+    no_sign_request: bool,
+) -> Result<Vec<DeleteGroup>> {
+    let mut groups: BTreeMap<(String, String), DeleteGroup> = BTreeMap::new();
+
+    for arg in args {
+        let location = parse_location(arg, false, false)?;
+        let bucket = location.bucket.clone().ok_or_else(|| {
+            anyhow!(
+                "Bucket name missing, expected format: <s3 provider>/<bucket name>/<object key>"
+            )
+        })?;
+        let key = location.key.clone().ok_or_else(|| {
+            anyhow!("Object target missing key: {arg}. Expected <s3 provider>/<bucket>/<key>")
+        })?;
+
+        let group_key = (location.host.clone(), bucket.clone());
+
+        if let Some(group) = groups.get_mut(&group_key) {
+            group.objects.push(ObjectIdentifier {
+                key,
+                version_id: None,
+            });
+            continue;
+        }
+
+        let host = get_host(config, config_path, &location)?;
+        let region = host.get_region()?;
+        let credentials = Credentials::new(&host.access_key, &host.secret_key);
+
+        groups.insert(
+            group_key,
+            DeleteGroup {
+                objects: vec![ObjectIdentifier {
+                    key,
+                    version_id: None,
+                }],
+                s3: S3::new(&credentials, &region, Some(bucket), no_sign_request),
+            },
+        );
+    }
+
+    Ok(groups.into_values().collect())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::cli::{
         actions::Action,
-        commands::{cmd_acl, cmd_cb, cmd_get, cmd_ls, cmd_rm, cmd_share, new},
+        commands::{cmd_acl, cmd_cb, cmd_du, cmd_get, cmd_ls, cmd_rm, cmd_share, new},
         config::Config,
         globals::GlobalArgs,
         s3_location::host_bucket_key,
@@ -278,10 +573,24 @@ mod tests {
     const CONF: &str = r"---
 hosts:
   s3:
-    region: xx-region-y
+    region: us-east-1
     access_key: XXX
     secret_key: YYY
-    bucket: my-bucket";
+    bucket: my-bucket
+  s3alt:
+    endpoint: alt.example.test
+    access_key: ALT
+    secret_key: ZZZ";
+
+    fn write_config_file() -> (tempfile::TempDir, PathBuf, Config) {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yaml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+        let parsed = Config::new(config_path.clone()).unwrap();
+
+        (tmp_dir, config_path, parsed)
+    }
 
     #[test]
     fn test_dispatch_bad_bucket() {
@@ -399,6 +708,7 @@ hosts:
                 dest,
                 quiet,
                 force,
+                json,
                 versions,
                 version,
             } => {
@@ -407,6 +717,7 @@ hosts:
                 assert_eq!(dest, None);
                 assert!(!quiet);
                 assert!(!force);
+                assert!(!json);
                 assert!(!versions);
                 assert_eq!(version, None);
                 assert!(!globals.compress);
@@ -443,6 +754,7 @@ hosts:
                 dest,
                 quiet,
                 force,
+                json,
                 versions,
                 version,
             } => {
@@ -451,6 +763,7 @@ hosts:
                 assert_eq!(dest, Some("tmp/file".to_string()));
                 assert!(!quiet);
                 assert!(!force);
+                assert!(!json);
                 assert!(!versions);
                 assert_eq!(version, None);
                 assert!(!globals.compress);
@@ -487,6 +800,7 @@ hosts:
                 dest,
                 quiet,
                 force,
+                json,
                 versions,
                 version,
             } => {
@@ -495,6 +809,7 @@ hosts:
                 assert_eq!(dest, None);
                 assert!(quiet);
                 assert!(force);
+                assert!(!json);
                 assert!(!versions);
                 assert_eq!(version, None);
                 assert!(!globals.compress);
@@ -529,17 +844,102 @@ hosts:
         match action {
             Action::ListObjects {
                 bucket,
+                json,
                 list_multipart_uploads,
                 max_kub,
+                older_than,
                 prefix,
                 start_after,
             } => {
                 assert_eq!(bucket, Some("bucket".to_string()));
+                assert!(!json);
                 assert!(!list_multipart_uploads);
-                assert_eq!(prefix, None);
+                assert_eq!(older_than, None);
+                assert_eq!(prefix, Some("file".to_string()));
                 assert_eq!(start_after, None);
                 assert_eq!(max_kub, None);
                 assert!(!globals.compress);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_du_bucket() {
+        let cmd = Command::new("test").subcommand(cmd_du::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "du", "s3/my-bucket"])
+            .unwrap();
+
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        match action {
+            Action::DiskUsage {
+                group_by,
+                json,
+                prefix,
+                target,
+            } => {
+                assert_eq!(group_by, None);
+                assert!(!json);
+                assert_eq!(prefix, None);
+                assert_eq!(target, "s3/my-bucket");
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_du_prefix() {
+        let cmd = Command::new("test").subcommand(cmd_du::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "du", "s3/my-bucket/backups/2026"])
+            .unwrap();
+
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        match action {
+            Action::DiskUsage {
+                group_by,
+                json,
+                prefix,
+                target,
+            } => {
+                assert_eq!(group_by, None);
+                assert!(!json);
+                assert_eq!(prefix.as_deref(), Some("backups/2026"));
+                assert_eq!(target, "s3/my-bucket/backups/2026");
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_du_group_by_day() {
+        let cmd = Command::new("test").subcommand(cmd_du::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "du", "s3/my-bucket", "--group-by", "day"])
+            .unwrap();
+
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        match action {
+            Action::DiskUsage {
+                group_by,
+                json,
+                prefix,
+                target,
+            } => {
+                assert_eq!(group_by, Some(DuGroupBy::Day));
+                assert!(!json);
+                assert_eq!(prefix, None);
+                assert_eq!(target, "s3/my-bucket");
             }
             _ => panic!("wrong action"),
         }
@@ -620,10 +1020,16 @@ hosts:
                 key,
                 upload_id,
                 bucket,
+                older_than,
+                recursive,
+                targets,
             } => {
                 assert_eq!(key, "key");
                 assert_eq!(upload_id, "");
                 assert!(!bucket);
+                assert_eq!(older_than, None);
+                assert!(!recursive);
+                assert!(targets.is_empty());
                 assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
@@ -657,14 +1063,355 @@ hosts:
                 key,
                 upload_id,
                 bucket,
+                older_than,
+                recursive,
+                targets,
             } => {
                 assert_eq!(key, "");
                 assert_eq!(upload_id, "");
                 assert!(bucket);
+                assert_eq!(older_than, None);
+                assert!(!recursive);
+                assert!(targets.is_empty());
                 assert!(!globals.compress);
             }
             _ => panic!("wrong action"),
         }
+    }
+
+    #[test]
+    fn test_dispatch_rm_bucket_recursive() {
+        let cmd = Command::new("test").subcommand(cmd_rm::command());
+        let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "--recursive", "h/bucket"]);
+        assert!(matches.is_ok());
+
+        let matches = matches.unwrap();
+
+        let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches);
+
+        assert!(s3_location.is_ok());
+
+        let action = dispatch(
+            s3_location.unwrap(),
+            0,
+            PathBuf::new(),
+            &matches,
+            &mut globals,
+        )
+        .unwrap();
+        match action {
+            Action::DeleteObject {
+                key,
+                upload_id,
+                bucket,
+                older_than,
+                recursive,
+                targets,
+            } => {
+                assert_eq!(key, "");
+                assert_eq!(upload_id, "");
+                assert!(bucket);
+                assert_eq!(older_than, None);
+                assert!(recursive);
+                assert!(targets.is_empty());
+                assert!(!globals.compress);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_finalize_action_single_object_builds_single_group() {
+        let (tmp_dir, config_path, config) = write_config_file();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+        let cmd = new(&tmp_dir.keep());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "--config", filepath, "rm", "s3/bucket/key"])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = finalize_action(action, &matches, &config, &config_path).unwrap();
+
+        match action {
+            Action::DeleteObject {
+                key,
+                upload_id,
+                bucket,
+                older_than,
+                recursive,
+                targets,
+            } => {
+                let target = targets.first().unwrap();
+                let object = target.objects.first().unwrap();
+                assert_eq!(key, "key");
+                assert_eq!(upload_id, "");
+                assert!(!bucket);
+                assert_eq!(older_than, None);
+                assert!(!recursive);
+                assert_eq!(targets.len(), 1);
+                assert_eq!(target.objects.len(), 1);
+                assert_eq!(object.key, "key");
+                assert!(target.s3.endpoint().unwrap().as_str().contains("/bucket"));
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_finalize_action_groups_multiple_objects_by_bucket() {
+        let (tmp_dir, config_path, config) = write_config_file();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+        let cmd = new(&tmp_dir.keep());
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "test",
+                "--config",
+                filepath,
+                "rm",
+                "s3/bucket-a/a.txt",
+                "s3/bucket-a/b.txt",
+                "s3alt/bucket-b/c.txt",
+            ])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = finalize_action(action, &matches, &config, &config_path).unwrap();
+
+        match action {
+            Action::DeleteObject { targets, .. } => {
+                let first = targets.first().unwrap();
+                let second = targets.get(1).unwrap();
+                let first_object = first.objects.first().unwrap();
+                let second_object = first.objects.get(1).unwrap();
+                let third_object = second.objects.first().unwrap();
+                assert_eq!(targets.len(), 2);
+                assert_eq!(first.objects.len(), 2);
+                assert_eq!(second.objects.len(), 1);
+                assert_eq!(first_object.key, "a.txt");
+                assert_eq!(second_object.key, "b.txt");
+                assert_eq!(third_object.key, "c.txt");
+                assert!(first.s3.endpoint().unwrap().as_str().contains("/bucket-a"));
+                assert!(second.s3.endpoint().unwrap().as_str().contains("/bucket-b"));
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_ls_older_than_from_prefix_target() {
+        let cmd = Command::new("test").subcommand(cmd_ls::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "ls", "h/bucket/logs/", "--older-than", "30d"])
+            .unwrap();
+
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+
+        match action {
+            Action::ListObjects {
+                bucket,
+                older_than,
+                prefix,
+                ..
+            } => {
+                assert_eq!(bucket.as_deref(), Some("bucket"));
+                assert_eq!(prefix.as_deref(), Some("logs/"));
+                assert_eq!(
+                    older_than.map(crate::cli::age_filter::AgeFilter::duration),
+                    Some(chrono::Duration::days(30))
+                );
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_ls_rejects_duplicate_prefix_sources() {
+        let cmd = Command::new("test").subcommand(cmd_ls::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "ls", "h/bucket/logs/", "--prefix", "alt/"])
+            .unwrap();
+
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let err = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Prefix provided twice"));
+    }
+
+    #[test]
+    fn test_dispatch_ls_rejects_older_than_without_bucket() {
+        let cmd = Command::new("test").subcommand(cmd_ls::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "ls", "h", "--older-than", "30d"])
+            .unwrap();
+
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let err = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("--older-than requires a bucket or prefix target"));
+    }
+
+    #[test]
+    fn test_dispatch_rm_older_than_bucket_root() {
+        let cmd = Command::new("test").subcommand(cmd_rm::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "rm", "h/bucket", "--older-than", "90d"])
+            .unwrap();
+
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+
+        match action {
+            Action::DeleteObject {
+                key,
+                older_than,
+                bucket,
+                ..
+            } => {
+                assert_eq!(key, "");
+                assert!(!bucket);
+                assert_eq!(
+                    older_than.map(crate::cli::age_filter::AgeFilter::duration),
+                    Some(chrono::Duration::days(90))
+                );
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_rm_older_than_prefix() {
+        let cmd = Command::new("test").subcommand(cmd_rm::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "rm", "h/bucket/logs/", "--older-than", "12h"])
+            .unwrap();
+
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+
+        match action {
+            Action::DeleteObject {
+                key,
+                older_than,
+                bucket,
+                ..
+            } => {
+                assert_eq!(key, "logs/");
+                assert!(!bucket);
+                assert_eq!(
+                    older_than.map(crate::cli::age_filter::AgeFilter::duration),
+                    Some(chrono::Duration::hours(12))
+                );
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_finalize_action_keeps_older_than_runtime_listing_path() {
+        let (tmp_dir, config_path, config) = write_config_file();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+        let cmd = new(&tmp_dir.keep());
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "test",
+                "--config",
+                filepath,
+                "rm",
+                "s3/bucket/logs/",
+                "--older-than",
+                "30d",
+            ])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = finalize_action(action, &matches, &config, &config_path).unwrap();
+
+        match action {
+            Action::DeleteObject {
+                key,
+                older_than,
+                targets,
+                ..
+            } => {
+                assert_eq!(key, "logs/");
+                assert!(targets.is_empty());
+                assert_eq!(
+                    older_than.map(crate::cli::age_filter::AgeFilter::duration),
+                    Some(chrono::Duration::days(30))
+                );
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_finalize_action_rejects_multiple_older_than_targets() {
+        let (tmp_dir, config_path, _config) = write_config_file();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+        let cmd = new(&tmp_dir.keep());
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "test",
+                "--config",
+                filepath,
+                "rm",
+                "s3/bucket-a/logs/",
+                "s3/bucket-b/logs/",
+                "--older-than",
+                "30d",
+            ])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals)
+            .unwrap_err()
+            .to_string();
+        assert!(action.contains("--older-than expects exactly one bucket or prefix target"));
+    }
+
+    #[test]
+    fn test_finalize_action_rejects_bucket_and_object_mix() {
+        let (tmp_dir, config_path, config) = write_config_file();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+        let cmd = new(&tmp_dir.keep());
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "test",
+                "--config",
+                filepath,
+                "rm",
+                "s3/bucket-a/a.txt",
+                "s3/bucket-b",
+            ])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let err = finalize_action(action, &matches, &config, &config_path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Object target missing key"));
     }
 
     #[test]
@@ -731,6 +1478,7 @@ hosts:
                 meta,
                 buf_size,
                 file,
+                host,
                 s3m_dir,
                 key,
                 pipe,
@@ -743,6 +1491,7 @@ hosts:
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
                 assert_eq!(file, Some(filepath.to_string()));
+                assert_eq!(host, "s3");
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "key");
                 assert!(!pipe);
@@ -815,6 +1564,7 @@ hosts:
                 meta,
                 buf_size,
                 file,
+                host,
                 s3m_dir,
                 key,
                 pipe,
@@ -827,6 +1577,7 @@ hosts:
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
                 assert_eq!(file, Some(filepath.to_string()));
+                assert_eq!(host, "s3");
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, filepath.to_string());
                 assert!(!pipe);
@@ -882,6 +1633,7 @@ hosts:
                 meta,
                 buf_size,
                 file,
+                host,
                 s3m_dir,
                 key,
                 pipe,
@@ -894,6 +1646,7 @@ hosts:
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
                 assert_eq!(file, Some(filepath.to_string()));
+                assert_eq!(host, "s3");
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "key");
                 assert!(!pipe);
@@ -948,6 +1701,7 @@ hosts:
                 meta,
                 buf_size,
                 file,
+                host,
                 s3m_dir,
                 key,
                 pipe,
@@ -971,6 +1725,7 @@ hosts:
                 );
                 assert_eq!(buf_size, 0);
                 assert_eq!(file, Some(filepath.to_string()));
+                assert_eq!(host, "s3");
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "f");
                 assert!(!pipe);
@@ -1020,6 +1775,7 @@ hosts:
                 meta,
                 buf_size,
                 file,
+                host,
                 s3m_dir,
                 key,
                 pipe,
@@ -1032,6 +1788,7 @@ hosts:
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
                 assert_eq!(file, Some(filepath.to_string()));
+                assert_eq!(host, "s3");
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "f");
                 assert!(!pipe);
@@ -1087,6 +1844,7 @@ hosts:
                 meta,
                 buf_size,
                 file,
+                host,
                 s3m_dir,
                 key,
                 pipe,
@@ -1099,6 +1857,7 @@ hosts:
                 assert_eq!(meta, None);
                 assert_eq!(buf_size, 0);
                 assert_eq!(file, Some(filepath.to_string()));
+                assert_eq!(host, "s3");
                 assert_eq!(s3m_dir, PathBuf::new());
                 assert_eq!(key, "f");
                 assert!(!pipe);
@@ -1199,5 +1958,166 @@ hosts:
         assert!(action.is_err());
         let err = action.unwrap_err().to_string();
         assert!(err.contains("Source file missing"));
+    }
+
+    #[test]
+    fn test_dispatch_streams_defaults_to_list() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+
+        let cmd = new(tmp_dir.path());
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "s3m",
+                "--config",
+                config_path.to_str().unwrap(),
+                "streams",
+            ])
+            .unwrap();
+
+        let action = dispatch_streams(&matches, tmp_dir.path().to_path_buf(), config_path).unwrap();
+        match action {
+            Action::Streams {
+                command: StreamCommand::List,
+                ..
+            } => {}
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_streams_resume_uses_requested_number() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+
+        let cmd = new(tmp_dir.path());
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "s3m",
+                "--config",
+                config_path.to_str().unwrap(),
+                "--number",
+                "7",
+                "streams",
+                "resume",
+                "stream-1",
+            ])
+            .unwrap();
+
+        let action = dispatch_streams(&matches, tmp_dir.path().to_path_buf(), config_path).unwrap();
+        match action {
+            Action::Streams {
+                command: StreamCommand::Resume { id },
+                number,
+                ..
+            } => {
+                assert_eq!(id, "stream-1");
+                assert_eq!(number, 7);
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_get_json_requires_metadata_or_versions() {
+        let cmd = Command::new("test").subcommand(cmd_get::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "get", "h/bucket/key", "--json"])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let err = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--json is only supported"));
+    }
+
+    #[test]
+    fn test_dispatch_ls_json() {
+        let cmd = Command::new("test").subcommand(cmd_ls::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "ls", "s3/bucket/prefix", "--json"])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        match action {
+            Action::ListObjects { json, .. } => assert!(json),
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_du_json() {
+        let cmd = Command::new("test").subcommand(cmd_du::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "du", "s3/my-bucket", "--json"])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        match action {
+            Action::DiskUsage { json, .. } => assert!(json),
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_streams_json() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+
+        let cmd = new(tmp_dir.path());
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "s3m",
+                "--config",
+                config_path.to_str().unwrap(),
+                "streams",
+                "ls",
+                "--json",
+            ])
+            .unwrap();
+
+        let action = dispatch_streams(&matches, tmp_dir.path().to_path_buf(), config_path).unwrap();
+        match action {
+            Action::Streams { json, .. } => assert!(json),
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_streams_resume_rejects_json() {
+        let tmp_dir = Builder::new().prefix("test-s3m-").tempdir().unwrap();
+        let config_path = tmp_dir.path().join("config.yml");
+        let mut config = File::create(&config_path).unwrap();
+        config.write_all(CONF.as_bytes()).unwrap();
+
+        let cmd = new(tmp_dir.path());
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "s3m",
+                "--config",
+                config_path.to_str().unwrap(),
+                "streams",
+                "resume",
+                "stream-1",
+                "--json",
+            ])
+            .unwrap();
+
+        let err = dispatch_streams(&matches, tmp_dir.path().to_path_buf(), config_path)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--json is not supported"));
     }
 }

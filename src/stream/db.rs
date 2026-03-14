@@ -1,40 +1,76 @@
 use crate::{
     s3::{S3, actions, checksum::Checksum},
-    stream::part::Part,
+    stream::{part::Part, state},
 };
 use anyhow::Result;
 use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
-use std::{collections::BTreeMap, convert::Into, path::Path};
+use std::{
+    collections::BTreeMap,
+    convert::Into,
+    path::{Path, PathBuf},
+};
 
 pub const DB_PARTS: &str = "parts";
 pub const DB_UPLOADED: &str = "uploaded parts";
 
 #[derive(Debug, Clone)]
 pub struct Db {
-    db: sled::Db,
+    storage: sled::Db,
     key: String,
+    state_dir: PathBuf,
 }
 
 impl Db {
+    #[must_use]
+    pub fn state_dir(path: &Path, checksum: &str) -> PathBuf {
+        path.join("streams").join(checksum)
+    }
+
     /// # Errors
     ///
     /// Will return `Err` if can not create the db
     pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &Path) -> Result<Self> {
         let key = format!("{} {} {}", &s3.hash()[0..8], key, mtime);
+        let state_dir = Self::state_dir(path, checksum);
 
         log::debug!("db key: [{}], path: {}", &key, path.display());
 
-        let db = sled::Config::new()
-            .path(format!("{}/streams/{}", path.display(), checksum))
+        let storage = sled::Config::new()
+            .path(&state_dir)
             .use_compression(false)
             .mode(sled::Mode::LowSpace)
             .open()?;
-        Ok(Self { db, key })
+        Ok(Self {
+            storage,
+            key,
+            state_dir,
+        })
+    }
+
+    /// # Errors
+    ///
+    /// Will return `Err` if can not open an existing db
+    pub fn open_existing(path: &Path, key: String) -> Result<Self> {
+        let storage = sled::Config::new()
+            .path(path)
+            .use_compression(false)
+            .mode(sled::Mode::LowSpace)
+            .open()?;
+        Ok(Self {
+            storage,
+            key,
+            state_dir: path.to_path_buf(),
+        })
     }
 
     #[must_use]
     pub const fn db(&self) -> &sled::Db {
-        &self.db
+        &self.storage
+    }
+
+    #[must_use]
+    pub fn state_key(&self) -> &str {
+        &self.key
     }
 
     /// # Errors
@@ -42,7 +78,7 @@ impl Db {
     /// Will return `Err` if can not query the db
     pub fn check(&self) -> Result<Option<String>> {
         let etag = &self
-            .db
+            .storage
             .get(format!("etag {}", &self.key).as_bytes())?
             .map(|s| String::from_utf8(s.to_vec()).map(|s| format!("ETag: {s}")))
             .transpose()?;
@@ -54,7 +90,7 @@ impl Db {
     /// Will return `Err` if can not query the db
     pub fn upload_id(&self) -> Result<Option<String>> {
         let uid = &self
-            .db
+            .storage
             .get(&self.key)?
             .map(|s| String::from_utf8(s.to_vec()))
             .transpose()?;
@@ -65,37 +101,45 @@ impl Db {
     ///
     /// Will return `Err` if can not open the tree
     pub fn db_parts(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(DB_PARTS)?)
+        Ok(self.storage.open_tree(DB_PARTS)?)
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not open the tree
     pub fn db_uploaded(&self) -> Result<sled::Tree> {
-        Ok(self.db.open_tree(DB_UPLOADED)?)
+        Ok(self.storage.open_tree(DB_UPLOADED)?)
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not insert the `upload_id`
     pub fn save_upload_id(&self, uid: &str) -> Result<Option<sled::IVec>> {
-        Ok(self.db.insert(&self.key, uid)?)
+        let previous = self.storage.insert(&self.key, uid)?;
+        self.storage.flush()?;
+        state::touch_metadata(&self.state_dir)?;
+        Ok(previous)
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not insert the itag
     pub fn save_etag(&self, etag: &str) -> Result<Option<sled::IVec>> {
-        Ok(self
-            .db
-            .insert(format!("etag {}", &self.key).as_bytes(), etag)?)
+        let previous = self
+            .storage
+            .insert(format!("etag {}", &self.key).as_bytes(), etag)?;
+        self.storage.flush()?;
+        state::touch_metadata(&self.state_dir)?;
+        Ok(previous)
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not `flush`
     pub fn flush(&self) -> Result<usize> {
-        Ok(self.db.flush()?)
+        let flushed = self.storage.flush()?;
+        state::touch_metadata(&self.state_dir)?;
+        Ok(flushed)
     }
 
     /// # Errors
@@ -110,9 +154,11 @@ impl Db {
     ) -> Result<Option<sled::IVec>> {
         let part = Part::new(number, seek, chunk, checksum);
         let bytes = to_bytes::<RkyvError>(&part)?;
-        Ok(self
+        let previous = self
             .db_parts()?
-            .insert(number.to_be_bytes(), bytes.as_slice())?)
+            .insert(number.to_be_bytes(), bytes.as_slice())?;
+        state::touch_metadata(&self.state_dir)?;
+        Ok(previous)
     }
 
     /// # Errors

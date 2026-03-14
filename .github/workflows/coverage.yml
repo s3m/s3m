@@ -53,7 +53,7 @@ jobs:
           RUSTDOCFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
 
       - name: Run integration tests with coverage
-        run: cargo test --tests -- --ignored --test-threads=1
+        run: cargo test --tests -- --test-threads=1
         env:
           RUST_BACKTRACE: full
           CARGO_INCREMENTAL: 0

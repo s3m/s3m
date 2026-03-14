@@ -50,6 +50,12 @@ pub fn command() -> Command {
                 .long_help("Download a specific object version by version ID.")
                 .num_args(1),
         )
+        .arg(
+            Arg::new("json")
+                .help("Emit machine-readable JSON output for metadata or version listing")
+                .long("json")
+                .num_args(0),
+        )
 }
 
 #[cfg(test)]
@@ -162,6 +168,14 @@ mod tests {
             m.get_one::<String>("version").map(String::as_str),
             Some("1")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_json() -> Result<()> {
+        let cmd = command();
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--meta", "--json"])?;
+        assert_eq!(m.get_one::<bool>("json").copied(), Some(true));
         Ok(())
     }
 }

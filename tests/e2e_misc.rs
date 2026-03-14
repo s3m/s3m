@@ -17,7 +17,6 @@ mod common;
 use common::{MinioContext, run_s3m, run_s3m_with_minio};
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_binary_version() {
     // Simple test to verify binary works
     let output = run_s3m(&["--version"]);
@@ -32,7 +31,6 @@ async fn test_binary_version() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_binary_help() {
     let output = run_s3m(&["--help"]);
 
@@ -46,7 +44,6 @@ async fn test_binary_help() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_show_command() {
     let minio = MinioContext::get_or_start().await;
 

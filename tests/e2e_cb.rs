@@ -12,7 +12,6 @@ mod common;
 use common::{MinioContext, run_s3m_with_minio};
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_create_bucket() {
     let minio = MinioContext::get_or_start().await;
 

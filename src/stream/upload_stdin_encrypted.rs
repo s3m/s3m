@@ -1,0 +1,88 @@
+use crate::{
+    cli::globals::GlobalArgs,
+    s3::S3,
+    stream::{
+        STDIN_BUFFER_SIZE, Stream, complete_multipart_upload, create_initial_stream,
+        create_nonce_header, encrypt_chunk, get_key, init_encryption, initiate_multipart_upload,
+        maybe_upload_part, setup_progress, upload_final_part, write_to_stream,
+    },
+};
+use anyhow::{Result, anyhow};
+use chacha20poly1305::aead::stream::EncryptorBE32;
+use futures::stream::TryStreamExt;
+use std::{collections::BTreeMap, path::PathBuf};
+use tokio::io::stdin;
+use tokio_util::codec::{BytesCodec, FramedRead};
+
+/// Read from STDIN and encrypt the data.
+///
+/// # Errors
+/// Will return an error if the upload fails.
+pub async fn stream_stdin_encrypted(
+    s3: &S3,
+    object_key: &str,
+    acl: Option<String>,
+    meta: Option<BTreeMap<String, String>>,
+    quiet: bool,
+    tmp_dir: PathBuf,
+    globals: GlobalArgs,
+) -> Result<String> {
+    let encryption_key = globals
+        .enc_key
+        .as_ref()
+        .ok_or_else(|| anyhow!("Encryption key is required"))?;
+
+    let key = get_key(object_key, globals.compress, globals.encrypt);
+
+    let mut meta = meta.unwrap_or_default();
+    meta.insert(
+        "Content-Type".to_string(),
+        "application/vnd.s3m.encrypted".to_string(),
+    );
+
+    let upload_id = initiate_multipart_upload(s3, &key, acl, meta).await?;
+    let progress_sender = setup_progress(quiet, None).await;
+
+    let (cipher, nonce_bytes) = init_encryption(encryption_key);
+    let encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
+    let nonce_header = create_nonce_header(&nonce_bytes);
+
+    let first_stream: Stream = create_initial_stream(
+        &upload_id,
+        &tmp_dir,
+        &key,
+        s3,
+        progress_sender,
+        &globals,
+        Some(&nonce_header),
+    )?;
+
+    let mut stream = FramedRead::new(stdin(), BytesCodec::new())
+        .map_err(|e| anyhow!("Error reading STDIN chunk: {e}"))
+        .try_fold(
+            (first_stream, encryptor),
+            |(mut current_upload_state_acc, mut current_encryptor_acc), chunk| async move {
+                let encrypted_data = encrypt_chunk(&mut current_encryptor_acc, &chunk)
+                    .map_err(|e| anyhow!("Failed to encrypt chunk: {e}"))?;
+
+                write_to_stream(&mut current_upload_state_acc, &encrypted_data).map_err(|e| {
+                    anyhow!("Failed to write encrypted chunk to upload stream: {e}")
+                })?;
+
+                maybe_upload_part(&mut current_upload_state_acc, STDIN_BUFFER_SIZE).await?;
+
+                Ok((current_upload_state_acc, current_encryptor_acc))
+            },
+        )
+        .await
+        .map(|(final_stream_state, _)| final_stream_state)?;
+
+    let final_etag = upload_final_part(&mut stream, &key, &upload_id, s3, &globals).await?;
+    stream.etags.push(final_etag);
+
+    if let Some(sender) = stream.channel.take() {
+        drop(sender);
+    }
+
+    complete_multipart_upload(s3, &key, &upload_id, stream.etags).await
+}

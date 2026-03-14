@@ -1,11 +1,14 @@
 pub mod cmd_acl;
 pub mod cmd_cb;
+pub mod cmd_du;
 pub mod cmd_get;
 pub mod cmd_ls;
 pub mod cmd_rm;
 pub mod cmd_share;
 pub mod cmd_show;
+pub mod cmd_streams;
 
+use crate::cli::age_filter::{AgeFilter, parse_age_filter};
 use clap::{
     Arg, ColorChoice, Command,
     builder::ValueParser,
@@ -56,6 +59,12 @@ pub fn validator_is_dir() -> ValueParser {
         }
 
         Err(format!("Invalid path or directory does not exist: '{s}'"))
+    })
+}
+
+pub fn validator_age_filter() -> ValueParser {
+    ValueParser::from(move |s: &str| -> std::result::Result<AgeFilter, String> {
+        parse_age_filter(s).map_err(|error| error.to_string())
     })
 }
 
@@ -112,9 +121,9 @@ pub fn new(config_path: &Path) -> Command {
         .arg(
             Arg::new("clean")
             .long("clean")
-            .help(format!("remove {} directory", config_streams_path.display()))
+            .help("clean local multipart stream state")
             .long_help(format!(
-                "Remove the local resume/cache directory used for multipart state.\n\nPath: {}",
+                "Clean broken or completed local multipart state while keeping active/resumable entries.\n\nPath: {}",
                 config_streams_path.display()
             ))
             .num_args(0)
@@ -281,12 +290,14 @@ pub fn new(config_path: &Path) -> Command {
             .value_names(["file.enc", "key"])
         )
         .subcommand(cmd_acl::command())
+        .subcommand(cmd_du::command())
         .subcommand(cmd_get::command())
         .subcommand(cmd_ls::command())
         .subcommand(cmd_cb::command())
         .subcommand(cmd_rm::command())
         .subcommand(cmd_share::command())
         .subcommand(cmd_show::command())
+        .subcommand(cmd_streams::command())
 }
 
 #[cfg(test)]

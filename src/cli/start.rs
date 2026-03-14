@@ -17,6 +17,11 @@ use std::{
     process::exit,
 };
 
+fn legacy_clean(config_path: &Path) -> Result<()> {
+    crate::cli::actions::streams::clean_streams_state(config_path)?;
+    Ok(())
+}
+
 pub fn get_config_path() -> Result<PathBuf> {
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
 
@@ -29,6 +34,7 @@ pub fn get_config_path() -> Result<PathBuf> {
 
 /// # Errors
 /// Will return an error if the config file is not found
+#[allow(clippy::too_many_lines)]
 pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     let config_path = get_config_path()?;
 
@@ -53,10 +59,9 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     log::info!("config path: {}", config_path.display());
 
     // handle option --clean
-    // removes ~/.config/s3m/streams directory
+    // cleans ~/.config/s3m/streams using the same logic as `s3m streams clean`
     if matches.get_one::<bool>("clean").copied().unwrap_or(false) {
-        let streams = config_path.join("streams");
-        fs::remove_dir_all(streams).unwrap_or(());
+        legacy_clean(&config_path).unwrap_or_default();
         exit(0);
     }
 
@@ -107,9 +112,19 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     );
 
     // load the config file
-    let config = Config::new(config_file)?;
+    let config = Config::new(config_file.clone())?;
 
     log::debug!("config: {config:#?}");
+
+    if matches.subcommand_name() == Some("streams") {
+        let action =
+            dispatch::dispatch_streams(&matches, config_path.clone(), config_file.clone())?;
+        return Ok((
+            crate::cli::actions::streams::placeholder(),
+            action,
+            global_args,
+        ));
+    }
 
     // show config
     if matches.subcommand_matches("show").is_some() {
@@ -173,10 +188,11 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     let action = dispatch::dispatch(
         s3_location,
         buf_size,
-        config_path,
+        config_path.clone(),
         &matches,
         &mut global_args,
     )?;
+    let action = dispatch::finalize_action(action, &matches, &config, &config_path)?;
 
     log::debug!("globals: {global_args:#?}, action: {action:#?}");
 
@@ -216,8 +232,16 @@ pub fn get_host<'a>(
 )]
 mod tests {
     use super::*;
-    use crate::{cli::commands::new, s3::Region};
-    use std::{fs::File, io::Write, str::FromStr};
+    use crate::{
+        cli::commands::new,
+        s3::{Credentials, Region, S3},
+        stream::{
+            db::Db,
+            state::{StreamMetadata, StreamMode, state_dir, write_metadata},
+        },
+    };
+    use secrecy::SecretString;
+    use std::{fs, fs::File, io::Write, str::FromStr};
     use tempfile::TempDir;
 
     const CONF: &str = r"---
@@ -283,5 +307,52 @@ hosts:
                 .to_string()
                 .contains("Bucket name missing, expected format")
         );
+    }
+
+    #[test]
+    fn test_legacy_clean_uses_stream_cleanup_logic() {
+        let tmp_dir = TempDir::new().unwrap();
+        let s3 = S3::new(
+            &Credentials::new("AKIAIOSFODNN7EXAMPLE", &SecretString::new("secret".into())),
+            &"us-east-1".parse::<Region>().unwrap(),
+            Some("bucket".to_string()),
+            false,
+        );
+        let db = Db::new(&s3, "key", "good", 1, tmp_dir.path()).unwrap();
+        db.save_upload_id("upload-1").unwrap();
+        db.create_part(1, 0, 10, None).unwrap();
+        db.db_parts().unwrap().flush().unwrap();
+        write_metadata(
+            tmp_dir.path(),
+            &StreamMetadata {
+                version: 1,
+                id: "good".to_string(),
+                host: "aws".to_string(),
+                bucket: "bucket".to_string(),
+                key: "key".to_string(),
+                source_path: tmp_dir.path().join("source.bin"),
+                checksum: "good".to_string(),
+                file_size: 10,
+                file_mtime: 1,
+                part_size: 10,
+                db_key: db.state_key().to_string(),
+                created_at: 1,
+                updated_at: Some(1),
+                pipe: false,
+                compress: false,
+                encrypt: false,
+                mode: StreamMode::FileMultipart,
+            },
+        )
+        .unwrap();
+
+        let broken_dir = state_dir(tmp_dir.path(), "broken");
+        fs::create_dir_all(&broken_dir).unwrap();
+        fs::write(broken_dir.join("state.yml"), "not: [valid").unwrap();
+
+        legacy_clean(tmp_dir.path()).unwrap();
+
+        assert!(state_dir(tmp_dir.path(), "good").exists());
+        assert!(!state_dir(tmp_dir.path(), "broken").exists());
     }
 }

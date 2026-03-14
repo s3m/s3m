@@ -7,7 +7,7 @@
 //! ```bash
 //! ./scripts/test-with-podman.sh
 //! # or manually:
-//! cargo test --test e2e_binary -- --ignored
+//! cargo test --test e2e_binary -- --nocapture
 //! ```
 
 #![allow(
@@ -21,8 +21,11 @@
 )]
 
 mod helpers;
+#[path = "support/minio_runtime.rs"]
+mod minio_runtime;
 
 use helpers::minio::{MINIO_ROOT_PASSWORD, MINIO_ROOT_USER, MinioContainer};
+use minio_runtime::MinioRuntime;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -84,26 +87,26 @@ enum MinioContext {
 impl MinioContext {
     /// Get or start `MinIO` - uses external if `MINIO_ENDPOINT` is set, otherwise starts container
     async fn get_or_start() -> Self {
-        if let Ok(endpoint) = env::var("MINIO_ENDPOINT") {
-            // Use externally provided MinIO (e.g., from test-with-podman.sh)
-            let access_key =
-                env::var("MINIO_ACCESS_KEY").unwrap_or_else(|_| MINIO_ROOT_USER.to_string());
-            let secret_key =
-                env::var("MINIO_SECRET_KEY").unwrap_or_else(|_| MINIO_ROOT_PASSWORD.to_string());
+        match minio_runtime::resolve_minio_runtime(MINIO_ROOT_USER, MINIO_ROOT_PASSWORD) {
+            MinioRuntime::External(config) => {
+                println!("Using external MinIO at {}", config.endpoint);
 
-            println!("Using external MinIO at {endpoint}");
-
-            MinioContext::External {
-                endpoint,
-                access_key,
-                secret_key,
+                MinioContext::External {
+                    endpoint: config.endpoint,
+                    access_key: config.access_key,
+                    secret_key: config.secret_key,
+                }
             }
-        } else {
-            // Start testcontainer
-            println!("Starting MinIO testcontainer");
-            let container = MinioContainer::start().await;
-            container.wait_for_ready().await.expect("MinIO ready");
-            MinioContext::Container(Box::new(container))
+            MinioRuntime::ManagedContainer { podman_socket } => {
+                if let Some(socket) = podman_socket {
+                    println!("Auto-configured Podman socket at {}", socket.display());
+                }
+
+                println!("Starting MinIO testcontainer");
+                let container = MinioContainer::start().await;
+                container.wait_for_ready().await.expect("MinIO ready");
+                MinioContext::Container(Box::new(container))
+            }
         }
     }
 
@@ -208,7 +211,6 @@ fn run_s3m(args: &[&str]) -> std::process::Output {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_binary_version() {
     // Simple test to verify binary works
     let output = run_s3m(&["--version"]);
@@ -223,7 +225,6 @@ async fn test_binary_version() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_binary_help() {
     let output = run_s3m(&["--help"]);
 
@@ -237,7 +238,6 @@ async fn test_binary_help() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_create_bucket() {
     let minio = MinioContext::get_or_start().await;
 
@@ -261,7 +261,6 @@ async fn test_e2e_create_bucket() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_put_and_get_object() {
     let minio = MinioContext::get_or_start().await;
 
@@ -324,7 +323,6 @@ async fn test_e2e_put_and_get_object() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_list_objects() {
     let minio = MinioContext::get_or_start().await;
 
@@ -367,7 +365,6 @@ async fn test_e2e_list_objects() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_delete_object() {
     let minio = MinioContext::get_or_start().await;
 
@@ -401,7 +398,6 @@ async fn test_e2e_delete_object() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_large_file_multipart() {
     let minio = MinioContext::get_or_start().await;
 
@@ -438,7 +434,6 @@ async fn test_e2e_large_file_multipart() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_compressed_upload() {
     let minio = MinioContext::get_or_start().await;
 
@@ -470,7 +465,6 @@ async fn test_e2e_compressed_upload() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_encrypted_upload() {
     let minio = MinioContext::get_or_start().await;
 
@@ -525,7 +519,6 @@ async fn test_e2e_encrypted_upload() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_show_command() {
     let minio = MinioContext::get_or_start().await;
 
@@ -559,7 +552,6 @@ async fn test_e2e_show_command() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_concurrent_uploads() {
     let minio = MinioContext::get_or_start().await;
 
@@ -626,7 +618,6 @@ async fn test_e2e_concurrent_uploads() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_checksum_validation() {
     let minio = MinioContext::get_or_start().await;
 
@@ -657,7 +648,6 @@ async fn test_e2e_checksum_validation() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_different_buffer_sizes() {
     let minio = MinioContext::get_or_start().await;
 
@@ -719,7 +709,6 @@ fn create_test_file_with_content(size: usize, pattern: &str) -> NamedTempFile {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_normal_upload_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
@@ -759,7 +748,6 @@ async fn test_e2e_normal_upload_with_hash() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_multipart_upload_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
@@ -802,7 +790,6 @@ async fn test_e2e_multipart_upload_with_hash() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_stdin_upload() {
     let minio = MinioContext::get_or_start().await;
 
@@ -860,7 +847,6 @@ async fn test_e2e_stdin_upload() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_compress_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
@@ -908,7 +894,6 @@ async fn test_e2e_compress_with_hash() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_compress_with_existing_extension() {
     let minio = MinioContext::get_or_start().await;
 
@@ -945,7 +930,6 @@ async fn test_e2e_compress_with_existing_extension() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_compress_and_encrypt_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
@@ -1005,7 +989,6 @@ async fn test_e2e_compress_and_encrypt_with_hash() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_encrypt_only_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
@@ -1069,7 +1052,6 @@ async fn test_e2e_encrypt_only_with_hash() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_decrypt_and_verify_hash() {
     let minio = MinioContext::get_or_start().await;
 
@@ -1144,7 +1126,6 @@ async fn test_e2e_decrypt_and_verify_hash() {
 }
 
 #[tokio::test]
-#[ignore = "Requires MinIO container runtime"]
 async fn test_e2e_decompress_and_verify_hash() {
     let minio = MinioContext::get_or_start().await;
 
