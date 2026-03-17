@@ -34,6 +34,10 @@ async fn main() -> Result<()> {
             actions::object_share::handle(&s3, action)?;
         }
 
+        Action::Monitor { .. } => {
+            actions::monitor::handle(&s3, action).await?;
+        }
+
         Action::PutObject { .. } => {
             actions::object_put::handle(&s3, action, globals).await?;
         }

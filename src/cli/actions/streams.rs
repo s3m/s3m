@@ -5,20 +5,19 @@ use crate::{
         globals::GlobalArgs,
         start::get_host,
     },
-    s3::{Credentials, Region, S3},
+    s3::{Credentials, S3},
     stream::{
         db::Db,
         state::{
             CleanSummary, StreamEntry, StreamMetadata, StreamStatus, clean_streams, scan_streams,
         },
-        upload_multipart::upload_multipart,
+        upload_multipart::{MultipartUploadRequest, upload_multipart},
     },
 };
 use anyhow::{Context, Result, anyhow};
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use secrecy::SecretString;
 use serde::Serialize;
 use std::{
     fs,
@@ -459,20 +458,20 @@ async fn resume_stream(
     let file_size = file_metadata.len();
     let max_requests = calculate_max_requests(number);
 
-    let etag = upload_multipart(
-        &s3,
-        &stream_metadata.key,
-        &stream_metadata.source_path,
+    let etag = upload_multipart(MultipartUploadRequest {
+        s3: &s3,
+        key: &stream_metadata.key,
+        file: &stream_metadata.source_path,
         file_size,
-        stream_metadata.part_size,
-        &db,
-        None,
-        None,
-        false,
-        None,
+        chunk_size: stream_metadata.part_size,
+        sdb: &db,
+        acl: None,
+        meta: None,
+        quiet: false,
+        additional_checksum: None,
         max_requests,
         globals,
-    )
+    })
     .await?;
 
     println!("{etag}");
@@ -484,20 +483,6 @@ async fn resume_stream(
 /// Will return `Err` if stream state cleanup fails
 pub fn clean_streams_state(streams_dir: &Path) -> Result<CleanSummary> {
     clean_streams(streams_dir)
-}
-
-fn placeholder_s3() -> S3 {
-    S3::new(
-        &Credentials::new("", &SecretString::new("".into())),
-        &Region::aws("us-east-1"),
-        None,
-        true,
-    )
-}
-
-#[must_use]
-pub fn placeholder() -> S3 {
-    placeholder_s3()
 }
 
 #[cfg(test)]

@@ -100,16 +100,16 @@ impl<'a> UploadPart<'a> {
 
         let (url, headers) = &self.sign(s3, sha256.as_ref(), Some(md5.as_ref()), Some(length))?;
 
-        let response = request::multipart_upload(
-            s3.client(),
-            url.clone(),
-            self.http_method()?,
+        let response = request::multipart_upload(request::MultipartRequest {
+            client: s3.client(),
+            url: url.clone(),
+            method: self.http_method()?,
             headers,
-            self.file,
-            self.seek,
-            self.chunk,
-            globals.throttle,
-        )
+            file: self.file,
+            seek: self.seek,
+            chunk: self.chunk,
+            throttle: globals.throttle,
+        })
         .await?;
 
         if response.status().is_success() {

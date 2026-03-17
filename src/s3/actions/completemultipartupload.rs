@@ -1,5 +1,4 @@
 //! Amazon S3 multipart upload limits
-#![allow(clippy::format_collect)]
 //! Maximum object size 5 TB
 //! Maximum number of parts per upload  10,000
 //! <https://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html>

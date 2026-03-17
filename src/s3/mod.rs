@@ -69,6 +69,13 @@ impl S3 {
         self.bucket.as_deref()
     }
 
+    #[must_use]
+    pub fn with_bucket(&self, bucket: Option<String>) -> Self {
+        let mut s3 = self.clone();
+        s3.bucket = bucket;
+        s3
+    }
+
     // use it to identify the connection and keep track of the uploaded files so that the same file
     // could be uploaded into multiple provider/buckets
     #[must_use]

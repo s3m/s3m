@@ -10,58 +10,78 @@ use sled::transaction::{TransactionError, Transactional};
 use std::{collections::BTreeMap, path::Path};
 use tokio::time::{Duration, sleep};
 
+pub struct MultipartUploadRequest<'a> {
+    pub s3: &'a S3,
+    pub key: &'a str,
+    pub file: &'a Path,
+    pub file_size: u64,
+    pub chunk_size: u64,
+    pub sdb: &'a Db,
+    pub acl: Option<String>,
+    pub meta: Option<BTreeMap<String, String>>,
+    pub quiet: bool,
+    pub additional_checksum: Option<Checksum>,
+    pub max_requests: u8,
+    pub globals: GlobalArgs,
+}
+
+struct UploadPartRequest<'a> {
+    s3: &'a S3,
+    key: &'a str,
+    file: &'a Path,
+    part_number: u16,
+    uid: &'a str,
+    seek: u64,
+    chunk: u64,
+    additional_checksum: &'a mut Option<Checksum>,
+    globals: GlobalArgs,
+}
+
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingRESTAPImpUpload.html
 // * Initiate Multipart Upload
 // * Upload Part
 // * Complete Multipart Upload
 /// # Errors
 /// Will return an error if the upload fails
-#[allow(clippy::too_many_arguments)]
-pub async fn upload_multipart(
-    s3: &S3,
-    key: &str,
-    file: &Path,
-    file_size: u64,
-    chunk_size: u64,
-    sdb: &Db,
-    acl: Option<String>,
-    meta: Option<BTreeMap<String, String>>,
-    quiet: bool,
-    additional_checksum: Option<Checksum>,
-    max_requests: u8,
-    globals: GlobalArgs,
-) -> Result<String> {
+pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<String> {
     log::debug!(
         "Starting multi part upload:
-        key: {key}
+        key: {}
         file: {}
-        file_size: {file_size}
-        part size: {chunk_size}
+        file_size: {}
+        part size: {}
         acl: {:#?}
         meta: {:#?}
         additional checksum: {:#?}",
-        file.display(),
-        acl,
-        meta,
-        additional_checksum
+        request.key,
+        request.file.display(),
+        request.file_size,
+        request.chunk_size,
+        request.acl.as_ref(),
+        request.meta.as_ref(),
+        request.additional_checksum.as_ref()
     );
 
     // trees for keeping track of parts to upload
-    let db_parts = sdb.db_parts()?;
-    let db_uploaded = sdb.db_uploaded()?;
+    let db_parts = request.sdb.db_parts()?;
+    let db_uploaded = request.sdb.db_uploaded()?;
 
-    let upload_id = if let Some(uid) = sdb.upload_id()? {
+    let upload_id = if let Some(uid) = request.sdb.upload_id()? {
         uid
     } else {
         // Initiate Multipart Upload - request an Upload ID
-        let action =
-            actions::CreateMultipartUpload::new(key, acl, meta, additional_checksum.clone());
+        let action = actions::CreateMultipartUpload::new(
+            request.key,
+            request.acl,
+            request.meta,
+            request.additional_checksum.clone(),
+        );
 
-        let response = action.request(s3).await?;
+        let response = action.request(request.s3).await?;
 
         db_parts.clear()?;
         // save the upload_id to resume if required
-        sdb.save_upload_id(&response.upload_id)?;
+        request.sdb.save_upload_id(&response.upload_id)?;
         response.upload_id
     };
 
@@ -70,24 +90,26 @@ pub async fn upload_multipart(
     // if db_parts is not empty it means that a previous upload did not finish successfully.
     // skip creating the parts again and try to re-upload the pending ones
     if db_parts.is_empty() {
-        for (number, seek, chunk) in PartIterator::new(file_size, chunk_size) {
-            sdb.create_part(number, seek, chunk, additional_checksum.clone())?;
+        for (number, seek, chunk) in PartIterator::new(request.file_size, request.chunk_size) {
+            request
+                .sdb
+                .create_part(number, seek, chunk, request.additional_checksum.clone())?;
         }
         db_parts.flush()?;
     }
 
     // Upload parts progress bar
-    let pb = if quiet {
+    let pb = if request.quiet {
         Bar::default()
     } else {
-        Bar::new(file_size)
+        Bar::new(request.file_size)
     };
 
-    increment_progress_bar(&pb, db_uploaded.len() as u64 * chunk_size, None);
+    increment_progress_bar(&pb, db_uploaded.len() as u64 * request.chunk_size, None);
 
     let mut tasks = FuturesUnordered::new();
 
-    log::info!("Max concurrent requests: {max_requests}");
+    log::info!("Max concurrent requests: {}", request.max_requests);
 
     for part in db_parts
         .iter()
@@ -100,13 +122,27 @@ pub async fn upload_multipart(
         log::info!("Task push part: {}", part.get_number());
 
         // spawn task (upload part)
-        tasks.push(upload_part(s3, key, file, &upload_id, sdb, part, &globals));
+        tasks.push(upload_part(
+            request.s3,
+            request.key,
+            request.file,
+            &upload_id,
+            request.sdb,
+            part,
+            &request.globals,
+        ));
 
-        await_tasks(&mut tasks, &pb, chunk_size, max_requests.into()).await?;
+        await_tasks(
+            &mut tasks,
+            &pb,
+            request.chunk_size,
+            request.max_requests.into(),
+        )
+        .await?;
     }
 
     // wait for the remaining tasks
-    await_remaining_tasks(&mut tasks, &pb, chunk_size).await?;
+    await_remaining_tasks(&mut tasks, &pb, request.chunk_size).await?;
 
     // finish progress bar
     increment_progress_bar(&pb, 0, Some(true));
@@ -116,16 +152,20 @@ pub async fn upload_multipart(
     }
 
     // Complete Multipart Upload
-    let uploaded = sdb.uploaded_parts()?;
-    let action =
-        actions::CompleteMultipartUpload::new(key, &upload_id, uploaded, additional_checksum);
-    let rs = action.request(s3).await?;
+    let uploaded = request.sdb.uploaded_parts()?;
+    let action = actions::CompleteMultipartUpload::new(
+        request.key,
+        &upload_id,
+        uploaded,
+        request.additional_checksum,
+    );
+    let rs = action.request(request.s3).await?;
 
     // cleanup uploads tree
     db_uploaded.clear()?;
 
     // save the returned Etag
-    sdb.save_etag(&rs.e_tag)?;
+    request.sdb.save_etag(&rs.e_tag)?;
 
     // upload finished
     log::info!("Upload finished, ETag: {}", rs.e_tag);
@@ -212,17 +252,17 @@ async fn upload_part(
             sleep(Duration::from_secs(backoff_time)).await;
         }
 
-        match try_upload_part(
+        match try_upload_part(UploadPartRequest {
             s3,
             key,
             file,
             part_number,
             uid,
-            part.get_seek(),
-            part.get_chunk(),
-            &mut additional_checksum,
-            globals.clone(),
-        )
+            seek: part.get_seek(),
+            chunk: part.get_chunk(),
+            additional_checksum: &mut additional_checksum,
+            globals: globals.clone(),
+        })
         .await
         {
             Ok(e) => {
@@ -278,29 +318,18 @@ async fn upload_part(
     db.flush()
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn try_upload_part(
-    s3: &S3,
-    key: &str,
-    file: &Path,
-    number: u16,
-    uid: &str,
-    seek: u64,
-    chunk: u64,
-    additional_checksum: &mut Option<Checksum>,
-    globals: GlobalArgs,
-) -> Result<String> {
+async fn try_upload_part(request: UploadPartRequest<'_>) -> Result<String> {
     let action = actions::UploadPart::new(
-        key,
-        file,
-        number,
-        uid,
-        seek,
-        chunk,
-        additional_checksum.as_mut(),
+        request.key,
+        request.file,
+        request.part_number,
+        request.uid,
+        request.seek,
+        request.chunk,
+        request.additional_checksum.as_mut(),
     );
 
-    log::debug!("Uploading part: {number}");
+    log::debug!("Uploading part: {}", request.part_number);
 
-    action.request(s3, &globals).await
+    action.request(request.s3, &request.globals).await
 }

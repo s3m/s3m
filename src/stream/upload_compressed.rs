@@ -1,35 +1,28 @@
-use crate::{
-    cli::globals::GlobalArgs,
-    s3::S3,
-    stream::{
-        STDIN_BUFFER_SIZE, Stream, complete_multipart_upload, compress_chunk,
-        create_initial_stream, get_key, initiate_multipart_upload, maybe_upload_part,
-        setup_progress, upload_final_part, write_to_stream,
-    },
+use crate::stream::{
+    FileStreamUpload, InitialStreamParams, STDIN_BUFFER_SIZE, Stream, complete_multipart_upload,
+    compress_chunk, create_initial_stream, get_key, initiate_multipart_upload, maybe_upload_part,
+    setup_progress, upload_final_part, write_to_stream,
 };
 use anyhow::{Result, anyhow};
 use futures::stream::TryStreamExt;
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 /// Read file in chunks of 512MB
 /// # Errors
 /// Will return an error if the upload fails
-#[allow(clippy::too_many_arguments)]
-pub async fn stream_compressed(
-    s3: &S3,
-    object_key: &str,
-    acl: Option<String>,
-    meta: Option<BTreeMap<String, String>>,
-    quiet: bool,
-    tmp_dir: PathBuf,
-    globals: GlobalArgs,
-    file_path: &Path,
-) -> Result<String> {
+pub async fn stream_compressed(request: FileStreamUpload<'_>) -> Result<String> {
+    let FileStreamUpload {
+        s3,
+        object_key,
+        acl,
+        meta,
+        quiet,
+        tmp_dir,
+        globals,
+        file_path,
+    } = request;
+
     // use .zst extension if compress option is set
     let key = get_key(object_key, globals.compress, globals.encrypt);
 
@@ -43,15 +36,15 @@ pub async fn stream_compressed(
     let progress_sender = setup_progress(quiet, None).await;
 
     // Create initial stream
-    let first_stream: Stream = create_initial_stream(
-        &upload_id,
-        &tmp_dir,
-        &key,
+    let first_stream: Stream = create_initial_stream(InitialStreamParams {
+        upload_id: &upload_id,
+        tmp_dir: &tmp_dir,
+        key: &key,
         s3,
         progress_sender,
-        &globals,
-        None,
-    )?;
+        globals: &globals,
+        header_data: None,
+    })?;
 
     let file = File::open(file_path).await?;
 

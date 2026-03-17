@@ -1,5 +1,6 @@
 pub mod acl;
 pub mod bucket;
+pub mod monitor;
 pub mod object_delete;
 pub mod object_du;
 pub mod object_get;
@@ -91,6 +92,13 @@ pub enum Action {
     ShareObject {
         expire: usize,
         key: String,
+    },
+    Monitor {
+        host: String,
+        checks: Vec<monitor::MonitorCheck>,
+        format: monitor::MonitorOutputFormat,
+        exit_on_check_failure: bool,
+        number: u8,
     },
     Streams {
         command: StreamCommand,

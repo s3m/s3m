@@ -2,7 +2,7 @@ use crate::{
     cli::globals::GlobalArgs,
     s3::S3,
     stream::{
-        STDIN_BUFFER_SIZE, Stream, complete_multipart_upload, compress_chunk,
+        InitialStreamParams, STDIN_BUFFER_SIZE, Stream, complete_multipart_upload, compress_chunk,
         create_initial_stream, create_nonce_header, encrypt_chunk, get_key, init_encryption,
         initiate_multipart_upload, maybe_upload_part, setup_progress, upload_final_part,
         write_to_stream,
@@ -55,15 +55,15 @@ pub async fn stream_stdin_compressed_encrypted(
     let nonce_header = create_nonce_header(&nonce_bytes);
 
     // Create initial stream
-    let first_stream: Stream = create_initial_stream(
-        &upload_id,
-        &tmp_dir,
-        &key,
+    let first_stream: Stream = create_initial_stream(InitialStreamParams {
+        upload_id: &upload_id,
+        tmp_dir: &tmp_dir,
+        key: &key,
         s3,
         progress_sender,
-        &globals,
-        Some(&nonce_header),
-    )?;
+        globals: &globals,
+        header_data: Some(&nonce_header),
+    })?;
 
     let mut stream = FramedRead::new(stdin(), BytesCodec::new())
         .map_err(|e| anyhow!("Error reading STDIN chunk: {e}"))

@@ -137,7 +137,7 @@ pub fn host_bucket_key(matches: &ArgMatches) -> Result<S3Location> {
     log::debug!("Subcommand: {subcommand:?}");
 
     match subcommand {
-        Some(cmd @ ("acl" | "du" | "get" | "ls" | "cb" | "rm" | "share")) => {
+        Some(cmd @ ("acl" | "du" | "get" | "ls" | "cb" | "rm" | "share" | "monitor")) => {
             parse_subcommand_args(matches, cmd)
         }
         _ => parse_put_object_args(matches),
@@ -158,7 +158,7 @@ fn parse_subcommand_args(matches: &ArgMatches, subcommand: &str) -> Result<S3Loc
     log::info!("Parsed S3 location: {s3_location}");
 
     // For 'ls' command, allow missing bucket (for listing buckets)
-    let allow_missing_bucket = subcommand == "ls";
+    let allow_missing_bucket = subcommand == "ls" || subcommand == "monitor";
 
     log::info!("Allow missing bucket: {allow_missing_bucket}");
 
@@ -169,7 +169,7 @@ fn parse_subcommand_args(matches: &ArgMatches, subcommand: &str) -> Result<S3Loc
 }
 
 fn parse_put_object_args(matches: &ArgMatches) -> Result<S3Location> {
-    let args = get_main_arguments(matches)?;
+    let args = get_main_arguments(matches);
 
     let s3_location = match args.len() {
         2 => {
@@ -209,13 +209,12 @@ fn get_subcommand_arguments<'a>(
         .collect())
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn get_main_arguments(matches: &ArgMatches) -> Result<Vec<&str>> {
-    Ok(matches
+fn get_main_arguments(matches: &ArgMatches) -> Vec<&str> {
+    matches
         .get_many::<String>("arguments")
         .unwrap_or_default()
         .map(String::as_str)
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]

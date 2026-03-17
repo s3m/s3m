@@ -1,13 +1,85 @@
 use crate::s3::Region;
 use anyhow::{Context, Result};
 use secrecy::SecretString;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error};
 use serde_yaml_ng as serde_yaml;
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
+
+const fn default_monitor_age() -> u64 {
+    86_400
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum MonitorAgeValue {
+    Integer(u64),
+    Text(String),
+}
+
+fn parse_monitor_age_text(value: &str) -> std::result::Result<u64, String> {
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Ok(seconds);
+    }
+
+    let unit = value
+        .chars()
+        .last()
+        .ok_or_else(|| "monitor age can not be empty".to_string())?;
+    let amount = value
+        .get(..value.len().saturating_sub(1))
+        .ok_or_else(|| format!("Invalid monitor age '{value}'"))?;
+
+    let multiplier = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3_600,
+        'd' => 86_400,
+        _ => {
+            return Err(format!(
+                "Invalid monitor age '{value}'. Expected seconds or a suffix: s, m, h, d"
+            ));
+        }
+    };
+
+    let amount = amount.parse::<u64>().map_err(|_| {
+        format!("Invalid monitor age '{value}'. Expected an integer followed by s, m, h, or d")
+    })?;
+
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("Invalid monitor age '{value}'. Value is too large"))
+}
+
+fn deserialize_monitor_age<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match MonitorAgeValue::deserialize(deserializer)? {
+        MonitorAgeValue::Integer(seconds) => Ok(seconds),
+        MonitorAgeValue::Text(value) => parse_monitor_age_text(&value).map_err(D::Error::custom),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub hosts: BTreeMap<String, Host>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub struct MonitorRule {
+    pub prefix: String,
+
+    #[serde(default)]
+    pub suffix: String,
+
+    #[serde(
+        default = "default_monitor_age",
+        deserialize_with = "deserialize_monitor_age"
+    )]
+    pub age: u64,
+
+    #[serde(default)]
+    pub size: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +94,9 @@ pub struct Host {
     pub secret_key: SecretString,
 
     pub bucket: Option<String>,
+
+    #[serde(default)]
+    pub buckets: BTreeMap<String, Vec<MonitorRule>>,
 
     pub enc_key: Option<String>,
     pub compress: Option<bool>,
@@ -53,18 +128,17 @@ impl Host {
     /// # Errors
     /// Will return an error if the region is not found
     pub fn get_region(&self) -> Result<Region> {
-        Ok(if let Some(r) = &self.region {
-            r.parse::<Region>()?
-        } else {
-            let r = self
-                .endpoint
-                .as_ref()
-                .context("could not parse host need an endpoint or region")?;
-            Region::Custom {
+        match (&self.endpoint, &self.region) {
+            (Some(endpoint), Some(region)) => Ok(Region::custom(region.clone(), endpoint.clone())),
+            (Some(endpoint), None) => Ok(Region::Custom {
                 name: String::new(),
-                endpoint: r.clone(),
-            }
-        })
+                endpoint: endpoint.clone(),
+            }),
+            (None, Some(region)) => Ok(region.parse::<Region>()?),
+            (None, None) => Err(anyhow::anyhow!(
+                "could not parse host need an endpoint or region"
+            )),
+        }
     }
 }
 
@@ -125,6 +199,15 @@ hosts:
     secret_key: YYY
     bucket: my-bucket";
 
+    const CONF_ENDPOINT_AND_REGION: &str = r"---
+hosts:
+  s3:
+    endpoint: https://minio.example.com
+    region: us-east-1
+    access_key: XXX
+    secret_key: YYY
+    bucket: my-bucket";
+
     const CONF_COMPRESS: &str = r"---
 hosts:
   s3:
@@ -141,6 +224,35 @@ hosts:
     secret_ke: YYY
     compress: true
     enc_key: secret";
+
+    const CONF_MONITOR: &str = r"---
+hosts:
+  s3:
+    endpoint: https://s3.example.test
+    access_key: XXX
+    secret_key: YYY
+    buckets:
+      bucket_A:
+        - prefix: backups/daily
+          suffix: .log
+          age: 1d
+          size: 30720
+      bucket_B:
+        - prefix: foo
+          age: 12h
+          size: 1024
+        - prefix: path/to/logs/
+          age: 43200";
+
+    const CONF_MONITOR_DEFAULTS: &str = r"---
+hosts:
+  s3:
+    endpoint: https://s3.example.test
+    access_key: XXX
+    secret_key: YYY
+    buckets:
+      bucket_A:
+        - prefix: backups/daily";
 
     #[test]
     fn test_config_get_host() {
@@ -256,6 +368,85 @@ hosts:
         let h = h.unwrap();
         let r = h.get_region();
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_config_get_endpoint_and_region_prefers_custom_endpoint() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file
+            .write_all(CONF_ENDPOINT_AND_REGION.as_bytes())
+            .unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap();
+        let h = c.get_host("s3").unwrap();
+        let r = h.get_region().unwrap();
+        assert_eq!(
+            r,
+            Region::Custom {
+                name: "us-east-1".to_string(),
+                endpoint: "https://minio.example.com".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_config_monitor_rules() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file.write_all(CONF_MONITOR.as_bytes()).unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap();
+        let host = c.get_host("s3").unwrap();
+
+        assert_eq!(host.buckets.len(), 2);
+        assert_eq!(host.buckets["bucket_A"].len(), 1);
+        assert_eq!(
+            host.buckets["bucket_A"][0],
+            MonitorRule {
+                prefix: "backups/daily".to_string(),
+                suffix: ".log".to_string(),
+                age: 86_400,
+                size: 30_720,
+            }
+        );
+        assert_eq!(host.buckets["bucket_B"].len(), 2);
+        assert_eq!(
+            host.buckets["bucket_B"][0],
+            MonitorRule {
+                prefix: "foo".to_string(),
+                suffix: String::new(),
+                age: 43_200,
+                size: 1_024,
+            }
+        );
+    }
+
+    #[test]
+    fn test_config_monitor_rule_defaults() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file
+            .write_all(CONF_MONITOR_DEFAULTS.as_bytes())
+            .unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap();
+        let host = c.get_host("s3").unwrap();
+        let rule = &host.buckets["bucket_A"][0];
+
+        assert_eq!(rule.prefix, "backups/daily");
+        assert_eq!(rule.suffix, "");
+        assert_eq!(rule.age, 86_400);
+        assert_eq!(rule.size, 0);
+    }
+
+    #[test]
+    fn test_parse_monitor_age_text_units() {
+        assert_eq!(parse_monitor_age_text("30s").unwrap(), 30);
+        assert_eq!(parse_monitor_age_text("15m").unwrap(), 900);
+        assert_eq!(parse_monitor_age_text("12h").unwrap(), 43_200);
+        assert_eq!(parse_monitor_age_text("7d").unwrap(), 604_800);
+        assert_eq!(parse_monitor_age_text("86400").unwrap(), 86_400);
+    }
+
+    #[test]
+    fn test_parse_monitor_age_text_invalid_unit() {
+        let err = parse_monitor_age_text("1w").unwrap_err();
+        assert!(err.contains("Expected seconds or a suffix"));
     }
 
     #[test]

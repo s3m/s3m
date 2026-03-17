@@ -55,9 +55,44 @@ struct VersionJsonEntry {
     storage_class: String,
 }
 
+struct DownloadState {
+    file: tokio::fs::File,
+    pb: Bar,
+    file_size: u64,
+    downloaded: u64,
+    buffer: BytesMut,
+    decryptor: Option<DecryptorBE32<ChaCha20Poly1305>>,
+    is_encrypted: bool,
+    can_decrypt: bool,
+    cipher: Option<ChaCha20Poly1305>,
+}
+
+enum OutputFormat {
+    Text,
+    Json,
+}
+
+enum GetObjectRequest {
+    Metadata {
+        key: String,
+        version: Option<String>,
+        output: OutputFormat,
+    },
+    Versions {
+        key: String,
+        output: OutputFormat,
+    },
+    Download {
+        key: String,
+        version: Option<String>,
+        dest: Option<String>,
+        quiet: bool,
+        force: bool,
+    },
+}
+
 /// # Errors
 /// Will return an error if the action fails
-#[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
 pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> {
     if let Action::GetObject {
         key,
@@ -70,164 +105,241 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         version,
     } = action
     {
-        if metadata {
-            return handle_metadata(s3, &key, version, json).await;
+        let output = if json {
+            OutputFormat::Json
+        } else {
+            OutputFormat::Text
+        };
+
+        let request = if metadata {
+            GetObjectRequest::Metadata {
+                key,
+                version,
+                output,
+            }
+        } else if versions {
+            GetObjectRequest::Versions { key, output }
+        } else {
+            GetObjectRequest::Download {
+                key,
+                version,
+                dest,
+                quiet,
+                force,
+            }
+        };
+
+        return handle_get_action(s3, request, globals).await;
+    }
+
+    Ok(())
+}
+
+async fn handle_get_action(s3: &S3, request: GetObjectRequest, globals: GlobalArgs) -> Result<()> {
+    match request {
+        GetObjectRequest::Metadata {
+            key,
+            version,
+            output,
+        } => handle_metadata(s3, &key, version, matches!(output, OutputFormat::Json)).await,
+        GetObjectRequest::Versions { key, output } => {
+            handle_versions(s3, &key, matches!(output, OutputFormat::Json)).await
         }
+        GetObjectRequest::Download {
+            key,
+            version,
+            dest,
+            quiet,
+            force,
+        } => download_object(s3, key, version, dest, quiet, force, globals).await,
+    }
+}
 
-        if versions {
-            return handle_versions(s3, &key, json).await;
-        }
+async fn download_object(
+    s3: &S3,
+    key: String,
+    version: Option<String>,
+    dest: Option<String>,
+    quiet: bool,
+    force: bool,
+    globals: GlobalArgs,
+) -> Result<()> {
+    let file_name = Path::new(&key)
+        .file_name()
+        .with_context(|| format!("Failed to get file name from: {key}"))?;
+    let action = actions::GetObject::new(&key, version);
+    let mut res = action.request(s3, &globals).await?;
+    let is_encrypted = is_s3m_encrypted(res.headers());
+    let can_decrypt = is_encrypted && globals.enc_key.is_some();
 
-        let file_name = Path::new(&key)
-            .file_name()
-            .with_context(|| format!("Failed to get file name from: {key}"))?;
+    log::info!(
+        "file_name: {}, is_encrypted: {}, can_decrypt: {}",
+        file_name.to_string_lossy(),
+        is_encrypted,
+        can_decrypt
+    );
 
-        // do the request first to get the headers
-        let action = actions::GetObject::new(&key, version);
-        let mut res = action.request(s3, &globals).await?;
+    let final_file_name = determine_final_filename(file_name, can_decrypt);
+    let path = get_dest(dest, &final_file_name)?;
+    if path.is_file() && !force {
+        return Err(anyhow!("file {} already exists", path.display()));
+    }
 
-        let is_encrypted = is_s3m_encrypted(res.headers());
-        let can_decrypt = is_encrypted && globals.enc_key.is_some();
-
-        log::info!(
-            "file_name: {}, is_encrypted: {}, can_decrypt: {}",
-            file_name.to_string_lossy(),
-            is_encrypted,
-            can_decrypt
-        );
-
-        let final_file_name = determine_final_filename(file_name, can_decrypt);
-
-        let path = get_dest(dest, &final_file_name)?;
-
-        // check if file exists
-        if path.is_file() && !force {
-            return Err(anyhow!("file {} already exists", path.display()));
-        }
-
-        let mut file = create_output_file(&path, force).await?;
-
-        // get the file_size in bytes by using the content_length
-        let file_size = res
-            .content_length()
-            .context("could not get content_length")?;
-
-        // if quiet is true, then use a default progress bar
-        let pb = if quiet {
+    let file = create_output_file(&path, force).await?;
+    let file_size = res
+        .content_length()
+        .context("could not get content_length")?;
+    let mut state = DownloadState::new(
+        file,
+        if quiet {
             Bar::default()
         } else {
             Bar::new(file_size)
-        };
+        },
+        file_size,
+        is_encrypted,
+        can_decrypt,
+        create_cipher_if_needed(&globals, can_decrypt)?,
+    );
 
-        let mut downloaded = 0u64;
-        let mut buffer = BytesMut::new();
-        let mut decryptor: Option<DecryptorBE32<ChaCha20Poly1305>> = None;
+    download_response(&mut res, &mut state, &globals).await?;
+    state.finish();
+    Ok(())
+}
 
-        let cipher = create_cipher_if_needed(&globals, can_decrypt)?;
+async fn download_response(
+    res: &mut reqwest::Response,
+    state: &mut DownloadState,
+    globals: &GlobalArgs,
+) -> Result<()> {
+    while let Some(chunk) = res.chunk().await? {
+        let chunk_len = chunk.len();
+        state.process_chunk(chunk).await?;
 
-        while let Some(chunk) = res.chunk().await? {
-            let new = min(downloaded + chunk.len() as u64, file_size);
-            downloaded = new;
-
-            buffer.extend_from_slice(&chunk);
-
-            if can_decrypt {
-                loop {
-                    // Handle initial nonce
-                    if decryptor.is_none() {
-                        if buffer.len() < 8 {
-                            break;
-                        }
-
-                        let nonce_len =
-                            *buffer.first().context("Failed to read nonce length")? as usize;
-
-                        if nonce_len != 7 {
-                            return Err(anyhow::anyhow!(
-                                "Expected nonce length 7, got {nonce_len}"
-                            ));
-                        }
-                        let nonce = buffer.get(1..8).context("Failed to get nonce bytes")?;
-
-                        let cipher_instance = cipher
-                            .clone()
-                            .context("Cipher not initialized for decryption")?;
-                        decryptor = Some(DecryptorBE32::from_aead(cipher_instance, nonce.into()));
-
-                        buffer.advance(8);
-
-                        continue;
-                    }
-
-                    // Need 4 bytes for encrypted chunk length
-                    if buffer.len() < 4 {
-                        break;
-                    }
-
-                    let len_bytes = buffer.get(..4).context("Failed to read chunk length")?;
-                    let len = u32::from_be_bytes(
-                        len_bytes
-                            .try_into()
-                            .map_err(|_| anyhow::anyhow!("Invalid chunk length bytes"))?,
-                    ) as usize;
-                    if buffer.len() < 4 + len {
-                        break;
-                    }
-
-                    let mut encrypted_chunk = buffer
-                        .get(4..4 + len)
-                        .context("Failed to read encrypted chunk")?
-                        .to_vec();
-
-                    // decrypt_next_in_place modifies the slice in place and returns ()
-                    decryptor
-                        .as_mut()
-                        .context("Decryptor not initialized")?
-                        .decrypt_next_in_place(&[], &mut encrypted_chunk)
-                        .map_err(|_| {
-                            anyhow::anyhow!("Decryption failed, check your encryption key")
-                        })?;
-
-                    file.write_all(&encrypted_chunk).await?;
-
-                    if let Some(pb) = pb.progress.as_ref() {
-                        pb.set_position(downloaded);
-                    }
-
-                    buffer.advance(4 + len);
-                }
-            }
-
-            // If encryption is present but we cannot decrypt (no key), store raw
-            if is_encrypted && !can_decrypt {
-                file.write_all(&buffer).await?;
-                buffer.clear();
-                if let Some(pb) = pb.progress.as_ref() {
-                    pb.set_position(downloaded);
-                }
-                continue;
-            }
-
-            // If not encrypted, write raw
-            if !is_encrypted {
-                file.write_all(&buffer).await?;
-                buffer.clear();
-                if let Some(pb) = pb.progress.as_ref() {
-                    pb.set_position(downloaded);
-                }
-            }
-
-            if let Some(bandwidth_kb) = globals.throttle {
-                throttle_download(bandwidth_kb, chunk.len()).await?;
-            }
-        }
-
-        if let Some(pb) = pb.progress.as_ref() {
-            pb.finish();
+        if let Some(bandwidth_kb) = globals.throttle {
+            throttle_download(bandwidth_kb, chunk_len).await?;
         }
     }
 
     Ok(())
+}
+
+impl DownloadState {
+    fn new(
+        file: tokio::fs::File,
+        pb: Bar,
+        file_size: u64,
+        is_encrypted: bool,
+        can_decrypt: bool,
+        cipher: Option<ChaCha20Poly1305>,
+    ) -> Self {
+        Self {
+            file,
+            pb,
+            file_size,
+            downloaded: 0,
+            buffer: BytesMut::new(),
+            decryptor: None,
+            is_encrypted,
+            can_decrypt,
+            cipher,
+        }
+    }
+
+    async fn process_chunk(&mut self, chunk: bytes::Bytes) -> Result<()> {
+        self.downloaded = min(self.downloaded + chunk.len() as u64, self.file_size);
+        self.buffer.extend_from_slice(&chunk);
+
+        if self.can_decrypt {
+            return self.process_encrypted_buffer().await;
+        }
+
+        if self.is_encrypted {
+            return self.write_raw_buffer().await;
+        }
+
+        self.write_raw_buffer().await
+    }
+
+    async fn process_encrypted_buffer(&mut self) -> Result<()> {
+        loop {
+            if self.decryptor.is_none() {
+                if self.buffer.len() < 8 {
+                    break;
+                }
+
+                let nonce_len =
+                    *self.buffer.first().context("Failed to read nonce length")? as usize;
+                if nonce_len != 7 {
+                    return Err(anyhow!("Expected nonce length 7, got {nonce_len}"));
+                }
+
+                let nonce = self.buffer.get(1..8).context("Failed to get nonce bytes")?;
+                let cipher = self
+                    .cipher
+                    .clone()
+                    .context("Cipher not initialized for decryption")?;
+                self.decryptor = Some(DecryptorBE32::from_aead(cipher, nonce.into()));
+                self.buffer.advance(8);
+                continue;
+            }
+
+            if self.buffer.len() < 4 {
+                break;
+            }
+
+            let len_bytes = self
+                .buffer
+                .get(..4)
+                .context("Failed to read chunk length")?;
+            let len = u32::from_be_bytes(
+                len_bytes
+                    .try_into()
+                    .map_err(|_| anyhow!("Invalid chunk length bytes"))?,
+            ) as usize;
+
+            if self.buffer.len() < 4 + len {
+                break;
+            }
+
+            let mut encrypted_chunk = self
+                .buffer
+                .get(4..4 + len)
+                .context("Failed to read encrypted chunk")?
+                .to_vec();
+
+            self.decryptor
+                .as_mut()
+                .context("Decryptor not initialized")?
+                .decrypt_next_in_place(&[], &mut encrypted_chunk)
+                .map_err(|_| anyhow!("Decryption failed, check your encryption key"))?;
+
+            self.file.write_all(&encrypted_chunk).await?;
+            self.update_progress();
+            self.buffer.advance(4 + len);
+        }
+
+        Ok(())
+    }
+
+    async fn write_raw_buffer(&mut self) -> Result<()> {
+        self.file.write_all(&self.buffer).await?;
+        self.buffer.clear();
+        self.update_progress();
+        Ok(())
+    }
+
+    fn update_progress(&self) {
+        if let Some(pb) = self.pb.progress.as_ref() {
+            pb.set_position(self.downloaded);
+        }
+    }
+
+    fn finish(&self) {
+        if let Some(pb) = self.pb.progress.as_ref() {
+            pb.finish();
+        }
+    }
 }
 
 async fn handle_metadata(s3: &S3, key: &str, version: Option<String>, json: bool) -> Result<()> {

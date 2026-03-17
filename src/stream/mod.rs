@@ -60,6 +60,27 @@ pub struct Stream<'a> {
     retries: u32,
 }
 
+struct InitialStreamParams<'a> {
+    upload_id: &'a str,
+    tmp_dir: &'a Path,
+    key: &'a str,
+    s3: &'a S3,
+    progress_sender: Option<UnboundedSender<usize>>,
+    globals: &'a GlobalArgs,
+    header_data: Option<&'a [u8]>,
+}
+
+pub struct FileStreamUpload<'a> {
+    pub s3: &'a S3,
+    pub object_key: &'a str,
+    pub acl: Option<String>,
+    pub meta: Option<BTreeMap<String, String>>,
+    pub quiet: bool,
+    pub tmp_dir: PathBuf,
+    pub globals: GlobalArgs,
+    pub file_path: &'a Path,
+}
+
 // return the key with the .zst, .enc, or .zst.enc extension based on the flags
 fn get_key(key: &str, compress: bool, encrypt: bool) -> String {
     let path = Path::new(key);
@@ -261,26 +282,17 @@ fn spawn_progress_task(
 }
 
 /// Create the initial stream with nonce header
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-fn create_initial_stream<'a>(
-    upload_id: &'a str,
-    tmp_dir: &Path,
-    key: &'a str,
-    s3: &'a S3,
-    progress_sender: Option<UnboundedSender<usize>>,
-    globals: &GlobalArgs,
-    header_data: Option<&[u8]>,
-) -> Result<Stream<'a>> {
+fn create_initial_stream(params: InitialStreamParams<'_>) -> Result<Stream<'_>> {
     let mut tmp_file = Builder::new()
-        .prefix(upload_id)
+        .prefix(params.upload_id)
         .suffix(".s3m")
-        .tempfile_in(tmp_dir)?;
+        .tempfile_in(params.tmp_dir)?;
 
     let mut sha_context = Context::new(&SHA256);
     let mut md5_context = md5::Context::new();
     let mut count = 0;
 
-    if let Some(header) = header_data {
+    if let Some(header) = params.header_data {
         tmp_file.write_all(header)?;
         sha_context.update(header);
         md5_context.consume(header);
@@ -291,16 +303,16 @@ fn create_initial_stream<'a>(
         tmp_file,
         count,
         etags: Vec::new(),
-        key,
+        key: params.key,
         part_number: 1,
-        s3,
-        upload_id,
+        s3: params.s3,
+        upload_id: params.upload_id,
         sha: sha_context,
         md5: md5_context,
-        channel: progress_sender.clone(),
-        tmp_dir: tmp_dir.to_path_buf(),
-        throttle: globals.throttle,
-        retries: globals.retries,
+        channel: params.progress_sender,
+        tmp_dir: params.tmp_dir.to_path_buf(),
+        throttle: params.globals.throttle,
+        retries: params.globals.retries,
     })
 }
 
@@ -626,8 +638,16 @@ mod tests {
             enc_key: None,
         };
 
-        let stream =
-            create_initial_stream(upload_id, &tmp_dir, key, &s3, None, &globals, None).unwrap();
+        let stream = create_initial_stream(InitialStreamParams {
+            upload_id,
+            tmp_dir: &tmp_dir,
+            key,
+            s3: &s3,
+            progress_sender: None,
+            globals: &globals,
+            header_data: None,
+        })
+        .unwrap();
 
         assert_eq!(stream.key, key);
         assert_eq!(stream.upload_id, upload_id);
@@ -677,8 +697,16 @@ mod tests {
             enc_key: None,
         };
 
-        let stream =
-            create_initial_stream(upload_id, &tmp_dir, key, &s3, None, &globals, None).unwrap();
+        let stream = create_initial_stream(InitialStreamParams {
+            upload_id,
+            tmp_dir: &tmp_dir,
+            key,
+            s3: &s3,
+            progress_sender: None,
+            globals: &globals,
+            header_data: None,
+        })
+        .unwrap();
 
         let buffer_size = 1024; // 1KB for testing
         let mut stream = stream;

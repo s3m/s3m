@@ -1,3 +1,15 @@
+## 0.16.0 🛰️
+* **`monitor` subcommand**: Added `s3m monitor <host>` to run host-scoped bucket monitoring checks from the existing `config.yml` without changing current upload, download, list, or stream commands.
+* **Host-scoped monitor rules**: Extended `hosts.<host>.buckets` in `config.yml` to support per-bucket rule lists with `prefix`, optional `suffix`, `age`, and `size`, including multiple prefixes per bucket.
+* **Human-friendly age syntax**: Monitor `age` now accepts either plain seconds or suffixed durations such as `30s`, `15m`, `12h`, and `7d`.
+* **Metrics-first output**: `monitor` now emits Prometheus text exposition format by default, with `--format influxdb` available for line-protocol output suitable for `vmagent` ingestion.
+* **Failure exit flag**: Added `--exit-on-check-failure` so metrics are still printed first, then the process exits non-zero when a check is missing, errors, or has a size mismatch.
+* **Monitor metrics**: Added `s3m_object_exists`, `s3m_check_error`, and `s3m_size_mismatch` metrics with `host`, `bucket`, `prefix`, and optional `suffix` labels.
+* **Endpoint and region compatibility**: Fixed config resolution so a host can use a custom `endpoint` together with a `region`, preserving the custom endpoint while using the region for signing. This benefits `monitor` and the existing S3 subcommands.
+* **Monitor safety and efficiency**: Empty monitor rule lists now fail fast instead of silently succeeding, and checks stop scanning once a fresh object satisfies the rule.
+* **Documentation**: Updated the docs site to add a dedicated `monitor` page, replace the homepage JSON entry with `Monitor`, and document Prometheus/InfluxDB output, `vmagent` push examples, and user cron wrappers with alerting.
+* **Regression tests and cleanup**: Added broad unit, integration, and end-to-end coverage for monitor parsing/evaluation/output, endpoint+region handling, and resumable stream uploads. Also removed the remaining production `#[allow(clippy::...)]` suppressions through refactors instead of silencing lints.
+
 ## 0.15.0 🚀
 * **Multi-object delete**: Added low-level S3 `DeleteObjects` support, including XML request generation, response parsing for deleted objects and per-object errors, and request batching up to `1000` objects.
 * **`rm` improvements**: `s3m rm` now accepts multiple object paths. A single object still uses `DeleteObject`; `2+` object targets use `DeleteObjects`, grouped by host/bucket and split into `1000`-key batches as needed.

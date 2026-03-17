@@ -23,6 +23,17 @@ const DEFAULT_FRAMED_CHUNK_SIZE_BYTES: usize = 1024 * 128;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
+pub struct MultipartRequest<'a> {
+    pub client: &'a Client,
+    pub url: Url,
+    pub method: reqwest::Method,
+    pub headers: &'a BTreeMap<String, String>,
+    pub file: &'a Path,
+    pub seek: u64,
+    pub chunk: u64,
+    pub throttle: Option<usize>,
+}
+
 /// Calculate the duration per chunk to achieve the desired bandwidth
 ///
 /// # Parameters
@@ -118,37 +129,28 @@ pub async fn request(
 /// # Errors
 ///
 /// Will return `Err` if can not make the request
-#[allow(clippy::too_many_arguments)]
-pub async fn multipart_upload(
-    client: &Client,
-    url: Url,
-    method: reqwest::Method,
-    headers: &BTreeMap<String, String>,
-    file: &Path,
-    seek: u64,
-    chunk: u64,
-    throttle: Option<usize>,
-) -> Result<Response> {
-    let headers = headers
+pub async fn multipart_upload(request: MultipartRequest<'_>) -> Result<Response> {
+    let headers = request
+        .headers
         .iter()
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
         .collect::<Result<HeaderMap>>()?;
 
-    log::debug!("HTTP method: {method}, Headers: {headers:#?}");
+    log::debug!("HTTP method: {}, Headers: {headers:#?}", request.method);
 
     // async read
-    let mut file = File::open(&file).await?;
+    let mut file = File::open(request.file).await?;
 
-    file.seek(SeekFrom::Start(seek)).await?;
+    file.seek(SeekFrom::Start(request.seek)).await?;
 
-    let file = file.take(chunk);
+    let file = file.take(request.chunk);
 
-    log::debug!("Chunk size: {chunk}");
+    log::debug!("Chunk size: {}", request.chunk);
 
     let stream =
         FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
 
-    let request = if let Some(bandwidth_kb) = throttle {
+    let request = if let Some(bandwidth_kb) = request.throttle {
         let duration_per_chunk =
             calculate_duration_per_chunk(bandwidth_kb, DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
 
@@ -162,16 +164,18 @@ pub async fn multipart_upload(
 
         let body = Body::wrap_stream(rate_limited_stream);
 
-        client
-            .request(method, url)
+        request
+            .client
+            .request(request.method, request.url)
             .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
             .headers(headers)
             .body(body)
     } else {
         let body = Body::wrap_stream(stream);
 
-        client
-            .request(method, url)
+        request
+            .client
+            .request(request.method, request.url)
             .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
             .headers(headers)
             .body(body)

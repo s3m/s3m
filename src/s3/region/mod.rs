@@ -32,9 +32,7 @@ impl Region {
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
-            #[allow(clippy::match_same_arms)]
-            Self::Aws(name) => name,
-            Self::Custom { name, .. } => name,
+            Self::Aws(name) | Self::Custom { name, .. } => name,
         }
     }
 

@@ -72,17 +72,17 @@ pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
 pub fn blake3(file: &Path) -> Result<String> {
     let mut file = std::fs::File::open(file)?;
     let mut hasher = blake3::Hasher::new();
-    #[allow(clippy::large_stack_arrays)]
-    let mut buf = [0_u8; 65536];
+    let mut buf = vec![0_u8; 65_536];
 
     loop {
         let size = file.read(&mut buf)?;
         if size == 0 {
             break;
         }
-        // SAFETY: size is guaranteed to be <= buf.len() by the Read trait contract
-        #[allow(clippy::indexing_slicing)]
-        hasher.update(&buf[..size]);
+        let chunk = buf
+            .get(..size)
+            .ok_or_else(|| anyhow!("invalid buffer slice length: {size}"))?;
+        hasher.update(chunk);
     }
 
     Ok(hasher.finalize().to_hex().to_string())

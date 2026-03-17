@@ -9,11 +9,17 @@
 mod common;
 
 use common::{MinioContext, calculate_file_hash, get_s3m_binary};
+use rkyv::{rancor::Error as RkyvError, to_bytes};
 use s3m::{
-    s3::{Credentials, Region, S3, actions::CreateMultipartUpload},
+    cli::globals::GlobalArgs,
+    s3::{
+        Credentials, Region, S3,
+        actions::{CreateMultipartUpload, UploadPart},
+    },
     stream::{
         db::Db,
         iterator::PartIterator,
+        part::Part,
         state::{StreamMetadata, StreamMode, state_dir, write_metadata},
     },
 };
@@ -23,6 +29,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    thread::sleep,
+    time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tempfile::tempdir;
@@ -137,6 +145,54 @@ fn create_resumable_state(home: &Path, id: &str) {
     .unwrap();
 }
 
+fn create_valid_resumable_state(home: &Path, id: &str) -> PathBuf {
+    let s3m_dir = home.join(".config").join("s3m");
+    let source = home.join("source-valid.bin");
+    fs::write(&source, b"hello world").unwrap();
+
+    let file_mtime = fs::metadata(&source)
+        .unwrap()
+        .modified()
+        .unwrap_or_else(|_| SystemTime::now())
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let checksum = calculate_file_hash(&source);
+    let db = Db::new(&test_s3(), "key", id, file_mtime, &s3m_dir).unwrap();
+    db.save_upload_id("upload-1").unwrap();
+    db.create_part(1, 0, 11, None).unwrap();
+    db.db_parts().unwrap().flush().unwrap();
+    let created_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    write_metadata(
+        &s3m_dir,
+        &StreamMetadata {
+            version: 1,
+            id: id.to_string(),
+            host: "s3".to_string(),
+            bucket: "bucket".to_string(),
+            key: "key".to_string(),
+            source_path: source.clone(),
+            checksum,
+            file_size: 11,
+            file_mtime,
+            part_size: 11,
+            db_key: db.state_key().to_string(),
+            created_at,
+            updated_at: Some(created_at),
+            pipe: false,
+            compress: false,
+            encrypt: false,
+            mode: StreamMode::FileMultipart,
+        },
+    )
+    .unwrap();
+
+    source
+}
+
 fn create_broken_state(home: &Path, id: &str) {
     let s3m_dir = home.join(".config").join("s3m");
     let broken_dir = state_dir(&s3m_dir, id);
@@ -186,6 +242,98 @@ async fn create_live_resumable_state(
         db.create_part(number, seek, chunk, None).unwrap();
     }
     db.db_parts().unwrap().flush().unwrap();
+
+    let created_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    write_metadata(
+        &s3m_dir,
+        &StreamMetadata {
+            version: 1,
+            id: id.to_string(),
+            host: "s3".to_string(),
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+            source_path: source.clone(),
+            checksum,
+            file_size,
+            file_mtime,
+            part_size,
+            db_key: db.state_key().to_string(),
+            created_at,
+            updated_at: Some(created_at),
+            pipe: false,
+            compress: false,
+            encrypt: false,
+            mode: StreamMode::FileMultipart,
+        },
+    )
+    .unwrap();
+
+    source
+}
+
+async fn create_partially_uploaded_live_resumable_state(
+    home: &Path,
+    minio: &MinioContext,
+    id: &str,
+    bucket: &str,
+    key: &str,
+) -> PathBuf {
+    let s3m_dir = home.join(".config").join("s3m");
+    let source = home.join("resume-source-partial.bin");
+    let content = b"resume upload payload ".repeat(350_000);
+    fs::write(&source, &content).unwrap();
+
+    let file_mtime = fs::metadata(&source)
+        .unwrap()
+        .modified()
+        .unwrap_or_else(|_| SystemTime::now())
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let checksum = calculate_file_hash(&source);
+    let file_size = fs::metadata(&source).unwrap().len();
+    let part_size = 5 * 1024 * 1024_u64;
+
+    let s3 = minio_s3(minio, bucket);
+    let create = CreateMultipartUpload::new(key, None, None, None)
+        .request(&s3)
+        .await
+        .unwrap();
+    let db = Db::new(&s3, key, id, file_mtime, &s3m_dir).unwrap();
+    db.save_upload_id(&create.upload_id).unwrap();
+
+    let mut parts = PartIterator::new(file_size, part_size);
+    let (first_number, first_seek, first_chunk) = parts.next().unwrap();
+    let first_etag = UploadPart::new(
+        key,
+        &source,
+        first_number,
+        &create.upload_id,
+        first_seek,
+        first_chunk,
+        None,
+    )
+    .request(&s3, &GlobalArgs::new())
+    .await
+    .unwrap();
+
+    let first_part = Part::new(first_number, first_seek, first_chunk, None).set_etag(first_etag);
+    let first_bytes = to_bytes::<RkyvError>(&first_part).unwrap();
+    db.db_uploaded()
+        .unwrap()
+        .insert(first_number.to_be_bytes(), first_bytes.as_slice())
+        .unwrap();
+
+    for (number, seek, chunk) in PartIterator::new(file_size, part_size) {
+        if number == first_number {
+            continue;
+        }
+        db.create_part(number, seek, chunk, None).unwrap();
+    }
+    db.flush().unwrap();
 
     let created_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -293,6 +441,21 @@ fn test_streams_resume_unknown_id_fails_clearly() {
     assert!(stderr.contains("Unknown stream state id: missing"));
 }
 
+#[test]
+fn test_streams_resume_fails_when_source_file_changed() {
+    let home = tempdir().unwrap();
+    write_config(home.path());
+    let source = create_valid_resumable_state(home.path(), "changed-id");
+    sleep(Duration::from_millis(20));
+    fs::write(&source, b"hello world changed").unwrap();
+
+    let output = run_streams(home.path(), &["streams", "resume", "changed-id"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Source file changed since the multipart state was created"));
+}
+
 #[tokio::test]
 async fn test_streams_resume_completes_live_multipart_upload() {
     let minio = MinioContext::get_or_start().await;
@@ -313,6 +476,53 @@ async fn test_streams_resume_completes_live_multipart_upload() {
     );
 
     let download_path = home.path().join("resumed-download.bin");
+    let download_output = Command::new(get_s3m_binary())
+        .env("HOME", home.path())
+        .args([
+            "get",
+            &format!("s3/{bucket}/{key}"),
+            download_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        download_output.status.success(),
+        "download should succeed: {}",
+        String::from_utf8_lossy(&download_output.stderr)
+    );
+
+    assert_eq!(
+        calculate_file_hash(&source_path),
+        calculate_file_hash(&download_path)
+    );
+}
+
+#[tokio::test]
+async fn test_streams_resume_completes_partially_uploaded_live_multipart_upload() {
+    let minio = MinioContext::get_or_start().await;
+    let bucket = "streams-resume-partial-live";
+    let key = "resumed-partial.bin";
+    minio.create_bucket(bucket).await.unwrap();
+
+    let home = tempdir().unwrap();
+    write_minio_config(home.path(), &minio);
+    let source_path = create_partially_uploaded_live_resumable_state(
+        home.path(),
+        &minio,
+        "resume-partial-live",
+        bucket,
+        key,
+    )
+    .await;
+
+    let output = run_streams(home.path(), &["streams", "resume", "resume-partial-live"]);
+    assert!(
+        output.status.success(),
+        "resume should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let download_path = home.path().join("resumed-partial-download.bin");
     let download_output = Command::new(get_s3m_binary())
         .env("HOME", home.path())
         .args([

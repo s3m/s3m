@@ -3,6 +3,7 @@ pub mod cmd_cb;
 pub mod cmd_du;
 pub mod cmd_get;
 pub mod cmd_ls;
+pub mod cmd_monitor;
 pub mod cmd_rm;
 pub mod cmd_share;
 pub mod cmd_show;
@@ -93,23 +94,19 @@ Notes:
   Unknown-size STDIN uploads use fixed 512 MiB multipart parts.
 ";
 
-#[allow(clippy::too_many_lines)]
-pub fn new(config_path: &Path) -> Command {
-    // get config file path (default: ~/.config/s3m/config.yml)
-    let config_file_path = config_path.join("config.yml");
-
-    // get the streams directory path (default: ~/.config/s3m/streams)
-    let config_streams_path = config_path.join("streams");
-
-    let styles = Styles::styled()
+fn command_styles() -> Styles {
+    Styles::styled()
         .header(AnsiColor::Yellow.on_default() | Effects::BOLD)
         .usage(AnsiColor::Green.on_default() | Effects::BOLD)
         .literal(AnsiColor::Blue.on_default() | Effects::BOLD)
-        .placeholder(AnsiColor::Green.on_default());
+        .placeholder(AnsiColor::Green.on_default())
+}
 
-    // num_cpus::get_physical() - 2 returns at least 1 type usize
-    let num_threads = cmp::min((num_cpus::get_physical() - 2).max(1), u8::MAX as usize).to_string();
+fn default_num_threads() -> String {
+    cmp::min((num_cpus::get_physical() - 2).max(1), u8::MAX as usize).to_string()
+}
 
+fn base_command() -> Command {
     Command::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Store files and streams in S3-compatible object storage")
@@ -117,7 +114,15 @@ pub fn new(config_path: &Path) -> Command {
         .after_long_help(LONG_AFTER_HELP)
         .subcommand_negates_reqs(true)
         .color(ColorChoice::Auto)
-        .styles(styles)
+        .styles(command_styles())
+}
+
+fn add_transfer_args(
+    cmd: Command,
+    config_file_path: PathBuf,
+    config_streams_path: &Path,
+) -> Command {
+    cmd
         .arg(
             Arg::new("clean")
             .long("clean")
@@ -212,6 +217,10 @@ pub fn new(config_path: &Path) -> Command {
             .required_unless_present_any(["clean", "decrypt"])
             .num_args(1..=2)
         )
+}
+
+fn add_runtime_args(cmd: Command, num_threads: String) -> Command {
+    cmd
         .arg(
             Arg::new("tmp-dir")
             .help("Specify a directory for temporarily storing the STDIN buffer")
@@ -289,15 +298,29 @@ pub fn new(config_path: &Path) -> Command {
             .num_args(2)
             .value_names(["file.enc", "key"])
         )
-        .subcommand(cmd_acl::command())
+}
+
+fn add_subcommands(cmd: Command) -> Command {
+    cmd.subcommand(cmd_acl::command())
         .subcommand(cmd_du::command())
         .subcommand(cmd_get::command())
         .subcommand(cmd_ls::command())
+        .subcommand(cmd_monitor::command())
         .subcommand(cmd_cb::command())
         .subcommand(cmd_rm::command())
         .subcommand(cmd_share::command())
         .subcommand(cmd_show::command())
         .subcommand(cmd_streams::command())
+}
+
+pub fn new(config_path: &Path) -> Command {
+    let config_file_path = config_path.join("config.yml");
+    let config_streams_path = config_path.join("streams");
+
+    let cmd = base_command();
+    let cmd = add_transfer_args(cmd, config_file_path, &config_streams_path);
+    let cmd = add_runtime_args(cmd, default_num_threads());
+    add_subcommands(cmd)
 }
 
 #[cfg(test)]

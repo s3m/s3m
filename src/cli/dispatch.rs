@@ -1,7 +1,10 @@
 use crate::{
     cli::{
         Config,
-        actions::{Action, DeleteGroup, DuGroupBy, StreamCommand},
+        actions::{
+            Action, DeleteGroup, DuGroupBy, StreamCommand,
+            monitor::{MonitorOutputFormat, prepare_checks},
+        },
         age_filter::AgeFilter,
         globals::GlobalArgs,
         s3_location::{S3Location, parse_location},
@@ -58,352 +61,428 @@ pub fn dispatch_streams(
         config_file,
         json,
         s3m_dir,
-        number: matches.get_one::<u8>("number").copied().unwrap_or_else(|| {
-            u8::try_from(cmp::min(
-                (num_cpus::get_physical() - 2).max(1),
-                u8::MAX as usize,
-            ))
-            .unwrap_or(u8::MAX)
-        }),
+        number: requested_parallel_requests(matches),
+    })
+}
+
+fn default_parallel_requests() -> u8 {
+    u8::try_from(cmp::min(
+        (num_cpus::get_physical() - 2).max(1),
+        u8::MAX as usize,
+    ))
+    .unwrap_or(u8::MAX)
+}
+
+fn requested_parallel_requests(matches: &clap::ArgMatches) -> u8 {
+    matches
+        .try_get_one::<u8>("number")
+        .ok()
+        .flatten()
+        .copied()
+        .unwrap_or_else(default_parallel_requests)
+}
+
+fn subcommand_matches<'a>(
+    matches: &'a clap::ArgMatches,
+    subcommand: &str,
+) -> Result<&'a clap::ArgMatches> {
+    matches
+        .subcommand_matches(subcommand)
+        .context("arguments missing")
+}
+
+fn required_key(hbk: &S3Location) -> Result<String> {
+    match &hbk.key {
+        Some(key) => Ok(key.clone()),
+        None => Err(anyhow!(
+            "file name missing, <s3 provider>/<bucket>/{}, For more information try {}",
+            "<file name>".red(),
+            "--help".green()
+        )),
+    }
+}
+
+fn resolve_prefix(hbk: &S3Location, sub_m: &clap::ArgMatches) -> Result<Option<String>> {
+    let flag_prefix = sub_m.get_one::<String>("prefix").cloned();
+    match (hbk.key.clone(), flag_prefix) {
+        (Some(_), Some(_)) => Err(anyhow!(
+            "Prefix provided twice. Use either host/bucket/prefix or --prefix, not both"
+        )),
+        (Some(prefix), None) | (None, Some(prefix)) => Ok(Some(prefix)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn parse_metadata(meta_str: &str) -> Result<BTreeMap<String, String>> {
+    let mut metadata = BTreeMap::new();
+
+    for item in meta_str.split(';') {
+        match item.split_once('=') {
+            Some((key, val)) => {
+                metadata.insert(format!("x-amz-meta-{key}"), val.to_owned());
+            }
+            None => {
+                return Err(anyhow!(
+                    "Invalid metadata format: '{item}'. Expected 'key=value' pairs separated by ';'"
+                ));
+            }
+        }
+    }
+
+    Ok(metadata)
+}
+
+fn dispatch_acl(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
+    let key = required_key(hbk)?;
+    let sub_m = subcommand_matches(matches, "acl")?;
+    let acl = sub_m.get_one("acl").cloned();
+
+    Ok(Action::ACL { key, acl })
+}
+
+fn dispatch_get(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
+    let key = required_key(hbk)?;
+    let sub_m = subcommand_matches(matches, "get")?;
+    let metadata = sub_m.get_one("metadata").copied().unwrap_or(false);
+    let args: Vec<&str> = sub_m
+        .get_many::<String>("arguments")
+        .unwrap_or_default()
+        .map(String::as_str)
+        .collect();
+    let quiet = sub_m.get_one("quiet").copied().unwrap_or(false);
+    let force = sub_m.get_one("force").copied().unwrap_or(false);
+    let json = sub_m.get_one("json").copied().unwrap_or(false);
+    let versions = sub_m.get_one("versions").copied().unwrap_or(false);
+    let version = sub_m.get_one("version").cloned();
+
+    if json && !metadata && !versions {
+        return Err(anyhow!(
+            "--json is only supported with `s3m get --meta` or `s3m get --versions`"
+        ));
+    }
+
+    let dest = if args.len() == 2 {
+        args.get(1).map(|s| (*s).to_string())
+    } else {
+        None
+    };
+
+    Ok(Action::GetObject {
+        dest,
+        force,
+        json,
+        key,
+        metadata,
+        quiet,
+        versions,
+        version,
+    })
+}
+
+fn dispatch_du(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
+    let bucket = hbk
+        .bucket
+        .clone()
+        .context("bucket name missing for du target")?;
+    let prefix = hbk.key.clone();
+    let sub_m = subcommand_matches(matches, "du")?;
+    let group_by = sub_m
+        .get_one::<String>("group-by")
+        .map(|value| match value.as_str() {
+            "day" => DuGroupBy::Day,
+            _ => unreachable!("clap validated group-by"),
+        });
+    let json = sub_m.get_one("json").copied().unwrap_or(false);
+    let target = prefix.as_ref().map_or_else(
+        || format!("{}/{}", hbk.host, bucket),
+        |prefix| format!("{}/{}/{}", hbk.host, bucket, prefix),
+    );
+
+    Ok(Action::DiskUsage {
+        group_by,
+        json,
+        prefix,
+        target,
+    })
+}
+
+fn dispatch_ls(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
+    let sub_m = subcommand_matches(matches, "ls")?;
+    let older_than = sub_m.get_one::<AgeFilter>("older-than").copied();
+    let prefix = resolve_prefix(hbk, sub_m)?;
+    let start_after = sub_m.get_one("start-after").cloned();
+    let json = sub_m.get_one("json").copied().unwrap_or(false);
+    let max_kub = sub_m
+        .get_one::<usize>("max-kub")
+        .map(std::string::ToString::to_string);
+
+    if older_than.is_some() && hbk.bucket.is_none() {
+        return Err(anyhow!(
+            "--older-than requires a bucket or prefix target, for example s3/my-bucket or s3/my-bucket/prefix"
+        ));
+    }
+
+    Ok(Action::ListObjects {
+        bucket: hbk.bucket.clone(),
+        json,
+        list_multipart_uploads: sub_m
+            .get_one("ListMultipartUploads")
+            .copied()
+            .unwrap_or(false),
+        max_kub,
+        older_than,
+        prefix,
+        start_after,
+    })
+}
+
+fn dispatch_monitor(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
+    if hbk.bucket.is_some() || hbk.key.is_some() {
+        return Err(anyhow!(
+            "monitor expects a host name only, for example `s3m monitor s3`"
+        ));
+    }
+
+    let sub_m = subcommand_matches(matches, "monitor")?;
+    let format = match sub_m.get_one::<String>("format").map(String::as_str) {
+        Some("influxdb") => MonitorOutputFormat::Influxdb,
+        _ => MonitorOutputFormat::Prometheus,
+    };
+
+    Ok(Action::Monitor {
+        host: hbk.host.clone(),
+        checks: Vec::new(),
+        format,
+        exit_on_check_failure: sub_m.get_flag("exit-on-check-failure"),
+        number: requested_parallel_requests(matches),
+    })
+}
+
+fn dispatch_create_bucket(matches: &clap::ArgMatches) -> Result<Action> {
+    let sub_m = subcommand_matches(matches, "cb")?;
+    let acl = sub_m
+        .get_one("acl")
+        .map_or_else(|| String::from("private"), |s: &String| s.clone());
+
+    Ok(Action::CreateBucket { acl })
+}
+
+fn dispatch_delete(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
+    let sub_m = subcommand_matches(matches, "rm")?;
+    let older_than = sub_m.get_one::<AgeFilter>("older-than").copied();
+    let upload_id = sub_m
+        .get_one("UploadId")
+        .map_or_else(String::new, |s: &String| s.clone());
+    let bucket = sub_m.get_one("bucket").copied().unwrap_or(false);
+    let recursive = sub_m.get_one("recursive").copied().unwrap_or(false);
+
+    let key = if bucket {
+        String::new()
+    } else if older_than.is_some() {
+        if sub_m
+            .get_many::<String>("arguments")
+            .unwrap_or_default()
+            .count()
+            != 1
+        {
+            return Err(anyhow!(
+                "--older-than expects exactly one bucket or prefix target"
+            ));
+        }
+        hbk.key.clone().unwrap_or_default()
+    } else {
+        required_key(hbk)?
+    };
+
+    if bucket && older_than.is_some() {
+        return Err(anyhow!(
+            "--older-than is not supported with bucket deletion"
+        ));
+    }
+
+    if !upload_id.is_empty() && older_than.is_some() {
+        return Err(anyhow!("--older-than is not supported with --abort"));
+    }
+
+    Ok(Action::DeleteObject {
+        key,
+        upload_id,
+        bucket,
+        older_than,
+        recursive,
+        targets: Vec::new(),
+    })
+}
+
+fn dispatch_share(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
+    let key = required_key(hbk)?;
+    let sub_m = subcommand_matches(matches, "share")?;
+    let expire = sub_m.get_one::<usize>("expire").map_or_else(|| 0, |s| *s);
+
+    Ok(Action::ShareObject { key, expire })
+}
+
+fn dispatch_put(
+    hbk: &S3Location,
+    buf_size: usize,
+    s3m_dir: &Path,
+    matches: &clap::ArgMatches,
+    global_args: &mut GlobalArgs,
+) -> Result<Action> {
+    let mut src: Option<String> = None;
+    let args: Vec<&str> = matches
+        .get_many::<String>("arguments")
+        .unwrap_or_default()
+        .map(String::as_str)
+        .collect();
+
+    if args.len() == 2
+        && let Some(arg) = args.first()
+    {
+        src = Some((*arg).to_string());
+
+        if !Path::new(arg).exists() {
+            return Err(anyhow!("Source file does not exist: {}", arg.red()));
+        }
+    }
+
+    log::info!(
+        "Arguments: {:?}, Source file: {:?}",
+        args,
+        src.as_deref().unwrap_or(""),
+    );
+
+    let key = match required_key(hbk) {
+        Ok(key) => key,
+        Err(error) => {
+            if let Some(src) = &src {
+                src.clone()
+            } else {
+                return Err(error);
+            }
+        }
+    };
+
+    log::info!("Key: {key}");
+
+    let acl = matches.get_one("acl").cloned();
+    let meta = matches
+        .get_one::<String>("meta")
+        .map(|meta_str| parse_metadata(meta_str))
+        .transpose()?;
+
+    if !global_args.compress {
+        global_args.compress = matches.get_one("compress").copied().unwrap_or(false);
+    }
+
+    let pipe = matches.get_one("pipe").copied().unwrap_or(false);
+    if src.is_none() && !pipe {
+        return Err(anyhow!(
+            "Source file missing. Expected: {} {} {}\nFor more information try {}",
+            "<source file>".red(),
+            "<s3 provider>/<bucket>/<file name>".cyan(),
+            "[OPTIONS]".yellow(),
+            "--help".green()
+        ));
+    }
+
+    Ok(Action::PutObject {
+        acl,
+        meta,
+        buf_size,
+        file: src,
+        host: hbk.host.clone(),
+        s3m_dir: s3m_dir.to_path_buf(),
+        key,
+        pipe,
+        quiet: matches.get_one("quiet").copied().unwrap_or(false),
+        tmp_dir: matches.get_one::<PathBuf>("tmp-dir").map_or_else(
+            || std::env::temp_dir().join(format!("s3m-{}", std::process::id())),
+            ToOwned::to_owned,
+        ),
+        checksum_algorithm: matches.get_one("checksum").cloned(),
+        number: matches.get_one::<u8>("number").copied().unwrap_or(1),
     })
 }
 
 // return Action based on the command or subcommand
-#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 pub fn dispatch(
-    hbk: S3Location,
+    hbk: &S3Location,
     buf_size: usize,
-    s3m_dir: PathBuf,
+    s3m_dir: &Path,
     matches: &clap::ArgMatches,
     global_args: &mut GlobalArgs,
 ) -> Result<Action> {
-    // Closure to return subcommand_matches
-    let sub_m = |subcommand| -> Result<&clap::ArgMatches> {
-        matches
-            .subcommand_matches(subcommand)
-            .context("arguments missing")
-    };
-
-    let get_key = || -> Result<String> {
-        match &hbk.key {
-            Some(key) => Ok(key.clone()),
-
-            None => Err(anyhow!(
-                "file name missing, <s3 provider>/<bucket>/{}, For more information try {}",
-                "<file name>".red(),
-                "--help".green()
-            )),
-        }
-    };
-
-    let resolve_prefix = |sub_m: &clap::ArgMatches| -> Result<Option<String>> {
-        let flag_prefix = sub_m.get_one::<String>("prefix").cloned();
-        match (hbk.key.clone(), flag_prefix) {
-            (Some(_), Some(_)) => Err(anyhow!(
-                "Prefix provided twice. Use either host/bucket/prefix or --prefix, not both"
-            )),
-            (Some(prefix), None) | (None, Some(prefix)) => Ok(Some(prefix)),
-            (None, None) => Ok(None),
-        }
-    };
-
     match matches.subcommand_name() {
-        // ACL
-        Some("acl") => {
-            let key = get_key()?;
-
-            let sub_m = sub_m("acl")?;
-
-            let acl = sub_m.get_one("acl").cloned();
-
-            Ok(Action::ACL { key, acl })
-        }
-
-        // GetObject
-        Some("get") => {
-            let key = get_key()?;
-
-            let sub_m = sub_m("get")?;
-
-            let metadata = sub_m.get_one("metadata").copied().unwrap_or(false);
-
-            let args: Vec<&str> = sub_m
-                .get_many::<String>("arguments")
-                .unwrap_or_default()
-                .map(String::as_str)
-                .collect();
-
-            let quiet = sub_m.get_one("quiet").copied().unwrap_or(false);
-
-            let force = sub_m.get_one("force").copied().unwrap_or(false);
-
-            let json = sub_m.get_one("json").copied().unwrap_or(false);
-            let versions = sub_m.get_one("versions").copied().unwrap_or(false);
-
-            let version = sub_m.get_one("version").cloned();
-
-            if json && !metadata && !versions {
-                return Err(anyhow!(
-                    "--json is only supported with `s3m get --meta` or `s3m get --versions`"
-                ));
-            }
-
-            // get destination file/path
-            let dest = if args.len() == 2 {
-                args.get(1).map(|s| (*s).to_string())
-            } else {
-                None
-            };
-
-            Ok(Action::GetObject {
-                dest,
-                force,
-                json,
-                key,
-                metadata,
-                quiet,
-                versions,
-                version,
-            })
-        }
-
-        // DiskUsage
-        Some("du") => {
-            let bucket = hbk
-                .bucket
-                .clone()
-                .context("bucket name missing for du target")?;
-            let prefix = hbk.key.clone();
-            let group_by =
-                sub_m("du")?
-                    .get_one::<String>("group-by")
-                    .map(|value| match value.as_str() {
-                        "day" => DuGroupBy::Day,
-                        _ => unreachable!("clap validated group-by"),
-                    });
-            let json = sub_m("du")?.get_one("json").copied().unwrap_or(false);
-            let target = prefix.as_ref().map_or_else(
-                || format!("{}/{}", hbk.host, bucket),
-                |prefix| format!("{}/{}/{}", hbk.host, bucket, prefix),
-            );
-
-            Ok(Action::DiskUsage {
-                group_by,
-                json,
-                prefix,
-                target,
-            })
-        }
-
-        // ListObjects
-        Some("ls") => {
-            let sub_m = sub_m("ls")?;
-
-            let older_than = sub_m.get_one::<AgeFilter>("older-than").copied();
-            let prefix = resolve_prefix(sub_m)?;
-            let start_after = sub_m.get_one("start-after").cloned();
-            let json = sub_m.get_one("json").copied().unwrap_or(false);
-
-            // option -n/--number
-            // convert max_keys to string and default to None
-            let max_kub = sub_m
-                .get_one::<usize>("max-kub")
-                .map(std::string::ToString::to_string);
-
-            if older_than.is_some() && hbk.bucket.is_none() {
-                return Err(anyhow!(
-                    "--older-than requires a bucket or prefix target, for example s3/my-bucket or s3/my-bucket/prefix"
-                ));
-            }
-
-            Ok(Action::ListObjects {
-                bucket: hbk.bucket.clone(),
-                json,
-                list_multipart_uploads: sub_m
-                    .get_one("ListMultipartUploads")
-                    .copied()
-                    .unwrap_or(false),
-                max_kub,
-                older_than,
-                prefix,
-                start_after,
-            })
-        }
-
-        // CreateBucket
-        Some("cb") => {
-            let sub_m = sub_m("cb")?;
-            let acl = sub_m
-                .get_one("acl")
-                .map_or_else(|| String::from("private"), |s: &String| s.clone());
-            Ok(Action::CreateBucket { acl })
-        }
-
-        // DeleteObject or DeleteBucket
-        Some("rm") => {
-            let sub_m = sub_m("rm")?;
-            let older_than = sub_m.get_one::<AgeFilter>("older-than").copied();
-
-            let upload_id = sub_m
-                .get_one("UploadId")
-                .map_or_else(String::new, |s: &String| s.clone());
-
-            let bucket = sub_m.get_one("bucket").copied().unwrap_or(false);
-            let recursive = sub_m.get_one("recursive").copied().unwrap_or(false);
-            let key = if bucket {
-                String::new()
-            } else if older_than.is_some() {
-                if sub_m
-                    .get_many::<String>("arguments")
-                    .unwrap_or_default()
-                    .count()
-                    != 1
-                {
-                    return Err(anyhow!(
-                        "--older-than expects exactly one bucket or prefix target"
-                    ));
-                }
-                hbk.key.clone().unwrap_or_default()
-            } else {
-                get_key()?
-            };
-
-            if bucket && older_than.is_some() {
-                return Err(anyhow!(
-                    "--older-than is not supported with bucket deletion"
-                ));
-            }
-
-            if !upload_id.is_empty() && older_than.is_some() {
-                return Err(anyhow!("--older-than is not supported with --abort"));
-            }
-
-            Ok(Action::DeleteObject {
-                key,
-                upload_id,
-                bucket,
-                older_than,
-                recursive,
-                targets: Vec::new(),
-            })
-        }
-
-        // ShareObject
-        Some("share") => {
-            let key = get_key()?;
-
-            let sub_m = sub_m("share")?;
-
-            let expire = sub_m.get_one::<usize>("expire").map_or_else(|| 0, |s| *s);
-
-            Ok(Action::ShareObject { key, expire })
-        }
-
-        // PutObject
-        _ => {
-            let mut src: Option<String> = None;
-
-            let args: Vec<&str> = matches
-                .get_many::<String>("arguments")
-                .unwrap_or_default()
-                .map(String::as_str)
-                .collect();
-
-            if args.len() == 2
-                && let Some(arg) = args.first()
-            {
-                src = Some((*arg).to_string());
-
-                // if src is provided, check if it exists
-                if !Path::new(arg).exists() {
-                    return Err(anyhow!("Source file does not exist: {}", arg.red()));
-                }
-            }
-
-            log::info!(
-                "Arguments: {:?}, Source file: {:?}",
-                args,
-                src.as_deref().unwrap_or(""),
-            );
-
-            let key = match get_key() {
-                Ok(k) => k,
-                Err(e) => {
-                    if let Some(src) = &src {
-                        src.clone()
-                    } else {
-                        return Err(e);
-                    }
-                }
-            };
-
-            log::info!("Key: {key}");
-
-            // get ACL to apply to the object
-            let acl = matches.get_one("acl").cloned();
-
-            // get x-amz-meta- to apply to the object
-            let meta = if let Some(meta_str) = matches.get_one::<String>("meta") {
-                let mut metadata = BTreeMap::new();
-                for item in meta_str.split(';') {
-                    match item.split_once('=') {
-                        Some((key, val)) => {
-                            metadata.insert(format!("x-amz-meta-{key}"), val.to_owned());
-                        }
-                        None => {
-                            return Err(anyhow!(
-                                "Invalid metadata format: '{item}'. Expected 'key=value' pairs separated by ';'"
-                            ));
-                        }
-                    }
-                }
-                Some(metadata)
-            } else {
-                None
-            };
-
-            // set compress
-            if !global_args.compress {
-                global_args.compress = matches.get_one("compress").copied().unwrap_or(false);
-            }
-
-            let pipe = matches.get_one("pipe").copied().unwrap_or(false);
-
-            // Validate that we have either a source file or pipe mode enabled
-            if src.is_none() && !pipe {
-                return Err(anyhow!(
-                    "Source file missing. Expected: {} {} {}\nFor more information try {}",
-                    "<source file>".red(),
-                    "<s3 provider>/<bucket>/<file name>".cyan(),
-                    "[OPTIONS]".yellow(),
-                    "--help".green()
-                ));
-            }
-
-            Ok(Action::PutObject {
-                acl,
-                meta,
-                buf_size,
-                file: src,
-                host: hbk.host,
-                s3m_dir,
-                key,
-                pipe,
-                quiet: matches.get_one("quiet").copied().unwrap_or(false),
-                tmp_dir: matches.get_one::<PathBuf>("tmp-dir").map_or_else(
-                    || std::env::temp_dir().join(format!("s3m-{}", std::process::id())),
-                    ToOwned::to_owned,
-                ),
-                checksum_algorithm: matches.get_one("checksum").cloned(),
-                number: matches.get_one::<u8>("number").copied().unwrap_or(1),
-            })
-        }
+        Some("acl") => dispatch_acl(hbk, matches),
+        Some("get") => dispatch_get(hbk, matches),
+        Some("du") => dispatch_du(hbk, matches),
+        Some("ls") => dispatch_ls(hbk, matches),
+        Some("monitor") => dispatch_monitor(hbk, matches),
+        Some("cb") => dispatch_create_bucket(matches),
+        Some("rm") => dispatch_delete(hbk, matches),
+        Some("share") => dispatch_share(hbk, matches),
+        _ => dispatch_put(hbk, buf_size, s3m_dir, matches, global_args),
     }
 }
 
 /// # Errors
 /// Will return an error if delete arguments are invalid or can not be resolved to hosts
 pub fn finalize_action(
+    action: Action,
+    matches: &clap::ArgMatches,
+    config: &Config,
+    config_path: &Path,
+) -> Result<Action> {
+    let action = finalize_monitor_action(action, config)?;
+    finalize_delete_action(action, matches, config, config_path)
+}
+
+fn finalize_monitor_action(action: Action, config: &Config) -> Result<Action> {
+    match action {
+        Action::Monitor {
+            host,
+            checks: _,
+            format,
+            exit_on_check_failure,
+            number,
+        } => {
+            let host_config = config
+                .get_host(&host)
+                .with_context(|| format!("Could not find host: \"{host}\""))?;
+            let checks = prepare_checks(&host, host_config)?;
+
+            Ok(Action::Monitor {
+                host,
+                checks,
+                format,
+                exit_on_check_failure,
+                number,
+            })
+        }
+        other => Ok(other),
+    }
+}
+
+fn build_delete_action(
+    bucket: bool,
+    key: String,
+    older_than: Option<AgeFilter>,
+    recursive: bool,
+    upload_id: String,
+    targets: Vec<DeleteGroup>,
+) -> Action {
+    Action::DeleteObject {
+        bucket,
+        key,
+        older_than,
+        recursive,
+        targets,
+        upload_id,
+    }
+}
+
+fn finalize_delete_action(
     action: Action,
     matches: &clap::ArgMatches,
     config: &Config,
@@ -422,14 +501,14 @@ pub fn finalize_action(
     };
 
     if matches.subcommand_name() != Some("rm") {
-        return Ok(Action::DeleteObject {
+        return Ok(build_delete_action(
             bucket,
             key,
             older_than,
             recursive,
-            targets: Vec::new(),
             upload_id,
-        });
+            Vec::new(),
+        ));
     }
 
     let sub_m = matches
@@ -446,14 +525,14 @@ pub fn finalize_action(
             return Err(anyhow!("Bucket deletion expects exactly one bucket target"));
         }
 
-        return Ok(Action::DeleteObject {
+        return Ok(build_delete_action(
             bucket,
             key,
             older_than,
             recursive,
-            targets: Vec::new(),
             upload_id,
-        });
+            Vec::new(),
+        ));
     }
 
     if !upload_id.is_empty() {
@@ -463,14 +542,14 @@ pub fn finalize_action(
             ));
         }
 
-        return Ok(Action::DeleteObject {
+        return Ok(build_delete_action(
             bucket,
             key,
             older_than,
             recursive,
-            targets: Vec::new(),
             upload_id,
-        });
+            Vec::new(),
+        ));
     }
 
     if older_than.is_some() {
@@ -480,14 +559,14 @@ pub fn finalize_action(
             ));
         }
 
-        return Ok(Action::DeleteObject {
+        return Ok(build_delete_action(
             bucket,
             key,
             older_than,
             recursive,
-            targets: Vec::new(),
             upload_id,
-        });
+            Vec::new(),
+        ));
     }
 
     let no_sign_request = matches
@@ -495,14 +574,14 @@ pub fn finalize_action(
         .copied()
         .unwrap_or(false);
 
-    Ok(Action::DeleteObject {
+    Ok(build_delete_action(
         bucket,
         key,
         older_than,
         recursive,
-        targets: build_delete_groups(&args, config, config_path, no_sign_request)?,
         upload_id,
-    })
+        build_delete_groups(&args, config, config_path, no_sign_request)?,
+    ))
 }
 
 fn build_delete_groups(
@@ -559,7 +638,7 @@ mod tests {
     use super::*;
     use crate::cli::{
         actions::Action,
-        commands::{cmd_acl, cmd_cb, cmd_du, cmd_get, cmd_ls, cmd_rm, cmd_share, new},
+        commands::{cmd_acl, cmd_cb, cmd_du, cmd_get, cmd_ls, cmd_monitor, cmd_rm, cmd_share, new},
         config::Config,
         globals::GlobalArgs,
         s3_location::host_bucket_key,
@@ -577,6 +656,9 @@ hosts:
     access_key: XXX
     secret_key: YYY
     bucket: my-bucket
+    buckets:
+      monitor-bucket:
+        - prefix: logs/
   s3alt:
     endpoint: alt.example.test
     access_key: ALT
@@ -627,9 +709,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -662,9 +744,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -694,9 +776,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -740,9 +822,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -786,9 +868,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -834,9 +916,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -874,7 +956,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::DiskUsage {
                 group_by,
@@ -901,7 +983,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::DiskUsage {
                 group_by,
@@ -928,7 +1010,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::DiskUsage {
                 group_by,
@@ -958,9 +1040,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -1008,9 +1090,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -1051,9 +1133,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -1094,9 +1176,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -1133,7 +1215,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         let action = finalize_action(action, &matches, &config, &config_path).unwrap();
 
         match action {
@@ -1180,7 +1262,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         let action = finalize_action(action, &matches, &config, &config_path).unwrap();
 
         match action {
@@ -1212,7 +1294,7 @@ hosts:
 
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
 
         match action {
             Action::ListObjects {
@@ -1241,7 +1323,7 @@ hosts:
 
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
-        let err = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals)
+        let err = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals)
             .unwrap_err()
             .to_string();
 
@@ -1257,7 +1339,7 @@ hosts:
 
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
-        let err = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals)
+        let err = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals)
             .unwrap_err()
             .to_string();
 
@@ -1273,7 +1355,7 @@ hosts:
 
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
 
         match action {
             Action::DeleteObject {
@@ -1302,7 +1384,7 @@ hosts:
 
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
 
         match action {
             Action::DeleteObject {
@@ -1341,7 +1423,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         let action = finalize_action(action, &matches, &config, &config_path).unwrap();
 
         match action {
@@ -1382,7 +1464,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals)
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals)
             .unwrap_err()
             .to_string();
         assert!(action.contains("--older-than expects exactly one bucket or prefix target"));
@@ -1406,7 +1488,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         let err = finalize_action(action, &matches, &config, &config_path)
             .unwrap_err()
             .to_string();
@@ -1427,9 +1509,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut GlobalArgs::new(),
         )
@@ -1471,7 +1553,7 @@ hosts:
 
         // assert!(s3_location.is_ok());
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -1529,7 +1611,7 @@ hosts:
 
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals);
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals);
         assert!(action.is_err());
 
         let err = action.unwrap_err().to_string();
@@ -1557,7 +1639,7 @@ hosts:
 
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -1626,7 +1708,7 @@ hosts:
         let host = get_host(&config, &config_path, &s3_location);
         assert!(host.is_ok());
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -1694,7 +1776,7 @@ hosts:
         let host = get_host(&config, &config_path, &s3_location);
         assert!(host.is_ok());
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -1768,7 +1850,7 @@ hosts:
         let host = get_host(&config, &config_path, &s3_location);
         assert!(host.is_ok());
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::PutObject {
                 acl,
@@ -1831,9 +1913,9 @@ hosts:
         assert!(s3_location.is_ok());
 
         let action = dispatch(
-            s3_location.unwrap(),
+            &s3_location.unwrap(),
             0,
-            PathBuf::new(),
+            Path::new(""),
             &matches,
             &mut globals,
         )
@@ -1953,7 +2035,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals);
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals);
 
         assert!(action.is_err());
         let err = action.unwrap_err().to_string();
@@ -2031,7 +2113,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let err = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals)
+        let err = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals)
             .unwrap_err()
             .to_string();
         assert!(err.contains("--json is only supported"));
@@ -2046,7 +2128,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::ListObjects { json, .. } => assert!(json),
             other => panic!("unexpected action: {other:?}"),
@@ -2062,7 +2144,7 @@ hosts:
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
 
-        let action = dispatch(s3_location, 0, PathBuf::new(), &matches, &mut globals).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
         match action {
             Action::DiskUsage { json, .. } => assert!(json),
             other => panic!("unexpected action: {other:?}"),
@@ -2119,5 +2201,90 @@ hosts:
             .unwrap_err()
             .to_string();
         assert!(err.contains("--json is not supported"));
+    }
+
+    #[test]
+    fn test_dispatch_monitor_defaults() {
+        let (_tmp_dir, config_path, parsed) = write_config_file();
+        let cmd = Command::new("test").subcommand(cmd_monitor::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "monitor", "s3"])
+            .unwrap();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let mut globals = GlobalArgs::new();
+
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
+        let action = finalize_action(action, &matches, &parsed, &config_path).unwrap();
+        match action {
+            Action::Monitor {
+                host,
+                checks,
+                format,
+                exit_on_check_failure,
+                ..
+            } => {
+                assert_eq!(host, "s3");
+                assert_eq!(checks.len(), 1);
+                assert_eq!(format, MonitorOutputFormat::Prometheus);
+                assert!(!exit_on_check_failure);
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_monitor_influxdb_and_failure_flag() {
+        let (_tmp_dir, config_path, parsed) = write_config_file();
+        let cmd = new(std::path::Path::new("."));
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "s3m",
+                "--config",
+                config_path.to_str().unwrap(),
+                "--no-sign-request",
+                "monitor",
+                "s3",
+                "--format",
+                "influxdb",
+                "--exit-on-check-failure",
+            ])
+            .unwrap();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let mut globals = GlobalArgs::new();
+
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
+        let action = finalize_action(action, &matches, &parsed, &config_path).unwrap();
+        match action {
+            Action::Monitor {
+                host,
+                format,
+                exit_on_check_failure,
+                checks,
+                ..
+            } => {
+                assert_eq!(host, "s3");
+                assert_eq!(format, MonitorOutputFormat::Influxdb);
+                assert!(exit_on_check_failure);
+                assert_eq!(checks.len(), 1);
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_monitor_rejects_bucket_target() {
+        let (_tmp_dir, config_path, parsed) = write_config_file();
+        let cmd = Command::new("test").subcommand(cmd_monitor::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "monitor", "s3/bucket"])
+            .unwrap();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let mut globals = GlobalArgs::new();
+
+        let err = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals)
+            .and_then(|action| finalize_action(action, &matches, &parsed, &config_path))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("monitor expects a host name only"));
     }
 }
