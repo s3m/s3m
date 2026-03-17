@@ -198,13 +198,31 @@ s3m --compress mysqldump.sql s3/backups/db.sql.zst
 ```bash
 # Generate secure encryption key (32 characters)
 openssl rand -hex 16 > encryption.key
-
-# Encrypt during upload
-s3m --encrypt --enc-key "$(cat encryption.key)" file.dat s3/secure/file.dat.enc
-
-# Decrypt during download
-s3m get s3/secure/file.dat.enc --enc-key "$(cat encryption.key)"
 ```
+
+```yaml
+# ~/.config/s3m/config.yml
+hosts:
+  secure:
+    endpoint: s3.us-west-2.amazonaws.com
+    access_key: YOUR_ACCESS_KEY
+    secret_key: YOUR_SECRET_KEY
+    bucket: my-bucket
+    enc_key: 0123456789abcdef0123456789abcdef
+```
+
+```bash
+# Encrypt during upload using the host config key
+s3m file.dat /secure/my-bucket/file.dat.enc
+
+# Download and decrypt using the same host config key
+s3m get /secure/my-bucket/file.dat.enc
+
+# Decrypt a local encrypted file manually
+s3m --decrypt file.dat.enc 0123456789abcdef0123456789abcdef
+```
+
+Uploads and downloads do not accept `--encrypt` or `--enc-key` flags. Encryption is enabled by setting `enc_key` on the selected host in `config.yml`.
 
 ## Advanced Options
 
@@ -229,11 +247,12 @@ s3m --throttle 10240 file.dat s3/backups/file.dat  # 10MB/s
 s3m --retries 5 file.dat s3/bucket/file.dat
 ```
 
-## Notes for `STDIN` / `--pipe`
+## Notes for streaming and transformed uploads
 
 - Regular file multipart uploads can be resumed.
 - `STDIN` / `--pipe` uploads are not resumable after interruption because the original input stream cannot be replayed safely.
 - When the input size is unknown, `s3m` uses a fixed multipart buffer of `512 MiB` per part.
+- Streaming and transformed upload paths (for example `STDIN`, compression, and encryption) use a two-line progress display: the top line shows local buffering progress for the current `512 MiB` part, and the bottom line shows either `confirmed ...` bytes or `sending part N ... | confirmed ...` during the active part upload.
 - For interrupted or failed multipart uploads from streaming paths, configure bucket lifecycle rules to clean up incomplete multipart uploads automatically.
 
 ## Development

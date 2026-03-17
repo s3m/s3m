@@ -579,6 +579,73 @@ hosts:
     }
 
     #[test]
+    fn test_check_throttle() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--kilobytes", "1024"]);
+        assert!(m.is_ok());
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<usize>("throttle").copied(), Some(1024));
+
+        let cmd2 = new(&config);
+        let m2 = cmd2.try_get_matches_from(vec!["s3m", "test", "-k", "500"]);
+        assert!(m2.is_ok());
+        let m2 = m2.unwrap();
+        assert_eq!(m2.get_one::<usize>("throttle").copied(), Some(500));
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_compress() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "--compress"]);
+        assert!(m.is_ok());
+        let m = m.unwrap();
+        assert_eq!(m.get_one::<bool>("compress").copied(), Some(true));
+
+        let cmd2 = new(&config);
+        let m2 = cmd2.try_get_matches_from(vec!["s3m", "test", "-x"]);
+        assert!(m2.is_ok());
+        let m2 = m2.unwrap();
+        assert_eq!(m2.get_one::<bool>("compress").copied(), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_decrypt() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "--decrypt", "file.enc", "mykey"]);
+        assert!(m.is_ok());
+        let m = m.unwrap();
+        let vals: Vec<&str> = m
+            .get_many::<String>("decrypt")
+            .unwrap()
+            .map(std::string::String::as_str)
+            .collect();
+        assert_eq!(vals, vec!["file.enc", "mykey"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_verbose() -> Result<()> {
+        let config = get_config().unwrap();
+        let cmd = new(&config);
+        let m = cmd.try_get_matches_from(vec!["s3m", "test", "-vvv"]);
+        assert!(m.is_ok());
+        let m = m.unwrap();
+        assert_eq!(m.get_count("verbose"), 3);
+
+        let cmd2 = new(&config);
+        let m2 = cmd2.try_get_matches_from(vec!["s3m", "test", "--verbose"]);
+        assert!(m2.is_ok());
+        let m2 = m2.unwrap();
+        assert_eq!(m2.get_count("verbose"), 1);
+        Ok(())
+    }
+
+    #[test]
     fn test_check_no_sign_request() -> Result<()> {
         let config = get_config().unwrap();
         let cmd = new(&config);

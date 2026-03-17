@@ -1,3 +1,9 @@
+## 0.16.1
+* **Streaming progress semantics**: Streaming and transformed uploads now use a two-line progress display with per-part buffering progress (`0 .. 512 MiB`) plus a lower status line that switches between `confirmed ...` and `sending part N ... | confirmed ...` during the active part transfer.
+* **Retry progress inflation fix**: Multipart `StreamPart` retries no longer inflate spinner totals when a part is retried after a transient network or S3 error.
+* **Encrypted stream accounting**: Initial encryption header bytes are now counted consistently in per-part buffering progress for encrypted streaming paths.
+* **Documentation and tests**: Updated the README notes for streaming/transformed uploads and added direct unit coverage for buffering, sending, and confirmed progress accounting, alongside end-to-end verification for raw stdin, compressed stdin, transformed file uploads, and normal file uploads.
+
 ## 0.16.0 🛰️
 * **`monitor` subcommand**: Added `s3m monitor <host>` to run host-scoped bucket monitoring checks from the existing `config.yml` without changing current upload, download, list, or stream commands.
 * **Host-scoped monitor rules**: Extended `hosts.<host>.buckets` in `config.yml` to support per-bucket rule lists with `prefix`, optional `suffix`, `age`, and `size`, including multiple prefixes per bucket.

@@ -16,6 +16,7 @@ use crate::{
         upload_encrypted::stream_encrypted,
         upload_multipart::{MultipartUploadRequest, upload_multipart},
         upload_stdin::stream_stdin,
+        upload_stdin_compressed::stream_stdin_compressed,
         upload_stdin_compressed_encrypted::stream_stdin_compressed_encrypted,
         upload_stdin_encrypted::stream_stdin_encrypted,
     },
@@ -130,11 +131,15 @@ async fn handle_pipe_upload(
             log::info!("COMPRESS + ENCRYPT - streaming compressed and encrypted data from stdin");
             stream_stdin_compressed_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals).await
         }
+        (true, false) => {
+            log::info!("COMPRESS - streaming compressed data from stdin");
+            stream_stdin_compressed(s3, &key, acl, meta, quiet, tmp_dir, globals).await
+        }
         (false, true) => {
             log::info!("ENCRYPT - streaming encrypted data from stdin");
             stream_stdin_encrypted(s3, &key, acl, meta, quiet, tmp_dir, globals).await
         }
-        _ => stream_stdin(s3, &key, acl, meta, quiet, tmp_dir, globals).await,
+        (false, false) => stream_stdin(s3, &key, acl, meta, quiet, tmp_dir, globals).await,
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::stream::{
     FileStreamUpload, InitialStreamParams, STDIN_BUFFER_SIZE, Stream, complete_multipart_upload,
     compress_chunk, create_initial_stream, create_nonce_header, encrypt_chunk, get_key,
-    init_encryption, initiate_multipart_upload, maybe_upload_part, setup_progress,
+    init_encryption, initiate_multipart_upload, maybe_upload_part, setup_stream_progress,
     upload_final_part, write_to_stream,
 };
 use anyhow::{Result, anyhow};
@@ -45,7 +45,7 @@ pub async fn stream_compressed_encrypted(request: FileStreamUpload<'_>) -> Resul
     // S3 setup
     let upload_id = initiate_multipart_upload(s3, &key, acl, meta).await?;
 
-    let progress_sender = setup_progress(quiet, None).await;
+    let progress_sender = setup_stream_progress(quiet).await;
 
     // Initialize encryption
     let (cipher, nonce_bytes) = init_encryption(encryption_key);

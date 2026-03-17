@@ -8,12 +8,11 @@ use reqwest::{
     Body, Client, Response,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 use tokio::time::Duration;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
-    sync::mpsc::UnboundedSender,
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
@@ -22,6 +21,8 @@ use url::Url;
 const DEFAULT_FRAMED_CHUNK_SIZE_BYTES: usize = 1024 * 128;
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+
+pub type ProgressCallback = Arc<dyn Fn(usize) + Send + Sync + 'static>;
 
 pub struct MultipartRequest<'a> {
     pub client: &'a Client,
@@ -60,7 +61,7 @@ pub async fn request(
     method: reqwest::Method,
     headers: &BTreeMap<String, String>,
     file: Option<&Path>,
-    sender: Option<UnboundedSender<usize>>,
+    progress: Option<ProgressCallback>,
     throttle: Option<usize>,
 ) -> Result<Response> {
     let headers = headers
@@ -74,16 +75,13 @@ pub async fn request(
         let file = File::open(file_path).await?;
 
         let stream = {
-            log::debug!("Sender(channel) is_some: {}", sender.is_some());
+            log::debug!("Progress callback is_some: {}", progress.is_some());
 
             FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES)
                 .inspect_ok(move |chunk| {
-                    if let Some(tx) = &sender {
+                    if let Some(callback) = &progress {
                         log::trace!("Sending {} bytes", chunk.len());
-
-                        if tx.send(chunk.len()).is_err() {
-                            log::trace!("Progress receiver dropped");
-                        }
+                        callback(chunk.len());
                     }
                 })
         };

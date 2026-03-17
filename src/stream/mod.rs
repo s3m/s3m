@@ -8,12 +8,13 @@ pub mod upload_default;
 pub mod upload_encrypted;
 pub mod upload_multipart;
 pub mod upload_stdin;
+pub mod upload_stdin_compressed;
 pub mod upload_stdin_compressed_encrypted;
 pub mod upload_stdin_encrypted;
 
 use crate::{
     cli::{globals::GlobalArgs, progressbar::Bar},
-    s3::{S3, actions},
+    s3::{S3, actions, request::ProgressCallback},
 };
 use anyhow::{Context as _, Result, anyhow};
 use bytes::BytesMut;
@@ -31,6 +32,7 @@ use std::{
     collections::BTreeMap,
     io::{Cursor, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use tempfile::{Builder, NamedTempFile};
 use tokio::time::{Duration, sleep};
@@ -54,7 +56,7 @@ pub struct Stream<'a> {
     upload_id: &'a str,
     sha: ring::digest::Context,
     md5: md5::Context,
-    channel: Option<UnboundedSender<usize>>,
+    channel: Option<UnboundedSender<StreamProgressEvent>>,
     tmp_dir: PathBuf,
     throttle: Option<usize>,
     retries: u32,
@@ -65,7 +67,7 @@ struct InitialStreamParams<'a> {
     tmp_dir: &'a Path,
     key: &'a str,
     s3: &'a S3,
-    progress_sender: Option<UnboundedSender<usize>>,
+    progress_sender: Option<UnboundedSender<StreamProgressEvent>>,
     globals: &'a GlobalArgs,
     header_data: Option<&'a [u8]>,
 }
@@ -79,6 +81,26 @@ pub struct FileStreamUpload<'a> {
     pub tmp_dir: PathBuf,
     pub globals: GlobalArgs,
     pub file_path: &'a Path,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamProgressEvent {
+    Staged(u64),
+    SendingStarted { part_number: u16, total_bytes: u64 },
+    SendingProgress(u64),
+    SendingStopped,
+    Confirmed(u64),
+    ResetStaging,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct StreamProgressState {
+    staged_current: u64,
+    staged_total: u64,
+    confirmed_total: u64,
+    sending_current: u64,
+    sending_total: u64,
+    sending_part: Option<u16>,
 }
 
 // return the key with the .zst, .enc, or .zst.enc extension based on the flags
@@ -153,6 +175,14 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
             sleep(total_backoff).await;
         }
 
+        emit_stream_progress(
+            part.channel.as_ref(),
+            StreamProgressEvent::SendingStarted {
+                part_number: part.part_number,
+                total_bytes: part.count as u64,
+            },
+        );
+
         let action = actions::StreamPart::new(
             part.key,
             part.tmp_file.path(),
@@ -160,12 +190,16 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
             part.upload_id,
             part.count,
             (digest_sha.as_ref(), digest_md5.as_ref()),
-            part.channel.clone(),
+            stream_sending_progress_callback(part.channel.as_ref()),
         );
 
         match action.request(part.s3, &globals).await {
             Ok(e) => {
                 etag = e;
+                emit_stream_progress(
+                    part.channel.as_ref(),
+                    StreamProgressEvent::Confirmed(part.count as u64),
+                );
 
                 log::info!("Uploaded part: {}, etag: {}", part.part_number, etag);
 
@@ -173,6 +207,8 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
             }
 
             Err(e) => {
+                emit_stream_progress(part.channel.as_ref(), StreamProgressEvent::SendingStopped);
+
                 log::error!(
                     "Error uploading part number {}, attempt {}/{} failed: {}",
                     part.part_number,
@@ -232,23 +268,30 @@ async fn initiate_multipart_upload(
     Ok(response.upload_id)
 }
 
-async fn setup_progress(quiet: bool, size: Option<u64>) -> Option<UnboundedSender<usize>> {
+async fn setup_progress(quiet: bool, size: u64) -> Option<UnboundedSender<usize>> {
     if quiet {
         return None;
     }
 
     let (sender, receiver) = unbounded_channel::<usize>();
 
-    if let Some(size) = size {
-        if let Some(pb) = Bar::new(size).progress {
-            spawn_progress_task(receiver, pb, Some(size));
-            return Some(sender);
-        }
+    if let Some(pb) = Bar::new(size).progress {
+        spawn_progress_task(receiver, pb, size);
+        return Some(sender);
+    }
+
+    None
+}
+
+async fn setup_stream_progress(quiet: bool) -> Option<UnboundedSender<StreamProgressEvent>> {
+    if quiet {
         return None;
     }
 
-    if let Some(pb) = Bar::new_spinner_stream().progress {
-        spawn_progress_task(receiver, pb, None);
+    let (sender, receiver) = unbounded_channel::<StreamProgressEvent>();
+
+    if let Some(bars) = Bar::new_stream(STDIN_BUFFER_SIZE as u64) {
+        spawn_stream_progress_task(receiver, bars.staging, bars.status);
         return Some(sender);
     }
 
@@ -258,62 +301,157 @@ async fn setup_progress(quiet: bool, size: Option<u64>) -> Option<UnboundedSende
 fn spawn_progress_task(
     mut receiver: tokio::sync::mpsc::UnboundedReceiver<usize>,
     pb: ProgressBar,
-    size: Option<u64>,
+    size: u64,
 ) -> task::JoinHandle<u64> {
     tokio::spawn(async move {
-        let mut uploaded = 0;
+        let mut bytes_tracked = 0;
 
         while let Some(bytes_count) = receiver.recv().await {
-            if let Some(size) = size {
-                let new = min(uploaded + bytes_count as u64, size);
-                uploaded = new;
-                pb.set_position(new);
-            } else {
-                uploaded += bytes_count as u64;
-                pb.set_message(ByteSize(uploaded).to_string());
-            }
+            let new = min(bytes_tracked + bytes_count as u64, size);
+            bytes_tracked = new;
+            pb.set_position(new);
         }
 
-        log::debug!("Progress channel closed — total uploaded: {uploaded}");
+        log::debug!("Progress channel closed — total bytes tracked: {bytes_tracked}");
 
         pb.finish();
-        uploaded
+        bytes_tracked
     })
+}
+
+fn spawn_stream_progress_task(
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<StreamProgressEvent>,
+    staging_pb: ProgressBar,
+    status_pb: ProgressBar,
+) -> task::JoinHandle<StreamProgressState> {
+    tokio::spawn(async move {
+        let mut state = StreamProgressState::default();
+        update_stream_status_message(&status_pb, &state);
+
+        while let Some(event) = receiver.recv().await {
+            match event {
+                StreamProgressEvent::Staged(bytes_count) => {
+                    state.staged_current += bytes_count;
+                    state.staged_total += bytes_count;
+                    staging_pb.set_position(min(state.staged_current, STDIN_BUFFER_SIZE as u64));
+                }
+                StreamProgressEvent::SendingStarted {
+                    part_number,
+                    total_bytes,
+                } => {
+                    state.sending_part = Some(part_number);
+                    state.sending_current = 0;
+                    state.sending_total = total_bytes;
+                }
+                StreamProgressEvent::SendingProgress(bytes_count) => {
+                    state.sending_current =
+                        min(state.sending_current + bytes_count, state.sending_total);
+                }
+                StreamProgressEvent::SendingStopped => {
+                    state.sending_part = None;
+                    state.sending_current = 0;
+                    state.sending_total = 0;
+                }
+                StreamProgressEvent::Confirmed(bytes_count) => {
+                    state.confirmed_total += bytes_count;
+                    state.sending_part = None;
+                    state.sending_current = 0;
+                    state.sending_total = 0;
+                }
+                StreamProgressEvent::ResetStaging => {
+                    state.staged_current = 0;
+                    staging_pb.set_position(0);
+                }
+            }
+
+            update_stream_status_message(&status_pb, &state);
+        }
+
+        log::debug!(
+            "Stream progress channel closed - staged_current: {}, staged_total: {}, confirmed_total: {}, sending_current: {}, sending_total: {}, sending_part: {:?}",
+            state.staged_current,
+            state.staged_total,
+            state.confirmed_total,
+            state.sending_current,
+            state.sending_total,
+            state.sending_part
+        );
+
+        staging_pb.finish();
+        status_pb.finish();
+        state
+    })
+}
+
+fn update_stream_status_message(pb: &ProgressBar, state: &StreamProgressState) {
+    let message = if let Some(part_number) = state.sending_part {
+        format!(
+            "sending part {part_number} {}/{} | confirmed {}",
+            ByteSize(state.sending_current),
+            ByteSize(state.sending_total),
+            ByteSize(state.confirmed_total)
+        )
+    } else {
+        format!("confirmed {}", ByteSize(state.confirmed_total))
+    };
+
+    pb.set_message(message);
+}
+
+fn emit_stream_progress(
+    channel: Option<&UnboundedSender<StreamProgressEvent>>,
+    event: StreamProgressEvent,
+) {
+    if let Some(tx) = channel
+        && tx.send(event).is_err()
+    {
+        log::trace!("Progress receiver dropped");
+    }
+}
+
+fn stream_sending_progress_callback(
+    channel: Option<&UnboundedSender<StreamProgressEvent>>,
+) -> Option<ProgressCallback> {
+    let sender = channel.cloned()?;
+    let callback: ProgressCallback = Arc::new(move |bytes_count| {
+        if sender
+            .send(StreamProgressEvent::SendingProgress(bytes_count as u64))
+            .is_err()
+        {
+            log::trace!("Progress receiver dropped");
+        }
+    });
+    Some(callback)
 }
 
 /// Create the initial stream with nonce header
 fn create_initial_stream(params: InitialStreamParams<'_>) -> Result<Stream<'_>> {
-    let mut tmp_file = Builder::new()
+    let tmp_file = Builder::new()
         .prefix(params.upload_id)
         .suffix(".s3m")
         .tempfile_in(params.tmp_dir)?;
 
-    let mut sha_context = Context::new(&SHA256);
-    let mut md5_context = md5::Context::new();
-    let mut count = 0;
-
-    if let Some(header) = params.header_data {
-        tmp_file.write_all(header)?;
-        sha_context.update(header);
-        md5_context.consume(header);
-        count = header.len();
-    }
-
-    Ok(Stream {
+    let mut stream = Stream {
         tmp_file,
-        count,
+        count: 0,
         etags: Vec::new(),
         key: params.key,
         part_number: 1,
         s3: params.s3,
         upload_id: params.upload_id,
-        sha: sha_context,
-        md5: md5_context,
+        sha: Context::new(&SHA256),
+        md5: md5::Context::new(),
         channel: params.progress_sender,
         tmp_dir: params.tmp_dir.to_path_buf(),
         throttle: params.globals.throttle,
         retries: params.globals.retries,
-    })
+    };
+
+    if let Some(header) = params.header_data {
+        write_to_stream(&mut stream, header)?;
+    }
+
+    Ok(stream)
 }
 
 /// Write data to stream and update counters/hashes
@@ -325,6 +463,12 @@ pub fn write_to_stream(stream: &mut Stream<'_>, data: &[u8]) -> Result<()> {
     stream.sha.update(data);
     stream.md5.consume(data);
     stream.count += data.len();
+
+    emit_stream_progress(
+        stream.channel.as_ref(),
+        StreamProgressEvent::Staged(data.len() as u64),
+    );
+
     Ok(())
 }
 
@@ -365,6 +509,8 @@ pub async fn maybe_upload_part(stream: &mut Stream<'_>, buffer_size: usize) -> R
         let etag = try_stream_part(stream)
             .await
             .map_err(|e| Error::other(format!("Error streaming part: {e}")))?;
+
+        emit_stream_progress(stream.channel.as_ref(), StreamProgressEvent::ResetStaging);
 
         stream.etags.push(etag);
 
@@ -453,6 +599,14 @@ async fn upload_final_part(
     let digest_sha = stream.sha.clone().finish();
     let digest_md5 = stream.md5.clone().finalize();
 
+    emit_stream_progress(
+        stream.channel.as_ref(),
+        StreamProgressEvent::SendingStarted {
+            part_number: stream.part_number,
+            total_bytes: stream.count as u64,
+        },
+    );
+
     let action = actions::StreamPart::new(
         key,
         stream.tmp_file.path(),
@@ -460,13 +614,20 @@ async fn upload_final_part(
         upload_id,
         stream.count,
         (digest_sha.as_ref(), digest_md5.as_ref()),
-        stream.channel.clone(),
+        stream_sending_progress_callback(stream.channel.as_ref()),
     );
 
-    action
-        .request(s3, globals)
-        .await
-        .map_err(|e| anyhow!("Failed to upload final part: {e}"))
+    let etag = action.request(s3, globals).await.map_err(|e| {
+        emit_stream_progress(stream.channel.as_ref(), StreamProgressEvent::SendingStopped);
+        anyhow!("Failed to upload final part: {e}")
+    })?;
+
+    emit_stream_progress(
+        stream.channel.as_ref(),
+        StreamProgressEvent::Confirmed(stream.count as u64),
+    );
+
+    Ok(etag)
 }
 
 #[cfg(test)]
@@ -482,6 +643,7 @@ mod tests {
     use crate::s3::{Credentials, Region, S3};
     use chacha20poly1305::aead::stream::EncryptorBE32;
     use indicatif::ProgressBar;
+    use mockito::{Matcher, Server};
     use secrecy::SecretString;
     use tokio::{sync::mpsc::unbounded_channel, time::timeout};
 
@@ -615,6 +777,46 @@ mod tests {
         assert!(stream.tmp_file.as_file().metadata().unwrap().len() > 0);
     }
 
+    #[tokio::test]
+    async fn test_write_to_stream_emits_staged_progress() {
+        let s3 = create_test_s3();
+        let (sender, receiver) = unbounded_channel();
+        let handle =
+            spawn_stream_progress_task(receiver, ProgressBar::hidden(), ProgressBar::hidden());
+
+        let mut stream = Stream {
+            tmp_file: NamedTempFile::new().unwrap(),
+            count: 0,
+            etags: Vec::new(),
+            key: "test",
+            part_number: 1,
+            s3: &s3,
+            upload_id: "test",
+            sha: Context::new(&SHA256),
+            md5: md5::Context::new(),
+            channel: Some(sender),
+            tmp_dir: PathBuf::new(),
+            throttle: None,
+            retries: 1,
+        };
+
+        let data = b"Hello, world!";
+        write_to_stream(&mut stream, data).unwrap();
+        drop(stream.channel.take());
+
+        let progress = timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(progress.staged_current, data.len() as u64);
+        assert_eq!(progress.staged_total, data.len() as u64);
+        assert_eq!(progress.confirmed_total, 0);
+        assert_eq!(progress.sending_current, 0);
+        assert_eq!(progress.sending_total, 0);
+        assert_eq!(progress.sending_part, None);
+    }
+
     #[test]
     fn test_create_initial_stream() {
         let s3 = S3::new(
@@ -653,6 +855,51 @@ mod tests {
         assert_eq!(stream.upload_id, upload_id);
         assert_eq!(stream.part_number, 1);
         assert_eq!(stream.count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_initial_stream_header_counts_as_staged_progress() {
+        let s3 = create_test_s3();
+        let key = "test_key";
+        let upload_id = "test_upload_id";
+        let globals = GlobalArgs {
+            throttle: None,
+            retries: 1,
+            compress: false,
+            encrypt: true,
+            enc_key: None,
+        };
+        let header = create_nonce_header(&[1, 2, 3, 4, 5, 6, 7]);
+        let tmp_dir = PathBuf::new();
+        let (sender, receiver) = unbounded_channel();
+        let handle =
+            spawn_stream_progress_task(receiver, ProgressBar::hidden(), ProgressBar::hidden());
+
+        let mut stream = create_initial_stream(InitialStreamParams {
+            upload_id,
+            tmp_dir: &tmp_dir,
+            key,
+            s3: &s3,
+            progress_sender: Some(sender),
+            globals: &globals,
+            header_data: Some(&header),
+        })
+        .unwrap();
+
+        assert_eq!(stream.count, header.len());
+        drop(stream.channel.take());
+
+        let progress = timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(progress.staged_current, header.len() as u64);
+        assert_eq!(progress.staged_total, header.len() as u64);
+        assert_eq!(progress.confirmed_total, 0);
+        assert_eq!(progress.sending_current, 0);
+        assert_eq!(progress.sending_total, 0);
+        assert_eq!(progress.sending_part, None);
     }
 
     #[test]
@@ -721,7 +968,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_progress_task_finishes_when_sender_dropped() {
         let (sender, receiver) = unbounded_channel();
-        let handle = spawn_progress_task(receiver, ProgressBar::hidden(), Some(10));
+        let handle = spawn_progress_task(receiver, ProgressBar::hidden(), 10);
 
         sender.send(4).unwrap();
         sender.send(10).unwrap();
@@ -736,23 +983,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_spawn_progress_task_accumulates_stream_bytes() {
+    async fn test_spawn_stream_progress_task_tracks_sending_and_confirmed_bytes() {
         let (sender, receiver) = unbounded_channel();
-        let handle = spawn_progress_task(receiver, ProgressBar::hidden(), None);
+        let handle =
+            spawn_stream_progress_task(receiver, ProgressBar::hidden(), ProgressBar::hidden());
 
-        sender.send(4).unwrap();
-        sender.send(5).unwrap();
+        sender.send(StreamProgressEvent::Staged(4)).unwrap();
+        sender.send(StreamProgressEvent::Staged(5)).unwrap();
+        sender
+            .send(StreamProgressEvent::SendingStarted {
+                part_number: 2,
+                total_bytes: 9,
+            })
+            .unwrap();
+        sender
+            .send(StreamProgressEvent::SendingProgress(4))
+            .unwrap();
+        sender.send(StreamProgressEvent::Confirmed(9)).unwrap();
+        sender.send(StreamProgressEvent::ResetStaging).unwrap();
         drop(sender);
 
-        let uploaded = timeout(Duration::from_secs(1), handle)
+        let progress = timeout(Duration::from_secs(1), handle)
             .await
             .unwrap()
             .unwrap();
 
-        assert_eq!(uploaded, 9);
+        assert_eq!(progress.staged_current, 0);
+        assert_eq!(progress.staged_total, 9);
+        assert_eq!(progress.confirmed_total, 9);
+        assert_eq!(progress.sending_current, 0);
+        assert_eq!(progress.sending_total, 0);
+        assert_eq!(progress.sending_part, None);
     }
 
     // Comprehensive tests for complete_multipart_upload to prevent regressions
+
+    fn create_mock_s3(endpoint: String, bucket: Option<&str>) -> S3 {
+        S3::new(
+            &Credentials::new(
+                "minioadmin",
+                &SecretString::new("minioadmin".to_string().into()),
+            ),
+            &Region::custom("us-east-1", endpoint),
+            bucket.map(str::to_string),
+            false,
+        )
+    }
 
     fn create_test_s3() -> S3 {
         S3::new(
@@ -764,6 +1040,132 @@ mod tests {
             Some("test-bucket".to_string()),
             false,
         )
+    }
+
+    #[tokio::test]
+    async fn test_try_stream_part_retry_does_not_inflate_staged_progress() {
+        let mut server = Server::new_async().await;
+        let query = Matcher::AllOf(vec![
+            Matcher::UrlEncoded("partNumber".into(), "1".into()),
+            Matcher::UrlEncoded("uploadId".into(), "upload-id".into()),
+        ]);
+
+        let _first = server
+            .mock("PUT", "/bucket/key")
+            .match_query(query.clone())
+            .with_status(503)
+            .with_body("Slow Down")
+            .expect(1)
+            .create_async()
+            .await;
+        let _second = server
+            .mock("PUT", "/bucket/key")
+            .match_query(query)
+            .with_status(200)
+            .with_header("ETag", "\"retry-ok\"")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let s3 = create_mock_s3(server.url(), Some("bucket"));
+        let (sender, receiver) = unbounded_channel();
+        let handle =
+            spawn_stream_progress_task(receiver, ProgressBar::hidden(), ProgressBar::hidden());
+
+        let mut stream = Stream {
+            tmp_file: NamedTempFile::new().unwrap(),
+            count: 0,
+            etags: Vec::new(),
+            key: "key",
+            part_number: 1,
+            s3: &s3,
+            upload_id: "upload-id",
+            sha: Context::new(&SHA256),
+            md5: md5::Context::new(),
+            channel: Some(sender),
+            tmp_dir: PathBuf::new(),
+            throttle: None,
+            retries: 2,
+        };
+
+        let data = b"retry me once";
+        write_to_stream(&mut stream, data).unwrap();
+
+        let etag = try_stream_part(&stream).await.unwrap();
+        assert_eq!(etag, "\"retry-ok\"");
+
+        drop(stream.channel.take());
+
+        let progress = timeout(Duration::from_secs(3), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(progress.staged_current, data.len() as u64);
+        assert_eq!(progress.staged_total, data.len() as u64);
+        assert_eq!(progress.confirmed_total, data.len() as u64);
+        assert_eq!(progress.sending_current, 0);
+        assert_eq!(progress.sending_total, 0);
+        assert_eq!(progress.sending_part, None);
+    }
+
+    #[tokio::test]
+    async fn test_maybe_upload_part_emits_confirmed_progress_and_resets_staging() {
+        let mut server = Server::new_async().await;
+        let query = Matcher::AllOf(vec![
+            Matcher::UrlEncoded("partNumber".into(), "1".into()),
+            Matcher::UrlEncoded("uploadId".into(), "upload-id".into()),
+        ]);
+
+        let _upload = server
+            .mock("PUT", "/bucket/key")
+            .match_query(query)
+            .with_status(200)
+            .with_header("ETag", "\"part-ok\"")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let s3 = create_mock_s3(server.url(), Some("bucket"));
+        let (sender, receiver) = unbounded_channel();
+        let handle =
+            spawn_stream_progress_task(receiver, ProgressBar::hidden(), ProgressBar::hidden());
+
+        let mut stream = Stream {
+            tmp_file: NamedTempFile::new().unwrap(),
+            count: 0,
+            etags: Vec::new(),
+            key: "key",
+            part_number: 1,
+            s3: &s3,
+            upload_id: "upload-id",
+            sha: Context::new(&SHA256),
+            md5: md5::Context::new(),
+            channel: Some(sender),
+            tmp_dir: PathBuf::new(),
+            throttle: None,
+            retries: 1,
+        };
+
+        let data = vec![0_u8; 32];
+        write_to_stream(&mut stream, &data).unwrap();
+        maybe_upload_part(&mut stream, 16).await.unwrap();
+        drop(stream.channel.take());
+
+        let progress = timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(progress.staged_current, 0);
+        assert_eq!(progress.staged_total, data.len() as u64);
+        assert_eq!(progress.confirmed_total, data.len() as u64);
+        assert_eq!(progress.sending_current, 0);
+        assert_eq!(progress.sending_total, 0);
+        assert_eq!(progress.sending_part, None);
+        assert_eq!(stream.count, 0);
+        assert_eq!(stream.part_number, 2);
+        assert_eq!(stream.etags.len(), 1);
     }
 
     #[tokio::test]

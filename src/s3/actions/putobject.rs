@@ -11,6 +11,7 @@ use anyhow::{Result, anyhow};
 use reqwest::Method;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug)]
@@ -50,6 +51,14 @@ impl<'a> PutObject<'a> {
         let (sha, md5, length) = sha256_md5_digest(self.file).await?;
 
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
+        let progress = self.sender.clone().map(|sender| {
+            let callback: request::ProgressCallback = Arc::new(move |bytes_count| {
+                if sender.send(bytes_count).is_err() {
+                    log::trace!("Progress receiver dropped");
+                }
+            });
+            callback
+        });
 
         let response = request::request(
             s3.client(),
@@ -57,7 +66,7 @@ impl<'a> PutObject<'a> {
             self.http_method()?,
             headers,
             Some(Path::new(self.file)),
-            self.sender,
+            progress,
             globals.throttle,
         )
         .await?;

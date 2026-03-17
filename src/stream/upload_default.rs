@@ -22,7 +22,7 @@ pub struct UploadRequest<'a> {
 /// # Errors
 /// Will return an error if the upload fails
 pub async fn upload(request: UploadRequest<'_>) -> Result<String> {
-    let progress_sender = setup_progress(request.quiet, Some(request.file_size)).await;
+    let progress_sender = setup_progress(request.quiet, request.file_size).await;
 
     let action = actions::PutObject::new(
         request.key,

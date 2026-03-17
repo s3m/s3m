@@ -6,9 +6,8 @@ use crate::{
 use anyhow::{Result, anyhow};
 use reqwest::Method;
 use std::{collections::BTreeMap, path::Path};
-use tokio::sync::mpsc::UnboundedSender;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StreamPart<'a> {
     key: &'a str,
     path: &'a Path,
@@ -16,7 +15,7 @@ pub struct StreamPart<'a> {
     upload_id: &'a str,
     length: usize,
     digest: (&'a [u8], &'a [u8]),
-    sender: Option<UnboundedSender<usize>>,
+    progress: Option<request::ProgressCallback>,
 }
 
 impl<'a> StreamPart<'a> {
@@ -28,7 +27,7 @@ impl<'a> StreamPart<'a> {
         upload_id: &'a str,
         length: usize,
         digest: (&'a [u8], &'a [u8]),
-        sender: Option<UnboundedSender<usize>>,
+        progress: Option<request::ProgressCallback>,
     ) -> Self {
         let pn = part_number.to_string();
         Self {
@@ -38,7 +37,7 @@ impl<'a> StreamPart<'a> {
             upload_id,
             length,
             digest,
-            sender,
+            progress,
         }
     }
 
@@ -55,7 +54,7 @@ impl<'a> StreamPart<'a> {
             self.http_method()?,
             headers,
             Some(self.path),
-            self.sender,
+            self.progress,
             globals.throttle,
         )
         .await?;

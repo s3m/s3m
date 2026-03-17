@@ -396,10 +396,10 @@ fn dispatch_put(
         key,
         pipe,
         quiet: matches.get_one("quiet").copied().unwrap_or(false),
-        tmp_dir: matches.get_one::<PathBuf>("tmp-dir").map_or_else(
-            || std::env::temp_dir().join(format!("s3m-{}", std::process::id())),
-            ToOwned::to_owned,
-        ),
+        tmp_dir: matches
+            .get_one::<PathBuf>("tmp-dir")
+            .cloned()
+            .unwrap_or_else(std::env::temp_dir),
         checksum_algorithm: matches.get_one("checksum").cloned(),
         number: matches.get_one::<u8>("number").copied().unwrap_or(1),
     })
