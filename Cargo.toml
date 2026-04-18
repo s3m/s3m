@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.16.1"
+version = "0.16.2"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -64,7 +64,7 @@ md5 = "0.8"
 num_cpus = "1.17"
 percent-encoding = "2.3"
 quick-xml = { version = "0.39", features = ["serialize"] }
-rand = "0.10.0"
+rand = "0.10.1"
 regex = "1.12"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
 ring = "0.17"

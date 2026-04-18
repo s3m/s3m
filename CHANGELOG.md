@@ -1,3 +1,7 @@
+## 0.16.2
+* **Time-dependent test fix**: Updated S3 action integration tests to use dynamic timestamps for "new" objects in mocks, preventing unintended 30-day filter matches as time passes.
+* **Rust 1.95 compatibility**: Updated the codebase to be fully compliant with Rust 1.95 standards, including updated `cargo clippy` and `cargo fmt` rules.
+
 ## 0.16.1
 * **Streaming progress semantics**: Streaming and transformed uploads now use a two-line progress display with per-part buffering progress (`0 .. 512 MiB`) plus a lower status line that switches between `confirmed ...` and `sending part N ... | confirmed ...` during the active part transfer.
 * **Retry progress inflation fix**: Multipart `StreamPart` retries no longer inflate spinner totals when a part is retried after a transient network or S3 error.
