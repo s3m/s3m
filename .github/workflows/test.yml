@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features
+        run: cargo clippy --workspace --all-targets --all-features
 
   check:
     name: Check
@@ -38,7 +38,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Check
-        run: cargo check
+        run: cargo check --workspace
 
   test-linux:
     name: Test (Linux)
@@ -52,7 +52,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: test
-        run: cargo test --lib --bins
+        run: cargo test --workspace --lib --bins
 
   test-portable:
     name: Test (Portable)
@@ -78,7 +78,7 @@ jobs:
         # are available. In particular, integration_streams includes a live
         # multipart resume path and is intentionally excluded here.
         run: >-
-          cargo test --lib --bins
+          cargo test --workspace --lib --bins
           --test integration_encryption
           --test integration_json_output
           --test integration_minio_runtime

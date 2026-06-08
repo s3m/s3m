@@ -148,7 +148,7 @@ async fn request_page(
 ) -> Result<ListBucketResult> {
     let mut action = actions::ListObjectsV2::new(prefix, None, None);
     action.continuation_token = continuation_token;
-    action.request(s3).await
+    Ok(action.request(s3).await?)
 }
 
 fn update_summary(summary: &mut UsageSummary, page: &ListBucketResult) {

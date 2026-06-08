@@ -1,0 +1,154 @@
+use crate::s3::error::{Error, Result};
+use crate::s3::{
+    S3,
+    actions::{Action, response_error},
+    options::RequestOptions,
+    request,
+};
+use reqwest::Method;
+use std::{collections::BTreeMap, path::Path};
+
+#[derive(Clone)]
+pub struct StreamPart<'a> {
+    key: &'a str,
+    path: &'a Path,
+    part_number: String,
+    upload_id: &'a str,
+    length: usize,
+    digest: (&'a [u8], &'a [u8]),
+    progress: Option<request::ProgressCallback>,
+}
+
+impl<'a> StreamPart<'a> {
+    #[must_use]
+    pub fn new(
+        key: &'a str,
+        path: &'a Path,
+        part_number: u16,
+        upload_id: &'a str,
+        length: usize,
+        digest: (&'a [u8], &'a [u8]),
+        progress: Option<request::ProgressCallback>,
+    ) -> Self {
+        let pn = part_number.to_string();
+        Self {
+            key,
+            path,
+            part_number: pn,
+            upload_id,
+            length,
+            digest,
+            progress,
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Will return `Err` if can not make the request
+    pub async fn request(self, s3: &S3, globals: &RequestOptions) -> Result<String> {
+        let (url, headers) =
+            &self.sign(s3, self.digest.0, Some(self.digest.1), Some(self.length))?;
+
+        let response = request::request(
+            s3.client(),
+            url.clone(),
+            self.http_method()?,
+            headers,
+            Some(self.path),
+            self.progress,
+            globals.throttle,
+        )
+        .await?;
+
+        if response.status().is_success() {
+            match response.headers().get("ETag") {
+                Some(etag) => Ok(etag.to_str()?.to_string()),
+                None => Err(Error::Other("missing ETag".to_string())),
+            }
+        } else {
+            Err(response_error(response).await)
+        }
+    }
+}
+
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+impl Action for StreamPart<'_> {
+    fn http_method(&self) -> Result<Method> {
+        Ok(Method::from_bytes(b"PUT")?)
+    }
+
+    fn headers(&self) -> Option<BTreeMap<&str, &str>> {
+        None
+    }
+
+    // URL query_pairs
+    fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
+        let mut map: BTreeMap<&str, &str> = BTreeMap::new();
+        map.insert("partNumber", &self.part_number);
+        map.insert("uploadId", self.upload_id);
+        Some(map)
+    }
+
+    fn path(&self) -> Option<Vec<&str>> {
+        Some(self.key.split('/').collect())
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unnecessary_wraps
+)]
+mod tests {
+    use super::*;
+    use crate::s3::{
+        tools, {Credentials, Region, S3},
+    };
+    use secrecy::SecretString;
+
+    #[test]
+    fn test_method() {
+        let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);
+        assert_eq!(Method::PUT, action.http_method().unwrap());
+    }
+
+    #[test]
+    fn test_query_pairs() {
+        let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);
+        let mut map = BTreeMap::new();
+        map.insert("partNumber", "1");
+        map.insert("uploadId", "uid");
+        assert_eq!(Some(map), action.query_pairs());
+    }
+
+    #[test]
+    fn test_sign() {
+        let s3 = S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        );
+
+        let action = StreamPart::new("key", Path::new("/"), 1, "uid", 0, (b"sha", b"md5"), None);
+        let (url, headers) = action
+            .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
+            .unwrap();
+        assert_eq!(
+            "https://s3.us-west-1.amazonaws.com/awsexamplebucket1/key?partNumber=1&uploadId=uid",
+            url.as_str()
+        );
+        assert!(
+            headers
+                .get("authorization")
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE")
+        );
+    }
+}

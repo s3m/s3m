@@ -260,8 +260,8 @@ s3m --retries 5 file.dat s3/bucket/file.dat
 ### Running Tests
 
 ```bash
-# Unit + integration tests
-cargo test
+# Unit + integration tests (workspace: s3m + s3m-core)
+cargo test --workspace
 
 # Integration tests with MinIO (Podman)
 just container            # start MinIO (idempotent)
@@ -298,5 +298,5 @@ Coverage: **80%+**
 
 1. Write tests for new features
 2. Run: `just test` (to run the containerized integration tests)
-3. Run: `cargo clippy --all-targets --all-features`
+3. Run: `cargo clippy --workspace --all-targets --all-features`
 4. Run: `cargo fmt`

@@ -44,7 +44,7 @@ jobs:
           exit 1
 
       - name: Run unit tests with coverage
-        run: cargo test --verbose -- --nocapture
+        run: cargo test --workspace --verbose -- --nocapture
         env:
           RUST_BACKTRACE: full
           CARGO_INCREMENTAL: 0

@@ -149,7 +149,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - run: cargo publish --token ${CRATES_TOKEN}
+      # Workspace publish: cargo resolves dependency order, publishing
+      # s3m-core first (waiting for the index) before the s3m binary crate.
+      - run: cargo publish --workspace --token ${CRATES_TOKEN}
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
 

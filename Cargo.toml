@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.16.2"
+version.workspace = true
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -12,10 +12,21 @@ categories = ["command-line-utilities", "command-line-interface"]
 license = "BSD-3-Clause"
 edition = "2024"
 
-[lints.rust]
+[lints]
+workspace = true
+
+[workspace]
+members = ["crates/s3m-core"]
+
+# Shared version so the `s3m` binary and the `s3m-core` library always release
+# in lockstep (the `s3m-core` path/version dependency below must match).
+[workspace.package]
+version = "0.17.0"
+
+[workspace.lints.rust]
 warnings = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 # Allow unstable/opinionated lints (lower priority so individual lints can override)
 nursery = { level = "allow", priority = -1 }
 
@@ -42,9 +53,8 @@ needless_collect = "deny"
 large_stack_arrays = "deny"
 
 [dependencies]
+s3m-core = { path = "crates/s3m-core", version = "0.17.0" }
 anyhow = "1"
-base64ct = { version = "1.8", features = ["alloc"] }
-rkyv = { version = "0.8", features = ["bytecheck"] }
 blake3 = "1"
 bytes = "1"
 bytesize = "2"
@@ -53,7 +63,6 @@ chrono = "0.4"
 clap = { version = "4", features = ["env", "string"] }
 colored = "3"
 crc32c = "0.6"
-crc32fast = "1.5"
 dirs = "6"
 env_logger = "0.11"
 futures = "0.3"
@@ -61,23 +70,23 @@ http = "1"
 indicatif = "0.18"
 log = "0.4"
 md5 = "0.8"
-num_cpus = "1.17"
-percent-encoding = "2.3"
-quick-xml = { version = "0.39", features = ["serialize"] }
 rand = "0.10.1"
 regex = "1.12"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
-ring = "0.17"
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.10"
-sled = "0.34"
-temp-env = "0.3.6"
 tempfile = "3"
-tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1.18"
-tokio-util = { version = "0.7", features = ["codec"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "fs",
+    "io-std",
+    "io-util",
+    "sync",
+    "time",
+] }
 url = "2.5"
 zstd = "0.13"
 
@@ -94,8 +103,12 @@ depends = ""
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_futures"] }
+md5 = "0.8"
 mockito = "1.7.2"
+ring = "0.17"
+rkyv = { version = "0.8", features = ["bytecheck"] }
 testcontainers = "0.27"
+tokio-util = { version = "0.7", features = ["codec"] }
 
 [[bench]]
 name = "sha256_md5_digest_benchmark"

@@ -16,7 +16,6 @@ use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use std::{
     borrow::ToOwned,
-    cmp,
     collections::BTreeMap,
     path::{Path, PathBuf},
     string::String,
@@ -66,11 +65,7 @@ pub fn dispatch_streams(
 }
 
 fn default_parallel_requests() -> u8 {
-    u8::try_from(cmp::min(
-        (num_cpus::get_physical() - 2).max(1),
-        u8::MAX as usize,
-    ))
-    .unwrap_or(u8::MAX)
+    u8::try_from(crate::s3::tools::default_concurrency().min(u8::MAX as usize)).unwrap_or(u8::MAX)
 }
 
 fn requested_parallel_requests(matches: &clap::ArgMatches) -> u8 {
@@ -1582,7 +1577,7 @@ hosts:
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
-                    u8::try_from((num_cpus::get_physical() - 2).max(1)).unwrap_or(u8::MAX)
+                    u8::try_from(crate::s3::tools::default_concurrency()).unwrap_or(u8::MAX)
                 );
                 assert!(!globals.compress);
             }
@@ -1668,7 +1663,7 @@ hosts:
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
-                    u8::try_from((num_cpus::get_physical() - 2).max(1)).unwrap_or(u8::MAX)
+                    u8::try_from(crate::s3::tools::default_concurrency()).unwrap_or(u8::MAX)
                 );
                 assert!(!globals.compress);
             }
@@ -1879,7 +1874,7 @@ hosts:
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
-                    u8::try_from((num_cpus::get_physical() - 2).max(1)).unwrap_or(u8::MAX)
+                    u8::try_from(crate::s3::tools::default_concurrency()).unwrap_or(u8::MAX)
                 );
                 assert!(globals.compress);
             }
@@ -1948,7 +1943,7 @@ hosts:
                 assert_eq!(checksum_algorithm, None);
                 assert_eq!(
                     number,
-                    u8::try_from((num_cpus::get_physical() - 2).max(1)).unwrap_or(u8::MAX)
+                    u8::try_from(crate::s3::tools::default_concurrency()).unwrap_or(u8::MAX)
                 );
                 assert!(globals.compress);
             }

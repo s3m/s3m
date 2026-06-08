@@ -16,7 +16,7 @@ use clap::{
     builder::styling::{AnsiColor, Effects, Styles},
 };
 use std::{
-    cmp, env, fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -103,7 +103,9 @@ fn command_styles() -> Styles {
 }
 
 fn default_num_threads() -> String {
-    cmp::min((num_cpus::get_physical() - 2).max(1), u8::MAX as usize).to_string()
+    crate::s3::tools::default_concurrency()
+        .min(u8::MAX as usize)
+        .to_string()
 }
 
 fn base_command() -> Command {
