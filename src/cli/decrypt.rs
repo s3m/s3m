@@ -1,6 +1,7 @@
 use crate::cli::progressbar::Bar;
+use crate::stream::{decrypt_chunk, init_decryption, parse_nonce_header};
 use anyhow::{Context, Result, anyhow};
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::stream::DecryptorBE32};
+use secrecy::SecretString;
 use std::{
     fs::File,
     io::{self, Read, Write}, // Import io for specific error types
@@ -49,26 +50,13 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
     // if quiet is true, then use a default progress bar
     let pb = Bar::new(file_size);
 
-    // get the nonce length byte
-    let mut nonce_len_buf = [0u8; 1];
+    // Read the 8-byte nonce header: [len=7][nonce(7)]
+    let mut header = [0u8; 8];
     encrypted_file
-        .read_exact(&mut nonce_len_buf)
-        .context("Failed to read nonce length byte")?;
-
-    // The nonce length is expected to be 7 bytes for ChaCha20Poly1305
-    let nonce_len = nonce_len_buf[0] as usize;
-    if nonce_len != 7 {
-        return Err(anyhow!("Expected nonce length 7, got {nonce_len}"));
-    }
-
-    // Read the nonce bytes
-    let mut nonce = vec![0u8; nonce_len];
-    encrypted_file
-        .read_exact(&mut nonce)
-        .context("Failed to read nonce bytes")?;
-
-    let cipher = ChaCha20Poly1305::new(enc_key.as_bytes().into());
-    let mut decryptor = DecryptorBE32::from_aead(cipher, nonce.as_slice().into());
+        .read_exact(&mut header)
+        .context("Failed to read nonce header")?;
+    let nonce = parse_nonce_header(&header)?;
+    let mut decryptor = init_decryption(&SecretString::new(enc_key.into()), &nonce);
 
     let mut chunk_idx = 0;
     let mut total_decrypted_bytes = 0u64;
@@ -96,10 +84,8 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
             .read_exact(&mut encrypted_chunk)
             .with_context(|| format!("Chunk {chunk_idx}: Failed to read encrypted chunk"))?;
 
-        let mut decrypted_chunk = encrypted_chunk.clone();
-        decryptor
-            .decrypt_next_in_place(&[], &mut decrypted_chunk)
-            .map_err(|e| anyhow::anyhow!("Chunk {chunk_idx}: Decryption failed: {e:?}"))?;
+        let decrypted_chunk = decrypt_chunk(&mut decryptor, &encrypted_chunk)
+            .with_context(|| format!("Chunk {chunk_idx}: Decryption failed"))?;
 
         decrypted_file
             .write_all(&decrypted_chunk)

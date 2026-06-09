@@ -211,41 +211,36 @@ fn escape_tag(value: &str) -> String {
 }
 
 fn prometheus_labels(result: &CheckResult) -> String {
-    if result.suffix.is_empty() {
-        format!(
-            "host=\"{}\",bucket=\"{}\",prefix=\"{}\"",
-            escape_label(&result.host),
-            escape_label(&result.bucket),
-            escape_label(&result.prefix),
-        )
-    } else {
-        format!(
-            "host=\"{}\",bucket=\"{}\",prefix=\"{}\",suffix=\"{}\"",
-            escape_label(&result.host),
-            escape_label(&result.bucket),
-            escape_label(&result.prefix),
-            escape_label(&result.suffix),
-        )
+    // host/bucket always present; prefix/suffix only when non-empty (an empty
+    // prefix means a whole-bucket rule). Order preserved: host, bucket, prefix,
+    // suffix.
+    let mut parts = vec![
+        format!("host=\"{}\"", escape_label(&result.host)),
+        format!("bucket=\"{}\"", escape_label(&result.bucket)),
+    ];
+    if !result.prefix.is_empty() {
+        parts.push(format!("prefix=\"{}\"", escape_label(&result.prefix)));
     }
+    if !result.suffix.is_empty() {
+        parts.push(format!("suffix=\"{}\"", escape_label(&result.suffix)));
+    }
+    parts.join(",")
 }
 
 fn influx_tags(result: &CheckResult) -> String {
-    if result.suffix.is_empty() {
-        format!(
-            "host={},bucket={},prefix={}",
-            escape_tag(&result.host),
-            escape_tag(&result.bucket),
-            escape_tag(&result.prefix),
-        )
-    } else {
-        format!(
-            "host={},bucket={},prefix={},suffix={}",
-            escape_tag(&result.host),
-            escape_tag(&result.bucket),
-            escape_tag(&result.prefix),
-            escape_tag(&result.suffix),
-        )
+    // InfluxDB line protocol rejects empty tag values, so omit prefix/suffix
+    // tags when empty (an empty prefix means a whole-bucket rule).
+    let mut parts = vec![
+        format!("host={}", escape_tag(&result.host)),
+        format!("bucket={}", escape_tag(&result.bucket)),
+    ];
+    if !result.prefix.is_empty() {
+        parts.push(format!("prefix={}", escape_tag(&result.prefix)));
     }
+    if !result.suffix.is_empty() {
+        parts.push(format!("suffix={}", escape_tag(&result.suffix)));
+    }
+    parts.join(",")
 }
 
 fn format_prometheus(results: &[CheckResult]) -> String {
@@ -807,6 +802,33 @@ mod tests {
             output,
             "s3m,host=s3,bucket=bucket-a,prefix=daily/,suffix=.log error=0i,exist=1i,size_mismatch=0i\n"
         );
+    }
+
+    #[test]
+    fn test_empty_prefix_omits_tag() {
+        // Whole-bucket rule: prefix == "" must NOT emit an (invalid) empty tag.
+        let result = CheckResult {
+            host: "s3".to_string(),
+            bucket: "bucket-a".to_string(),
+            prefix: String::new(),
+            suffix: String::new(),
+            exist: true,
+            error: false,
+            size_mismatch: false,
+        };
+
+        // InfluxDB: no `prefix=` (empty tag values are invalid line protocol).
+        let influx = format_influxdb(std::slice::from_ref(&result));
+        assert_eq!(
+            influx,
+            "s3m,host=s3,bucket=bucket-a error=0i,exist=1i,size_mismatch=0i\n"
+        );
+        assert!(!influx.contains("prefix="));
+
+        // Prometheus: no empty `prefix=""` label either.
+        let prom = format_prometheus(std::slice::from_ref(&result));
+        assert!(prom.contains("s3m_object_exists{host=\"s3\",bucket=\"bucket-a\"} 1"));
+        assert!(!prom.contains("prefix="));
     }
 
     #[test]

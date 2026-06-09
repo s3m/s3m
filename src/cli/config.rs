@@ -67,6 +67,8 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct MonitorRule {
+    // Optional: when omitted (or empty) the rule scans the whole bucket.
+    #[serde(default)]
     pub prefix: String,
 
     #[serde(default)]
@@ -254,6 +256,17 @@ hosts:
       bucket_A:
         - prefix: backups/daily";
 
+    const CONF_MONITOR_NO_PREFIX: &str = r"---
+hosts:
+  s3:
+    endpoint: https://s3.example.test
+    access_key: XXX
+    secret_key: YYY
+    buckets:
+      bucket_A:
+        - suffix: .sql
+          age: 12h";
+
     #[test]
     fn test_config_get_host() {
         let mut tmp_file = NamedTempFile::new().unwrap();
@@ -432,6 +445,22 @@ hosts:
         assert_eq!(rule.suffix, "");
         assert_eq!(rule.age, 86_400);
         assert_eq!(rule.size, 0);
+    }
+
+    #[test]
+    fn test_config_monitor_rule_optional_prefix() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file
+            .write_all(CONF_MONITOR_NO_PREFIX.as_bytes())
+            .unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap();
+        let host = c.get_host("s3").unwrap();
+        let rule = &host.buckets["bucket_A"][0];
+
+        // prefix omitted -> empty string -> whole-bucket scan
+        assert_eq!(rule.prefix, "");
+        assert_eq!(rule.suffix, ".sql");
+        assert_eq!(rule.age, 43_200);
     }
 
     #[test]

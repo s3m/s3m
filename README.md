@@ -229,6 +229,8 @@ s3m --decrypt file.dat.enc 0123456789abcdef0123456789abcdef
 
 Uploads and downloads do not accept `--encrypt` or `--enc-key` flags. Encryption is enabled by setting `enc_key` on the selected host in `config.yml`.
 
+> **Integrity note:** encryption uses ChaCha20-Poly1305 in a streaming (chunked) mode — every chunk is authenticated, so tampering, reordering, and forged content are detected and decryption fails. It does **not** detect *truncation* of an already-stored object (trailing chunks removed), and incomplete downloads are caught at the transport layer. If you need end-to-end "exactly what I uploaded" verification, validate restores out-of-band (e.g. compare a checksum).
+
 ## Advanced Options
 
 ### Buffer size

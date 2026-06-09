@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.17.2"
+version = "0.18.0"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -51,7 +51,7 @@ needless_collect = "deny"
 large_stack_arrays = "deny"
 
 [dependencies]
-s3m-core = { path = "crates/s3m-core", version = "0.17.0" }
+s3m-core = { path = "crates/s3m-core", version = "0.18.0" }
 anyhow = "1"
 blake3 = "1"
 bytes = "1"

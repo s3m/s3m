@@ -22,7 +22,10 @@ use bytes::BytesMut;
 use bytesize::ByteSize;
 use chacha20poly1305::{
     ChaCha20Poly1305,
-    aead::{KeyInit, stream::EncryptorBE32},
+    aead::{
+        KeyInit,
+        stream::{DecryptorBE32, EncryptorBE32},
+    },
 };
 use indicatif::ProgressBar;
 use rand::{Rng, RngExt, rng};
@@ -31,7 +34,7 @@ use secrecy::ExposeSecret;
 use std::{
     cmp::min,
     collections::BTreeMap,
-    io::{Cursor, Write},
+    io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -246,6 +249,46 @@ pub async fn compress_chunk(bytes: BytesMut) -> Result<Vec<u8>> {
     .context("compression task panicked or was cancelled")?
 }
 
+/// Decompresses Zstandard (zstd) data, offloading the work to a blocking thread.
+///
+/// Counterpart of [`compress_chunk`]. Decodes the entire input, including
+/// multiple concatenated zstd frames (as produced by compressing a stream chunk
+/// by chunk), so it can restore a whole compressed object in one call.
+///
+/// The output is **bounded to `max_output` bytes**: decompression stops and
+/// returns an error if the decompressed size would exceed it. This caps memory
+/// use and guards against decompression bombs when restoring untrusted data.
+///
+/// # Errors
+/// Returns an error if decompression fails, the output would exceed
+/// `max_output`, or the thread panics.
+pub async fn decompress_chunk(data: Vec<u8>, max_output: usize) -> Result<Vec<u8>> {
+    task::spawn_blocking(move || {
+        let decoder = zstd::stream::read::Decoder::new(Cursor::new(data))
+            .context("failed to initialize zstd decoder")?;
+
+        // Read at most max_output + 1 bytes; getting the extra byte means the
+        // decompressed stream is larger than allowed.
+        let limit = u64::try_from(max_output)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let mut out = Vec::new();
+        decoder
+            .take(limit)
+            .read_to_end(&mut out)
+            .context("failed to decompress with zstd")?;
+
+        if out.len() > max_output {
+            return Err(anyhow!(
+                "decompressed output exceeds the {max_output}-byte limit"
+            ));
+        }
+        Ok(out)
+    })
+    .await
+    .context("decompression task panicked or was cancelled")?
+}
+
 #[must_use]
 pub fn init_encryption(encryption_key: &secrecy::SecretString) -> (ChaCha20Poly1305, [u8; 7]) {
     let cipher = ChaCha20Poly1305::new(encryption_key.expose_secret().as_bytes().into());
@@ -255,6 +298,19 @@ pub fn init_encryption(encryption_key: &secrecy::SecretString) -> (ChaCha20Poly1
     rng().fill_bytes(&mut nonce_bytes);
 
     (cipher, nonce_bytes)
+}
+
+/// Build a streaming decryptor from the encryption key and the 7-byte nonce.
+///
+/// Counterpart of [`init_encryption`]: the nonce is the one carried by
+/// [`create_nonce_header`] and recovered with [`parse_nonce_header`].
+#[must_use]
+pub fn init_decryption(
+    encryption_key: &secrecy::SecretString,
+    nonce: &[u8; 7],
+) -> DecryptorBE32<ChaCha20Poly1305> {
+    let cipher = ChaCha20Poly1305::new(encryption_key.expose_secret().as_bytes().into());
+    DecryptorBE32::from_aead(cipher, nonce.into())
 }
 
 /// Initialize multipart upload
@@ -479,6 +535,26 @@ pub fn create_nonce_header(nonce_bytes: &[u8; 7]) -> Vec<u8> {
     [&[7_u8], nonce_bytes.as_slice()].concat()
 }
 
+/// Parse the encryption nonce header written by [`create_nonce_header`].
+///
+/// Expects `[0x07, nonce0..=nonce6]` (8 bytes) at the start of an encrypted
+/// stream and returns the 7-byte nonce.
+///
+/// # Errors
+/// Returns an error if the header is too short or the length byte is not 7.
+pub fn parse_nonce_header(header: &[u8]) -> Result<[u8; 7]> {
+    let len = *header.first().context("missing nonce length byte")? as usize;
+    if len != 7 {
+        return Err(anyhow!("expected nonce length 7, got {len}"));
+    }
+    let nonce: [u8; 7] = header
+        .get(1..8)
+        .context("missing nonce bytes")?
+        .try_into()
+        .map_err(|_| anyhow!("invalid nonce length"))?;
+    Ok(nonce)
+}
+
 /// Encrypt a chunk of data
 ///
 /// # Errors
@@ -499,6 +575,26 @@ pub fn encrypt_chunk(
     result.extend_from_slice(&encrypted_len.to_be_bytes());
     result.extend_from_slice(&encrypted_chunk);
     Ok(result)
+}
+
+/// Decrypt one chunk produced by [`encrypt_chunk`].
+///
+/// `encrypt_chunk` frames its output as `[len(4 bytes)][ciphertext]`; the caller
+/// reads the length, then passes exactly `len` ciphertext bytes here. Chunks
+/// must be fed in the same order they were encrypted (the stream cipher is
+/// stateful).
+///
+/// # Errors
+/// Returns `Err` if decryption/authentication fails.
+pub fn decrypt_chunk(
+    decryptor: &mut DecryptorBE32<ChaCha20Poly1305>,
+    data: &[u8],
+) -> Result<Vec<u8>> {
+    let mut chunk = data.to_vec();
+    decryptor
+        .decrypt_next_in_place(&[], &mut chunk)
+        .map_err(|e| anyhow!("Decryption error: {e}"))?;
+    Ok(chunk)
 }
 
 /// Check if we need to upload current part and start a new one
@@ -647,6 +743,85 @@ mod tests {
     use mockito::{Matcher, Server};
     use secrecy::SecretString;
     use tokio::{sync::mpsc::unbounded_channel, time::timeout};
+
+    #[tokio::test]
+    async fn test_compress_decompress_roundtrip() {
+        let original = b"the quick brown fox ".repeat(64);
+        let second = b"second chunk payload".to_vec();
+
+        let c1 = compress_chunk(BytesMut::from(&original[..])).await.unwrap();
+        let c2 = compress_chunk(BytesMut::from(&second[..])).await.unwrap();
+
+        // Two independent zstd frames concatenated, as chunked compression produces.
+        let mut blob = c1;
+        blob.extend_from_slice(&c2);
+
+        let out = decompress_chunk(blob, 1 << 20).await.unwrap();
+
+        let mut expected = original.clone();
+        expected.extend_from_slice(&second);
+        assert_eq!(out, expected);
+    }
+
+    #[tokio::test]
+    async fn test_decompress_chunk_respects_limit() {
+        // ~100 KB of highly compressible data: small compressed, big decompressed.
+        let original = b"A".repeat(100_000);
+        let compressed = compress_chunk(BytesMut::from(&original[..])).await.unwrap();
+
+        // A tight limit must reject the bomb...
+        assert!(decompress_chunk(compressed.clone(), 1_000).await.is_err());
+
+        // ...while a generous limit round-trips exactly.
+        let ok = decompress_chunk(compressed, 1_000_000).await.unwrap();
+        assert_eq!(ok, original);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        let key = SecretString::new("0123456789abcdef0123456789abcdef".into());
+
+        // Encode: header + framed chunks, exactly as the upload paths produce.
+        let (cipher, nonce) = init_encryption(&key);
+        let mut enc = EncryptorBE32::from_aead(cipher, (&nonce).into());
+        let header = create_nonce_header(&nonce);
+        let p1 = b"first plaintext chunk".to_vec();
+        let p2 = b"second plaintext chunk".to_vec();
+        let f1 = encrypt_chunk(&mut enc, &p1).unwrap(); // [len(4)][ciphertext]
+        let f2 = encrypt_chunk(&mut enc, &p2).unwrap();
+
+        let mut stream = header;
+        stream.extend_from_slice(&f1);
+        stream.extend_from_slice(&f2);
+
+        // Decode: recover nonce, then unframe + decrypt each chunk in order.
+        let nonce2 = parse_nonce_header(&stream[..8]).unwrap();
+        assert_eq!(nonce2, nonce);
+        let mut dec = init_decryption(&key, &nonce2);
+
+        let mut pos = 8;
+        let len1 = u32::from_be_bytes(stream[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4;
+        let d1 = decrypt_chunk(&mut dec, &stream[pos..pos + len1]).unwrap();
+        pos += len1;
+        let len2 = u32::from_be_bytes(stream[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4;
+        let d2 = decrypt_chunk(&mut dec, &stream[pos..pos + len2]).unwrap();
+
+        assert_eq!(d1, p1);
+        assert_eq!(d2, p2);
+    }
+
+    #[test]
+    fn test_parse_nonce_header() {
+        let nonce = [1u8, 2, 3, 4, 5, 6, 7];
+        assert_eq!(
+            parse_nonce_header(&create_nonce_header(&nonce)).unwrap(),
+            nonce
+        );
+        assert!(parse_nonce_header(&[6, 0, 0, 0, 0, 0, 0, 0]).is_err()); // wrong len byte
+        assert!(parse_nonce_header(&[7, 1, 2, 3]).is_err()); // too short
+    }
 
     #[test]
     fn test_get_key() {

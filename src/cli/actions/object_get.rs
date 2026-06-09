@@ -1,6 +1,7 @@
 use crate::{
     cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
     s3::{S3, actions, tools::throttle_download},
+    stream::{decrypt_chunk, parse_nonce_header},
 };
 use anyhow::{Context, Result, anyhow};
 use bytes::{Buf, BytesMut};
@@ -18,6 +19,12 @@ use std::{
     path::{Path, PathBuf},
 };
 use tokio::{fs::OpenOptions, io::AsyncWriteExt};
+
+// Encrypted streams are framed as `[len(4)][ciphertext]`; a single frame is one
+// upload read-chunk, far below the 512 MiB multipart part buffer. Reject absurd
+// length prefixes (corrupt or hostile data) before buffering — a `u32` length
+// could otherwise claim up to ~4 GiB.
+const MAX_ENCRYPTED_CHUNK: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct MetadataJsonOutput {
@@ -268,18 +275,16 @@ impl DownloadState {
                     break;
                 }
 
-                let nonce_len =
-                    *self.buffer.first().context("Failed to read nonce length")? as usize;
-                if nonce_len != 7 {
-                    return Err(anyhow!("Expected nonce length 7, got {nonce_len}"));
-                }
-
-                let nonce = self.buffer.get(1..8).context("Failed to get nonce bytes")?;
+                let header = self
+                    .buffer
+                    .get(..8)
+                    .context("Failed to read nonce header")?;
+                let nonce = parse_nonce_header(header)?;
                 let cipher = self
                     .cipher
                     .clone()
                     .context("Cipher not initialized for decryption")?;
-                self.decryptor = Some(DecryptorBE32::from_aead(cipher, nonce.into()));
+                self.decryptor = Some(DecryptorBE32::from_aead(cipher, (&nonce).into()));
                 self.buffer.advance(8);
                 continue;
             }
@@ -298,23 +303,31 @@ impl DownloadState {
                     .map_err(|_| anyhow!("Invalid chunk length bytes"))?,
             ) as usize;
 
+            if len > MAX_ENCRYPTED_CHUNK {
+                return Err(anyhow!(
+                    "encrypted chunk length {len} exceeds the {MAX_ENCRYPTED_CHUNK}-byte limit; object appears corrupt"
+                ));
+            }
+
             if self.buffer.len() < 4 + len {
                 break;
             }
 
-            let mut encrypted_chunk = self
+            let encrypted_chunk = self
                 .buffer
                 .get(4..4 + len)
                 .context("Failed to read encrypted chunk")?
                 .to_vec();
 
-            self.decryptor
-                .as_mut()
-                .context("Decryptor not initialized")?
-                .decrypt_next_in_place(&[], &mut encrypted_chunk)
-                .map_err(|_| anyhow!("Decryption failed, check your encryption key"))?;
+            let decrypted_chunk = decrypt_chunk(
+                self.decryptor
+                    .as_mut()
+                    .context("Decryptor not initialized")?,
+                &encrypted_chunk,
+            )
+            .map_err(|_| anyhow!("Decryption failed, check your encryption key"))?;
 
-            self.file.write_all(&encrypted_chunk).await?;
+            self.file.write_all(&decrypted_chunk).await?;
             self.update_progress();
             self.buffer.advance(4 + len);
         }
@@ -565,6 +578,18 @@ mod tests {
     use anyhow::Result;
     use mockito::{Matcher, Server};
     use secrecy::SecretString;
+
+    #[tokio::test]
+    async fn test_oversized_encrypted_chunk_rejected() {
+        let file = tokio::fs::File::from_std(tempfile::tempfile().unwrap());
+        let mut state = DownloadState::new(file, Bar::default(), 1 << 30, true, true, None);
+        // Move past the nonce-header stage by injecting a decryptor directly.
+        let key = SecretString::new("0123456789abcdef0123456789abcdef".into());
+        state.decryptor = Some(crate::stream::init_decryption(&key, &[0u8; 7]));
+        // A frame claiming u32::MAX bytes must be rejected before buffering.
+        state.buffer.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(state.process_encrypted_buffer().await.is_err());
+    }
 
     struct Test {
         dest: Option<String>,
