@@ -149,26 +149,32 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Independent versions: publish each crate only if that exact version is
-      # not already on crates.io (s3m-core first, since s3m depends on it).
+      # Independent versions: publish each crate (s3m-core first, since s3m
+      # depends on it). A version that is already on crates.io is treated as a
+      # skip, so an s3m-only release does not fail on the existing s3m-core.
       - name: Publish to crates.io
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
         run: |
-          set -euo pipefail
-          publish_if_new() {
+          set -uo pipefail
+          publish() {
             crate="$1"
-            ver="$(cargo metadata --no-deps --format-version 1 \
-              | jq -r --arg c "$crate" '.packages[] | select(.name==$c) | .version')"
-            if curl -sfo /dev/null "https://crates.io/api/v1/crates/$crate/$ver"; then
-              echo "✅ $crate $ver already published — skipping"
+            echo "📦 cargo publish -p $crate"
+            if out="$(cargo publish -p "$crate" --token "$CRATES_TOKEN" 2>&1)"; then
+              printf '%s\n' "$out"
+              echo "✅ published $crate"
             else
-              echo "📦 publishing $crate $ver"
-              cargo publish -p "$crate" --token "$CRATES_TOKEN"
+              printf '%s\n' "$out"
+              if printf '%s' "$out" | grep -qiE "already (uploaded|exists)"; then
+                echo "↪︎ $crate version already on crates.io — skipping"
+              else
+                echo "❌ publish failed for $crate"
+                exit 1
+              fi
             fi
           }
-          publish_if_new s3m-core
-          publish_if_new s3m
+          publish s3m-core
+          publish s3m
 
   package:
     name: PackageCloud
