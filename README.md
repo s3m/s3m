@@ -4,8 +4,13 @@
 [![Test & Build](https://github.com/s3m/s3m/actions/workflows/build.yml/badge.svg)](https://github.com/s3m/s3m/actions/workflows/build.yml)
 [![codecov](https://codecov.io/gh/s3m/s3m/graph/badge.svg?token=Y2BQJUGPJ5)](https://codecov.io/gh/s3m/s3m)
 [![crates.io](https://img.shields.io/crates/v/s3m.svg)](https://crates.io/crates/s3m)
+[![s3m-core](https://img.shields.io/crates/v/s3m-core.svg?label=s3m-core)](https://crates.io/crates/s3m-core)
 
 **s3m** a command-line tool for storing streams of data in s3 buckets.
+
+It is built on the reusable [`s3m-core`](https://crates.io/crates/s3m-core)
+library — the same S3 client and streaming engine, free of CLI dependencies, so
+you can embed it in your own application (see [Use as a library](#use-as-a-library)).
 
 ## Problem trying to solve
 
@@ -247,6 +252,21 @@ s3m --throttle 10240 file.dat s3/backups/file.dat  # 10MB/s
 s3m --retries 5 file.dat s3/bucket/file.dat
 ```
 
+### Concurrency
+
+```bash
+# Set the max number of concurrent part requests
+s3m -n 8 big-file.dat s3/large/huge-file.dat
+```
+
+When `-n/--number` is not given, the default is derived from
+[`std::thread::available_parallelism()`], which **respects cgroup CPU quotas and
+CPU affinity** — so inside a container limited to e.g. 2 CPUs the default stays
+low even on a many-core host, keeping resource usage predictable. Two units are
+reserved for the runtime, and the value is always at least `1`.
+
+[`std::thread::available_parallelism()`]: https://doc.rust-lang.org/std/thread/fn.available_parallelism.html
+
 ## Notes for streaming and transformed uploads
 
 - Regular file multipart uploads can be resumed.
@@ -254,6 +274,42 @@ s3m --retries 5 file.dat s3/bucket/file.dat
 - When the input size is unknown, `s3m` uses a fixed multipart buffer of `512 MiB` per part.
 - Streaming and transformed upload paths (for example `STDIN`, compression, and encryption) use a two-line progress display: the top line shows local buffering progress for the current `512 MiB` part, and the bottom line shows either `confirmed ...` bytes or `sending part N ... | confirmed ...` during the active part upload.
 - For interrupted or failed multipart uploads from streaming paths, configure bucket lifecycle rules to clean up incomplete multipart uploads automatically.
+
+## Use as a library
+
+The S3 client and streaming engine live in the
+[`s3m-core`](https://crates.io/crates/s3m-core) crate, which has **no CLI
+dependencies** (no clap/colored/env_logger/…). Add it to your own project:
+
+```bash
+cargo add s3m-core secrecy anyhow tokio --features tokio/full
+```
+
+```rust
+use s3m_core::{S3, Credentials, Region, RequestOptions};
+use s3m_core::s3::actions::GetObject;
+use secrecy::SecretString;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let credentials = Credentials::new("ACCESS_KEY", &SecretString::new("SECRET_KEY".into()));
+    let region: Region = "us-west-2".parse()?;
+    let s3 = S3::new(&credentials, &region, Some("my-bucket".to_string()), false);
+
+    // Every action returns a typed `s3m_core::Error` you can match on.
+    match GetObject::new("path/file.dat", None).request(&s3, &RequestOptions::new()).await {
+        Ok(response) => { /* stream the body */ }
+        Err(e) if e.is_not_found() => eprintln!("object missing (NoSuchKey/404)"),
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+```
+
+Curated re-exports (`s3m_core::{S3, Credentials, Region, RequestOptions, Error}`)
+keep the common entry points one path deep; the full S3 actions live under
+`s3m_core::s3::actions` and the resumable/transform pipelines under
+`s3m_core::stream`.
 
 ## Development
 

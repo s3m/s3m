@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version.workspace = true
+version = "0.17.1"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -18,11 +18,9 @@ workspace = true
 [workspace]
 members = ["crates/s3m-core"]
 
-# Shared version so the `s3m` binary and the `s3m-core` library always release
-# in lockstep (the `s3m-core` path/version dependency below must match).
-[workspace.package]
-version = "0.17.0"
-
+# s3m (bin) and s3m-core (lib) are versioned independently — each bumps only
+# when its own code changes. The s3m-core dependency below pins the library
+# version the binary builds against.
 [workspace.lints.rust]
 warnings = "deny"
 

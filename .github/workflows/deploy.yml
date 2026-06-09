@@ -149,11 +149,26 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # Workspace publish: cargo resolves dependency order, publishing
-      # s3m-core first (waiting for the index) before the s3m binary crate.
-      - run: cargo publish --workspace --token ${CRATES_TOKEN}
+      # Independent versions: publish each crate only if that exact version is
+      # not already on crates.io (s3m-core first, since s3m depends on it).
+      - name: Publish to crates.io
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
+        run: |
+          set -euo pipefail
+          publish_if_new() {
+            crate="$1"
+            ver="$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg c "$crate" '.packages[] | select(.name==$c) | .version')"
+            if curl -sfo /dev/null "https://crates.io/api/v1/crates/$crate/$ver"; then
+              echo "✅ $crate $ver already published — skipping"
+            else
+              echo "📦 publishing $crate $ver"
+              cargo publish -p "$crate" --token "$CRATES_TOKEN"
+            fi
+          }
+          publish_if_new s3m-core
+          publish_if_new s3m
 
   package:
     name: PackageCloud

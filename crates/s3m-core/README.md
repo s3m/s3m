@@ -22,7 +22,7 @@ use s3m_core::s3::actions::GetObject;
 use secrecy::SecretString;
 
 # async fn run() -> anyhow::Result<()> {
-let credentials = Credentials::new("ACCESS_KEY", &SecretString::from("SECRET_KEY"));
+let credentials = Credentials::new("ACCESS_KEY", &SecretString::new("SECRET_KEY".into()));
 let region: Region = "us-west-2".parse()?;
 let s3 = S3::new(&credentials, &region, Some("my-bucket".to_string()), false);
 

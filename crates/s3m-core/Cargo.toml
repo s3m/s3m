@@ -1,6 +1,6 @@
 [package]
 name = "s3m-core"
-version.workspace = true
+version = "0.17.0"
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "Reusable S3 client and streaming engine behind the s3m CLI"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"

@@ -1,3 +1,9 @@
+## 0.17.1
+* **Docs**: Documented the reusable `s3m-core` library in the README — a new "Use as a library" section with a typed-`Error`/`RequestOptions` example, an `s3m-core` crates.io badge, and a `### Concurrency` note explaining the cgroup-aware `available_parallelism()` default for `-n/--number`.
+* **CI**: Bumped `codecov/codecov-action` from `v5` to `v7` (Node 24 runtime + template-injection security fix from v6.0.1).
+* **Packaging**: Trimmed the PackageCloud distribution lists to currently-supported releases (e.g. Debian `bookworm`/`trixie`, Ubuntu `jammy`/`noble`, Fedora `43`/`44`, EL `9`/`10`, openSUSE `15.6`/`16.0`).
+* **Dev tooling**: Fixed the `.justfile` recipes that regressed after the workspace split — `test-unit`, `clippy`, and `coverage` now run with `--workspace` so the `s3m-core` crate is included.
+
 ## 0.17.0 🪐
 * **Security (transitive)**: Refreshed `Cargo.lock` to clear `cargo audit` advisories in transitive dependencies: `rustls-webpki` (RUSTSEC-2026-0104, reachable panic in CRL parsing, reached via `reqwest`), `rkyv` (RUSTSEC-2026-0122, unsound `clear` use-after-free), and `astral-tokio-tar` (RUSTSEC-2026-0112/0113/0145, dev-only via `testcontainers`). No production source changes were required.
 * **cgroup-aware concurrency**: Replaced `num_cpus::get_physical()` with `std::thread::available_parallelism()` for the default concurrent-request count via a new `tools::default_concurrency()` helper. Unlike physical-core counting, this respects cgroup CPU quotas and CPU affinity, so the default no longer over-subscribes when running under a container CPU limit (the primary deployment target). Behavior note: on hyper-threaded bare metal the default may rise (logical vs. physical cores); set `-n/--number` to pin an explicit value.

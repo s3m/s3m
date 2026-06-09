@@ -64,54 +64,54 @@ jobs:
 
       - name: push Debian
         run: |-
-          for distro in squeeze wheezy jessie stretch buster bullseye bookworm; do
+          for distro in bookworm trixie; do
             package_cloud push nbari/s3m/debian/$distro dist/*.deb --skip-errors
           done
 
       - name: push Ubuntu
         run: |-
-          for distro in bionic focal jammy; do
+          for distro in jammy noble; do
             package_cloud push nbari/s3m/ubuntu/$distro dist/*.deb --skip-errors
           done
 
       - name: push Raspbian
         run: |-
-          for distro in stretch buster bullseye; do
+          for distro in bullseye bookworm; do
             package_cloud push nbari/s3m/raspbian/$distro dist/*.deb --skip-errors
           done
 
       - name: push Elementaryos
         run: |-
-          for distro in odin jolnir horus; do
+          for distro in horus; do
             package_cloud push nbari/s3m/elementaryos/$distro dist/*.deb --skip-errors
           done
 
       - name: push Linuxmint
         run: |-
-          for distro in vanessa vera victoria; do
+          for distro in wilma xia; do
             package_cloud push nbari/s3m/linuxmint/$distro dist/*.deb --skip-errors
           done
 
       - name: push Enterprise Linux
         run: |-
-          for distro in 7 8 9; do
+          for distro in 9 10; do
             package_cloud push nbari/s3m/el/$distro dist/*.rpm --skip-errors
           done
 
       - name: push Fedora
         run: |-
-          for distro in 38 39 40; do
+          for distro in 43 44; do
             package_cloud push nbari/s3m/fedora/$distro dist/*.rpm --skip-errors
           done
 
       - name: push Opensuse
         run: |-
-          for distro in 15.4 15.5 15.6; do
+          for distro in 15.6 16.0; do
             package_cloud push nbari/s3m/opensuse/$distro dist/*.rpm --skip-errors
           done
 
       - name: push Poky
         run: |-
-          for distro in mickledore nanbield; do
+          for distro in scarthgap walnascar; do
             package_cloud push nbari/s3m/poky/$distro dist/*.rpm --skip-errors
           done
