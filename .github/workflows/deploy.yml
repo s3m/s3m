@@ -150,26 +150,39 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       # Independent versions: publish each crate (s3m-core first, since s3m
-      # depends on it). A version that is already on crates.io is treated as a
-      # skip, so an s3m-only release does not fail on the existing s3m-core.
+      # depends on it). If a version is already on crates.io it is skipped
+      # WITHOUT building, so an s3m-only release never attempts (and never goes
+      # red on) the unchanged s3m-core. The crates.io API needs a User-Agent
+      # (default curl UA gets 403); if the check is inconclusive we fall back to
+      # publishing and tolerating an "already uploaded" error, so an API blip
+      # can't turn the job red either. Only a genuine publish failure exits 1.
       - name: Publish to crates.io
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
         run: |
           set -uo pipefail
+          UA="s3m-release (github.com/s3m/s3m)"
           publish() {
             crate="$1"
-            echo "📦 cargo publish -p $crate"
+            ver="$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg c "$crate" '.packages[] | select(.name==$c) | .version')"
+            code="$(curl -s -A "$UA" -o /dev/null -w '%{http_code}' \
+              "https://crates.io/api/v1/crates/$crate/$ver" || echo 000)"
+            if [ "$code" = "200" ]; then
+              echo "↪︎ $crate $ver already on crates.io — skipping (no build)"
+              return 0
+            fi
+            echo "📦 publishing $crate $ver (crates.io api check: $code)"
             if out="$(cargo publish -p "$crate" --token "$CRATES_TOKEN" 2>&1)"; then
               printf '%s\n' "$out"
-              echo "✅ published $crate"
+              echo "✅ published $crate $ver"
             else
               printf '%s\n' "$out"
               if printf '%s' "$out" | grep -qiE "already (uploaded|exists)"; then
-                echo "↪︎ $crate version already on crates.io — skipping"
+                echo "↪︎ $crate $ver already uploaded — skipping"
               else
-                echo "❌ publish failed for $crate"
-                exit 1
+                echo "❌ publish failed for $crate $ver"
+                return 1
               fi
             fi
           }
