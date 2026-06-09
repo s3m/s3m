@@ -126,7 +126,7 @@ jobs:
       # Skip release if the tag starts with 't'
       - name: Release
         if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 't')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: false
           files: |-
