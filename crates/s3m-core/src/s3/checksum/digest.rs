@@ -2,7 +2,7 @@ use crate::s3::checksum::{
     Checksum, ChecksumAlgorithm,
     hasher::{ChecksumHasher, Md5Hasher, Sha256Hasher},
 };
-use anyhow::{Result, anyhow};
+use crate::s3::error::{Error, Result};
 use base64ct::{Base64, Encoding};
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
@@ -52,12 +52,12 @@ pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)
         md5_tx
             .send(bytes_clone.clone())
             .await
-            .map_err(|err| anyhow!("Error sending to MD5 channel: {err}"))?;
+            .map_err(|err| Error::Other(format!("Error sending to MD5 channel: {err}")))?;
 
         sha256_tx
             .send(bytes_clone.clone())
             .await
-            .map_err(|err| anyhow!("Error sending to SHA256 channel: {err}"))?;
+            .map_err(|err| Error::Other(format!("Error sending to SHA256 channel: {err}")))?;
 
         length += &bytes.len();
     }
@@ -120,18 +120,18 @@ pub async fn sha256_md5_digest_multipart(
         md5_tx
             .send(bytes_clone.clone())
             .await
-            .map_err(|err| anyhow!("Error sending to MD5 channel: {err}"))?;
+            .map_err(|err| Error::Other(format!("Error sending to MD5 channel: {err}")))?;
 
         sha256_tx
             .send(bytes_clone.clone())
             .await
-            .map_err(|err| anyhow!("Error sending to SHA256 channel: {err}"))?;
+            .map_err(|err| Error::Other(format!("Error sending to SHA256 channel: {err}")))?;
 
         if let Some((ref hasher_tx, _)) = hasher_channel {
             hasher_tx
                 .send(bytes_clone)
                 .await
-                .map_err(|err| anyhow!("Error sending to hasher channel: {err}"))?;
+                .map_err(|err| Error::Other(format!("Error sending to hasher channel: {err}")))?;
         }
 
         length += &bytes.len();
@@ -157,7 +157,7 @@ pub async fn sha256_md5_digest_multipart(
             ChecksumAlgorithm::Sha256 => Base64::encode_string(&sha256_hash),
             _ => match hasher_result {
                 Ok(hasher_result) => Base64::encode_string(&hasher_result?),
-                _ => return Err(anyhow!("Error calculating checksum")),
+                _ => return Err(Error::Other("Error calculating checksum".to_string())),
             },
         };
 

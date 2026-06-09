@@ -1,11 +1,11 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
+use crate::s3::error::{Error, Result};
 use crate::{
     s3::S3,
     s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes},
 };
-use anyhow::{Result, anyhow};
 use base64ct::{Base64, Encoding};
 use chrono::prelude::{DateTime, Utc};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode, utf8_percent_encode};
@@ -156,7 +156,7 @@ impl<'a> Signature<'a> {
 
         for p in clean_path {
             url.path_segments_mut()
-                .map_err(|e| anyhow!("cannot be base: {e:#?}"))?
+                .map_err(|e| Error::Other(format!("cannot be base: {e:#?}")))?
                 .push(p);
         }
 
@@ -255,7 +255,9 @@ pub fn canonical_uri(uri: &Url) -> Result<String> {
         .remove(b'_')
         .remove(b'~');
 
-    let decode_url = percent_decode(uri.path().as_bytes()).decode_utf8()?;
+    let decode_url = percent_decode(uri.path().as_bytes())
+        .decode_utf8()
+        .map_err(|e| Error::Other(format!("invalid UTF-8 in URL path: {e}")))?;
 
     Ok(utf8_percent_encode(&decode_url, URLENCODE_PATH_FRAGMENT).to_string())
 }

@@ -1,5 +1,5 @@
+use crate::s3::error::Error as S3Error;
 use crate::s3::limits::{MAX_PART_SIZE_BYTES, MAX_PARTS_PER_UPLOAD};
-use anyhow::{Result, anyhow};
 use base64ct::{Base64, Encoding};
 use ring::{digest, hmac};
 use std::{
@@ -57,7 +57,7 @@ pub fn write_hex_bytes(bytes: &[u8]) -> String {
 /// # Errors
 /// Will return `Err` if the file size exceeds 5 TB
 /// or if the part size exceeds 5 GB
-pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
+pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64, S3Error> {
     log::info!("file size: {file_size}, buf size: {buf_size}");
 
     let mut part_size = buf_size.max(1);
@@ -74,7 +74,7 @@ pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
 
     if part_size > MAX_PART_SIZE_BYTES {
         log::error!("max part size 5 GB");
-        return Err(anyhow!("max part size 5 GB"));
+        return Err(S3Error::Other("max part size 5 GB".to_string()));
     }
 
     log::info!("part size: {part_size}");
@@ -85,7 +85,7 @@ pub fn calculate_part_size(file_size: u64, buf_size: u64) -> Result<u64> {
 /// # Errors
 ///
 /// Will return `Err` if can not open the file
-pub fn blake3(file: &Path) -> Result<String> {
+pub fn blake3(file: &Path) -> std::io::Result<String> {
     let mut file = std::fs::File::open(file)?;
     let mut hasher = blake3::Hasher::new();
     let mut buf = vec![0_u8; 65_536];
@@ -97,7 +97,7 @@ pub fn blake3(file: &Path) -> Result<String> {
         }
         let chunk = buf
             .get(..size)
-            .ok_or_else(|| anyhow!("invalid buffer slice length: {size}"))?;
+            .ok_or_else(|| Error::other(format!("invalid buffer slice length: {size}")))?;
         hasher.update(chunk);
     }
 
@@ -115,7 +115,7 @@ pub fn blake3(file: &Path) -> Result<String> {
 ///
 /// # Returns
 /// - `Ok(())` if throttling is successful.
-pub async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) -> Result<(), Error> {
+pub async fn throttle_download(bandwidth_kb: usize, chunk_size: usize) -> std::io::Result<()> {
     if bandwidth_kb == 0 {
         return Err(Error::new(
             ErrorKind::InvalidInput,

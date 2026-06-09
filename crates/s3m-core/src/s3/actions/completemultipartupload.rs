@@ -89,6 +89,9 @@ impl<'a> CompleteMultipartUpload<'a> {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
+    // Explicit `Result<T, Error>`, not the `s3::error::Result` alias: importing
+    // that alias would shadow `std::result::Result` and break `#[derive(Serialize)]`
+    // in this file.
     pub async fn request(mut self, s3: &S3) -> Result<CompleteMultipartUploadResult, Error> {
         let body = to_string(&self)?;
 
@@ -120,11 +123,10 @@ impl<'a> CompleteMultipartUpload<'a> {
                 if let Some(checksum) = &part.checksum {
                     let checksum_in_bytes =
                         Base64::decode_vec(&checksum.checksum).map_err(|e| {
-                            anyhow::anyhow!(
+                            Error::Other(format!(
                                 "could not decode checksum: {}, {}",
-                                checksum.checksum,
-                                e
-                            )
+                                checksum.checksum, e
+                            ))
                         })?;
                     hasher.update(&checksum_in_bytes);
                 }

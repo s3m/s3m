@@ -62,6 +62,18 @@ pub enum Error {
     #[error("invalid HTTP method: {0}")]
     Method(#[from] http::method::InvalidMethod),
 
+    /// An invalid endpoint / URL.
+    #[error("invalid URL: {0}")]
+    Url(#[from] url::ParseError),
+
+    /// A request header name could not be constructed.
+    #[error("invalid header name: {0}")]
+    HeaderName(#[from] http::header::InvalidHeaderName),
+
+    /// A request header value could not be constructed.
+    #[error("invalid header value: {0}")]
+    HeaderValue(#[from] http::header::InvalidHeaderValue),
+
     /// Any other error originating inside the `s3` module (signing,
     /// validation, decoding, and internal helpers).
     #[error("{0}")]
@@ -100,6 +112,12 @@ impl Error {
 impl From<anyhow::Error> for Error {
     fn from(e: anyhow::Error) -> Self {
         Self::Other(format!("{e:#}"))
+    }
+}
+
+impl From<tokio::task::JoinError> for Error {
+    fn from(e: tokio::task::JoinError) -> Self {
+        Self::Other(format!("background task failed: {e}"))
     }
 }
 

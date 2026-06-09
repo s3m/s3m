@@ -1,7 +1,7 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
-use anyhow::Result;
+use crate::s3::error::Result;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
 use reqwest::{

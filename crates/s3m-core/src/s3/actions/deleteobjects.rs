@@ -4,7 +4,6 @@ use crate::{
     s3::responses::DeleteObjectsResult,
     s3::{S3, request, tools},
 };
-use anyhow::anyhow;
 use bytes::Bytes;
 use quick_xml::{de::from_str, se::to_string};
 use reqwest::Method;
@@ -44,12 +43,15 @@ impl DeleteObjects {
         Self { objects, quiet }
     }
 
-    fn body(&self) -> anyhow::Result<String> {
+    // Explicit `Result<T, Error>`, not the `s3::error::Result` alias: importing
+    // that alias would shadow `std::result::Result` and break `#[derive(Serialize)]`
+    // in this file.
+    fn body(&self) -> Result<String, Error> {
         if self.objects.len() > Self::MAX_OBJECTS {
-            return Err(anyhow!(
+            return Err(Error::Other(format!(
                 "DeleteObjects supports up to {} objects per request",
                 Self::MAX_OBJECTS
-            ));
+            )));
         }
 
         Ok(to_string(&DeletePayload {
@@ -62,6 +64,9 @@ impl DeleteObjects {
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
+    // Explicit `Result<T, Error>`, not the `s3::error::Result` alias: importing
+    // that alias would shadow `std::result::Result` and break `#[derive(Serialize)]`
+    // in this file.
     pub async fn request(&self, s3: &S3) -> Result<DeleteObjectsResult, Error> {
         let body = self.body()?;
         let sha256 = tools::sha256_digest(&body);

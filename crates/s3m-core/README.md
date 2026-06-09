@@ -14,39 +14,60 @@ it to talk to S3-compatible object storage directly. It provides:
 - **`stream`** — resumable multipart uploads plus the compression (Zstandard)
   and encryption (ChaCha20-Poly1305) transfer pipelines.
 
+## Installation
+
+```sh
+cargo add s3m-core
+```
+
+The example below also uses `tokio`, `secrecy`, and `anyhow` directly, so add
+those to your own crate as well:
+
+```sh
+cargo add tokio --features macros,rt-multi-thread
+cargo add secrecy
+cargo add anyhow
+```
+
+(`anyhow` is only used here for the example's `main` return type — `s3m-core`
+itself exposes the typed [`Error`] and does not require it.)
+
 ## Usage
 
 ```rust
-use s3m_core::{S3, Credentials, Region, RequestOptions};
+use s3m_core::{Credentials, Region, RequestOptions, S3};
 use s3m_core::s3::actions::GetObject;
 use secrecy::SecretString;
 
-# async fn run() -> anyhow::Result<()> {
-let credentials = Credentials::new("ACCESS_KEY", &SecretString::new("SECRET_KEY".into()));
-let region: Region = "us-west-2".parse()?;
-let s3 = S3::new(&credentials, &region, Some("my-bucket".to_string()), false);
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let credentials = Credentials::new("ACCESS_KEY", &SecretString::new("SECRET_KEY".into()));
+    let region: Region = "us-west-2".parse()?;
+    let s3 = S3::new(&credentials, &region, Some("my-bucket".to_string()), false);
 
-// Download an object; `request` returns a typed `s3_core::Error` on failure.
-let response = GetObject::new("path/file.dat", None)
-    .request(&s3, &RequestOptions::new())
-    .await?;
-# Ok(())
-# }
+    // Download an object; `request` returns a typed `s3m_core::Error` on failure.
+    let response = GetObject::new("path/file.dat", None)
+        .request(&s3, &RequestOptions::new())
+        .await?;
+    // ... stream `response.bytes_stream()` to disk ...
+    Ok(())
+}
 ```
 
 Errors are matchable — e.g. distinguish a missing object from an auth failure:
 
 ```rust
-# use s3m_core::Error;
-# fn handle(err: Error) {
-if err.is_not_found() {
-    // object/key does not exist (NoSuchKey / 404)
+use s3m_core::Error;
+
+fn handle(err: Error) {
+    if err.is_not_found() {
+        // object/key does not exist (NoSuchKey / 404)
+    }
+    match err.code() {
+        Some("AccessDenied") => { /* credentials / permissions */ }
+        _ => {}
+    }
 }
-match err.code() {
-    Some("AccessDenied") => { /* credentials/permissions */ }
-    _ => {}
-}
-# }
 ```
 
 ## License

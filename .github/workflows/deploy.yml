@@ -141,7 +141,6 @@ jobs:
       - build
     # Only publish to crates.io on tag pushes that DON'T start with 't'
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 't')
-    continue-on-error: true
     steps:
       - name: Checkout sources
         uses: actions/checkout@v6
@@ -155,12 +154,21 @@ jobs:
       # red on) the unchanged s3m-core. The crates.io API needs a User-Agent
       # (default curl UA gets 403); if the check is inconclusive we fall back to
       # publishing and tolerating an "already uploaded" error, so an API blip
-      # can't turn the job red either. Only a genuine publish failure exits 1.
+      # can't turn the job red either. Only a GENUINE publish failure exits 1 —
+      # and because the job has no `continue-on-error`, that failure marks the
+      # workflow red (the skip/already-uploaded paths return 0 in-script, so a
+      # routine s3m-only release stays green on its own).
+      #
+      # `set -e`: a genuine `publish s3m-core` failure aborts before `publish
+      # s3m`, since the binary crate can't be published while its dependency is
+      # missing from crates.io. The fallback paths (`curl ... || echo 000`,
+      # `cargo publish` inside an `if`) are exempt from `-e`, so they still
+      # degrade gracefully rather than aborting.
       - name: Publish to crates.io
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           UA="s3m-release (github.com/s3m/s3m)"
           publish() {
             crate="$1"

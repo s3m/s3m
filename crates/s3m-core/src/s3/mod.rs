@@ -17,8 +17,8 @@ pub use self::{
     signature::Signature,
 };
 
+use crate::s3::error::Result;
 use crate::s3::tools::{sha256_digest, write_hex_bytes};
-use anyhow::Result;
 use reqwest::Client;
 use std::fmt;
 use url::Url;

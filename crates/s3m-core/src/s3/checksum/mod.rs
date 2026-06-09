@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::s3::error::Result;
 use base64ct::{Base64, Encoding};
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
@@ -54,7 +54,9 @@ impl ChecksumAlgorithm {
 impl FromStr for ChecksumAlgorithm {
     type Err = ();
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    // explicit std::result::Result: the imported s3::error::Result alias takes a
+    // single type parameter, so it cannot spell the two-arg FromStr signature.
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "crc32" => Ok(Self::Crc32),
             "crc32c" => Ok(Self::Crc32c),

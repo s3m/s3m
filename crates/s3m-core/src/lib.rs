@@ -15,4 +15,5 @@ pub mod stream;
 
 // Curated re-exports: the core building blocks a consumer needs without
 // reaching into deep module paths.
-pub use crate::s3::{Credentials, Error, Region, RequestOptions, S3};
+pub use crate::s3::error::Result;
+pub use crate::s3::{ApiError, Credentials, Error, Region, RequestOptions, S3};
