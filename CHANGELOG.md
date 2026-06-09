@@ -1,3 +1,6 @@
+## 0.17.2
+* **CI publish fix**: The crates.io publish step pre-checked version existence via the crates.io API with `curl`, but crates.io rejects the default `curl` User-Agent with `403` — so the check failed, the step tried to republish the already-published `s3m-core 0.17.0`, collided, and never published the binary crate. The step now publishes each crate (`s3m-core` then `s3m`) and treats an "already uploaded" error as a skip, independent of the crates.io API. (Note: `0.17.1` reached GitHub Releases and PackageCloud but not crates.io due to this bug; `0.17.2` restores crates.io publishing.)
+
 ## 0.17.1
 * **Docs**: Documented the reusable `s3m-core` library in the README — a new "Use as a library" section with a typed-`Error`/`RequestOptions` example, an `s3m-core` crates.io badge, and a `### Concurrency` note explaining the cgroup-aware `available_parallelism()` default for `-n/--number`.
 * **CI**: Bumped `codecov/codecov-action` from `v5` to `v7` (Node 24 runtime + template-injection security fix from v6.0.1).
