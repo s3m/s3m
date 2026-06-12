@@ -30,6 +30,12 @@ jobs:
           - build: linux
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+            rpm_arch: x86_64
+
+          - build: linux-arm
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            rpm_arch: aarch64
 
           - build: macos
             os: macos-latest
@@ -53,25 +59,25 @@ jobs:
 
       # Linux-only prerequisites
       - name: Install system deps (musl)
-        if: matrix.build == 'linux'
+        if: contains(matrix.target, 'linux')
         run: |
           sudo apt-get update -y
           sudo apt-get install -y musl-dev musl-tools
 
       - name: Install packaging tools (RPM/DEB)
-        if: matrix.build == 'linux'
+        if: contains(matrix.target, 'linux')
         run: |
           cargo install cargo-generate-rpm
           cargo install cargo-deb --force --locked
 
       # Build once for Linux (musl)
       - name: Build Linux (musl)
-        if: matrix.build == 'linux'
+        if: contains(matrix.target, 'linux')
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       # Strip once and prep paths for both packagers
       - name: Strip and prepare packaging paths (Linux)
-        if: matrix.build == 'linux'
+        if: contains(matrix.target, 'linux')
         run: |
           BIN="target/${{ matrix.target }}/release/s3m"
           ls -al "$BIN"
@@ -82,24 +88,24 @@ jobs:
           ls -al target/release/s3m
 
       - name: Generate RPM
-        if: matrix.build == 'linux'
+        if: contains(matrix.target, 'linux')
         run: |
-          cargo generate-rpm
+          cargo generate-rpm --arch ${{ matrix.rpm_arch }}
           RPM_PATH="$(find target/generate-rpm -type f -name '*.rpm' -print -quit)"
           echo "RPM_ASSET=$RPM_PATH" >> $GITHUB_ENV
           echo "RPM: $RPM_PATH"
 
       - name: Generate DEB (musl static)
-        if: matrix.build == 'linux'
+        if: contains(matrix.target, 'linux')
         run: |
-          cargo deb --no-build
-          DEB_PATH="$(find target/debian -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          cargo deb --no-build --target ${{ matrix.target }}
+          DEB_PATH="$(find target -type f -name '*.deb' -print -quit)"
           echo "DEB_ASSET=$DEB_PATH" >> $GITHUB_ENV
           echo "DEB: $DEB_PATH"
 
       # Non-Linux builds (macOS, Windows)
       - name: Build
-        if: matrix.build != 'linux'
+        if: ${{ !contains(matrix.target, 'linux') }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Build archive
