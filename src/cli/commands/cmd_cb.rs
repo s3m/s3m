@@ -1,9 +1,9 @@
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 
 pub fn command() -> Command {
     Command::new("cb")
         .about("Create a bucket")
-        .after_long_help("Examples:\n  s3m cb s3/new-bucket\n  s3m cb s3/new-bucket --acl private")
+        .after_long_help("Examples:\n  s3m cb s3/new-bucket\n  s3m cb s3/new-bucket --acl private\n  s3m cb s3/vault --object-lock")
         .arg(
             Arg::new("arguments")
                 .help("host/bucket")
@@ -28,6 +28,19 @@ pub fn command() -> Command {
                 .default_value("private")
                 .short('a')
                 .num_args(1),
+        )
+        .arg(
+            Arg::new("object-lock")
+                .help("Enable S3 Object Lock (WORM) on the new bucket")
+                .long_help(
+                    "Create the bucket with S3 Object Lock enabled.\n\n\
+                     Object Lock can only be turned on at bucket creation and \
+                     automatically enables versioning. Objects can then be \
+                     uploaded with retention (--object-lock-mode/--retain-until) \
+                     or a legal hold (--legal-hold).",
+                )
+                .long("object-lock")
+                .action(ArgAction::SetTrue),
         )
 }
 

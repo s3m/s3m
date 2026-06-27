@@ -6,4 +6,6 @@ pub mod cli;
 pub use s3m_core::{progressbar, s3, stream};
 
 // Curated top-level re-exports mirroring `s3m_core`.
-pub use s3m_core::{ApiError, Credentials, Error, Region, RequestOptions, Result, S3};
+pub use s3m_core::{
+    ApiError, Credentials, Error, ObjectLock, ObjectLockMode, Region, RequestOptions, Result, S3,
+};

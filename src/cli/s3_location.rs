@@ -137,11 +137,30 @@ pub fn host_bucket_key(matches: &ArgMatches) -> Result<S3Location> {
     log::debug!("Subcommand: {subcommand:?}");
 
     match subcommand {
+        Some("object-lock") => parse_object_lock_args(matches),
         Some(cmd @ ("acl" | "du" | "get" | "ls" | "cb" | "rm" | "share" | "monitor")) => {
             parse_subcommand_args(matches, cmd)
         }
         _ => parse_put_object_args(matches),
     }
+}
+
+/// `object-lock` nests a `get`/`set` subcommand that carries the `arguments`,
+/// so descend one extra level to find the `host/bucket[/key]` location.
+fn parse_object_lock_args(matches: &ArgMatches) -> Result<S3Location> {
+    let (_, sub_m) = matches
+        .subcommand_matches("object-lock")
+        .and_then(ArgMatches::subcommand)
+        .ok_or_else(|| anyhow!("object-lock requires a 'get' or 'set' subcommand"))?;
+
+    let location = sub_m
+        .get_many::<String>("arguments")
+        .unwrap_or_default()
+        .map(String::as_str)
+        .next()
+        .ok_or_else(|| anyhow!("Missing S3 location argument"))?;
+
+    S3Location::parse(location, false, false)
 }
 
 fn parse_subcommand_args(matches: &ArgMatches, subcommand: &str) -> Result<S3Location> {

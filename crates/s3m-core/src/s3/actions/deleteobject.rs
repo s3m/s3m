@@ -6,10 +6,24 @@ use crate::{
 use reqwest::Method;
 use std::collections::BTreeMap;
 
+/// Outcome of a [`DeleteObject`] request.
+///
+/// On a versioning-enabled bucket, deleting by key (no version id) does not
+/// remove data — S3 inserts a **delete marker** and returns
+/// `x-amz-delete-marker: true` plus the new marker's `x-amz-version-id`. This
+/// struct surfaces that so callers can tell "masked with a delete marker" apart
+/// from "version permanently removed".
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DeleteObjectOutput {
+    pub delete_marker: bool,
+    pub version_id: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct DeleteObject<'a> {
     key: &'a str,
     version_id: Option<String>,
+    bypass_governance: bool,
 }
 
 impl<'a> DeleteObject<'a> {
@@ -21,10 +35,25 @@ impl<'a> DeleteObject<'a> {
         }
     }
 
+    /// Target a specific object version.
+    #[must_use]
+    pub fn version_id(mut self, version_id: Option<String>) -> Self {
+        self.version_id = version_id;
+        self
+    }
+
+    /// Send `x-amz-bypass-governance-retention` so a `GOVERNANCE`-locked version
+    /// can be deleted (requires the `s3:BypassGovernanceRetention` permission).
+    #[must_use]
+    pub const fn bypass_governance(mut self, bypass: bool) -> Self {
+        self.bypass_governance = bypass;
+        self
+    }
+
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
-    pub async fn request(&self, s3: &S3) -> Result<String> {
+    pub async fn request(&self, s3: &S3) -> Result<DeleteObjectOutput> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
 
         let response = request::request(
@@ -39,7 +68,20 @@ impl<'a> DeleteObject<'a> {
         .await?;
 
         if response.status().is_success() {
-            Ok(response.text().await?)
+            let delete_marker = response
+                .headers()
+                .get("x-amz-delete-marker")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+            let version_id = response
+                .headers()
+                .get("x-amz-version-id")
+                .and_then(|v| v.to_str().ok())
+                .map(ToString::to_string);
+            Ok(DeleteObjectOutput {
+                delete_marker,
+                version_id,
+            })
         } else {
             Err(response_error(response).await)
         }
@@ -53,7 +95,13 @@ impl Action for DeleteObject<'_> {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        None
+        if self.bypass_governance {
+            let mut map: BTreeMap<&str, &str> = BTreeMap::new();
+            map.insert("x-amz-bypass-governance-retention", "true");
+            Some(map)
+        } else {
+            None
+        }
     }
 
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {
@@ -98,9 +146,27 @@ mod tests {
     }
 
     #[test]
+    fn test_headers_bypass_governance() {
+        let action = DeleteObject::new("key").bypass_governance(true);
+        assert_eq!(
+            action
+                .headers()
+                .unwrap()
+                .get("x-amz-bypass-governance-retention"),
+            Some(&"true")
+        );
+    }
+
+    #[test]
     fn test_query_pairs() {
         let action = DeleteObject::new("key");
         assert!(action.query_pairs().is_some());
+    }
+
+    #[test]
+    fn test_query_pairs_version_id() {
+        let action = DeleteObject::new("key").version_id(Some("v9".to_string()));
+        assert_eq!(action.query_pairs().unwrap().get("versionId"), Some(&"v9"));
     }
 
     #[test]

@@ -19,11 +19,13 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
         older_than,
         recursive,
         targets,
+        version_id,
+        bypass_governance,
     } = action
     {
         if bucket {
             if recursive {
-                delete_bucket_recursive(s3).await?;
+                delete_bucket_recursive(s3, bypass_governance).await?;
             } else {
                 let action = actions::DeleteBucket::new();
                 action.request(s3).await?;
@@ -42,17 +44,21 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                 )
                 .await?;
 
-                delete_matched_objects(s3, &matched).await?;
+                delete_matched_objects(s3, &matched, bypass_governance).await?;
                 print_filtered_delete_summary(matched.len(), matched.len());
                 return Ok(());
             }
 
             if count_delete_targets(&targets) <= 1 {
                 let (target_s3, target_key) = single_delete_target(s3, &key, &targets)?;
-                let action = actions::DeleteObject::new(target_key);
-                action.request(target_s3).await?;
+                let output = actions::DeleteObject::new(target_key)
+                    .version_id(version_id.clone())
+                    .bypass_governance(bypass_governance)
+                    .request(target_s3)
+                    .await?;
+                report_single_delete(target_key, version_id.as_deref(), &output);
             } else {
-                delete_groups(&targets).await?;
+                delete_groups(&targets, bypass_governance).await?;
             }
         } else {
             let target_s3 = targets.first().map_or(s3, |group| &group.s3);
@@ -113,10 +119,33 @@ fn single_delete_target<'a>(
     Ok((fallback_s3, fallback_key))
 }
 
-async fn delete_groups(groups: &[DeleteGroup]) -> Result<()> {
+/// Report the outcome of a single-object delete, making it clear when a
+/// versioned bucket only inserted a delete marker (data retained) rather than
+/// removing the object.
+fn report_single_delete(
+    key: &str,
+    requested_version: Option<&str>,
+    output: &actions::DeleteObjectOutput,
+) {
+    if output.delete_marker {
+        match &output.version_id {
+            Some(v) => println!(
+                "{key}: delete marker created (version {v}); existing versions are retained"
+            ),
+            None => println!("{key}: delete marker created; existing versions are retained"),
+        }
+    } else if let Some(v) = requested_version {
+        println!("{key}: deleted version {v}");
+    } else {
+        println!("{key}: deleted");
+    }
+}
+
+async fn delete_groups(groups: &[DeleteGroup], bypass_governance: bool) -> Result<()> {
     for group in groups {
         for batch in split_delete_batches(&group.objects) {
             let result = actions::DeleteObjects::new(batch, true)
+                .bypass_governance(bypass_governance)
                 .request(&group.s3)
                 .await?;
 
@@ -129,17 +158,26 @@ async fn delete_groups(groups: &[DeleteGroup]) -> Result<()> {
     Ok(())
 }
 
-async fn delete_matched_objects(s3: &S3, objects: &[actions::ObjectIdentifier]) -> Result<()> {
+async fn delete_matched_objects(
+    s3: &S3,
+    objects: &[actions::ObjectIdentifier],
+    bypass_governance: bool,
+) -> Result<()> {
     match objects {
         [] => Ok(()),
         [object] => {
-            let action = actions::DeleteObject::new(&object.key);
-            action.request(s3).await?;
+            actions::DeleteObject::new(&object.key)
+                .bypass_governance(bypass_governance)
+                .request(s3)
+                .await?;
             Ok(())
         }
         _ => {
             for batch in split_delete_batches(objects) {
-                let result = actions::DeleteObjects::new(batch, true).request(s3).await?;
+                let result = actions::DeleteObjects::new(batch, true)
+                    .bypass_governance(bypass_governance)
+                    .request(s3)
+                    .await?;
 
                 if !result.errors.is_empty() {
                     return Err(anyhow!(format_delete_objects_errors(&result.errors)));
@@ -163,36 +201,52 @@ fn object_label(count: usize) -> &'static str {
     if count == 1 { "object" } else { "objects" }
 }
 
-async fn delete_bucket_recursive(s3: &S3) -> Result<()> {
+async fn delete_bucket_recursive(s3: &S3, bypass_governance: bool) -> Result<()> {
+    // List and delete every object *version* and delete marker, then delete the
+    // now-empty bucket. This works for versioned / Object-Lock buckets as well as
+    // plain buckets (where each object is reported as a single "null" version).
+    // Each round re-lists from the start, so deleting the listed entries makes the
+    // next page surface until the bucket is empty.
+    //
+    // On an Object-Lock bucket, retained versions are refused by `DeleteObjects`
+    // unless `--bypass-governance` is given (and COMPLIANCE retention can never be
+    // bypassed); those errors are surfaced and the bucket is left intact.
     loop {
-        let action = actions::ListObjectsV2::new(
-            None,
-            None,
-            Some(actions::DeleteObjects::MAX_OBJECTS.to_string()),
-        );
-        let objects = action.request(s3).await?;
+        let result = actions::ListObjectVersions::new("").request(s3).await?;
 
-        if objects.contents.is_empty() {
-            if objects.is_truncated {
+        let identifiers: Vec<actions::ObjectIdentifier> = result
+            .versions
+            .into_iter()
+            .map(|v| actions::ObjectIdentifier {
+                key: v.key,
+                version_id: Some(v.version_id),
+            })
+            .chain(
+                result
+                    .delete_markers
+                    .into_iter()
+                    .map(|d| actions::ObjectIdentifier {
+                        key: d.key,
+                        version_id: Some(d.version_id),
+                    }),
+            )
+            .collect();
+
+        if identifiers.is_empty() {
+            if result.is_truncated {
                 return Err(anyhow!(
-                    "ListObjectsV2 returned a truncated response without object contents"
+                    "ListObjectVersions returned a truncated response without entries"
                 ));
             }
 
             break;
         }
 
-        let batch_objects: Vec<actions::ObjectIdentifier> = objects
-            .contents
-            .into_iter()
-            .map(|object| actions::ObjectIdentifier {
-                key: object.key,
-                version_id: None,
-            })
-            .collect();
-
-        for batch in split_delete_batches(&batch_objects) {
-            let result = actions::DeleteObjects::new(batch, true).request(s3).await?;
+        for batch in split_delete_batches(&identifiers) {
+            let result = actions::DeleteObjects::new(batch, true)
+                .bypass_governance(bypass_governance)
+                .request(s3)
+                .await?;
 
             if !result.errors.is_empty() {
                 return Err(anyhow!(format_delete_objects_errors(&result.errors)));
@@ -200,8 +254,6 @@ async fn delete_bucket_recursive(s3: &S3) -> Result<()> {
         }
     }
 
-    // TODO: support versioned bucket cleanup by listing object versions and delete markers,
-    // then populating ObjectIdentifier::version_id for DeleteObjects requests.
     let action = actions::DeleteBucket::new();
     action.request(s3).await?;
 

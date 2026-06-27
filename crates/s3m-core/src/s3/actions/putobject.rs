@@ -3,6 +3,7 @@ use crate::s3::{
     S3,
     actions::{Action, response_error},
     checksum::{Checksum, sha256_md5_digest},
+    object_lock::ObjectLock,
     options::RequestOptions,
     request,
 };
@@ -20,6 +21,7 @@ pub struct PutObject<'a> {
     meta: Option<BTreeMap<String, String>>,
     sender: Option<UnboundedSender<usize>>,
     additional_checksum: Option<Checksum>,
+    object_lock: Option<ObjectLock>,
 }
 
 impl<'a> PutObject<'a> {
@@ -31,6 +33,7 @@ impl<'a> PutObject<'a> {
         meta: Option<BTreeMap<String, String>>,
         sender: Option<UnboundedSender<usize>>,
         additional_checksum: Option<Checksum>,
+        object_lock: Option<ObjectLock>,
     ) -> Self {
         Self {
             key,
@@ -39,6 +42,7 @@ impl<'a> PutObject<'a> {
             meta,
             sender,
             additional_checksum,
+            object_lock,
         }
     }
 
@@ -121,6 +125,11 @@ impl Action for PutObject<'_> {
             );
         }
 
+        // <https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html>
+        if let Some(object_lock) = &self.object_lock {
+            object_lock.apply(&mut map);
+        }
+
         Some(map)
     }
 
@@ -150,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = PutObject::new("key", Path::new("/"), None, None, None, None);
+        let action = PutObject::new("key", Path::new("/"), None, None, None, None, None);
         assert_eq!(Method::PUT, action.http_method().unwrap());
     }
 
@@ -184,12 +193,42 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
             let (_, headers) = action
                 .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
                 .unwrap();
             assert_eq!(expected, headers.get("x-amz-acl").unwrap());
         }
+    }
+
+    #[test]
+    fn test_headers_object_lock() {
+        use crate::s3::object_lock::{ObjectLock, ObjectLockMode};
+
+        let object_lock = ObjectLock {
+            retention: Some((
+                ObjectLockMode::Governance,
+                "2027-01-01T00:00:00Z".to_string(),
+            )),
+            legal_hold: Some(true),
+        };
+        let action = PutObject::new(
+            "key",
+            Path::new("/"),
+            None,
+            None,
+            None,
+            None,
+            Some(object_lock),
+        );
+        let headers = action.headers().unwrap();
+        assert_eq!(headers.get("x-amz-object-lock-mode"), Some(&"GOVERNANCE"));
+        assert_eq!(
+            headers.get("x-amz-object-lock-retain-until-date"),
+            Some(&"2027-01-01T00:00:00Z")
+        );
+        assert_eq!(headers.get("x-amz-object-lock-legal-hold"), Some(&"ON"));
     }
 
     #[test]
@@ -204,7 +243,7 @@ mod tests {
             false,
         );
 
-        let action = PutObject::new("key", Path::new("/"), None, None, None, None);
+        let action = PutObject::new("key", Path::new("/"), None, None, None, None, None);
         let (url, headers) = action
             .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
             .unwrap();

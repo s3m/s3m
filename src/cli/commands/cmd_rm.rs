@@ -1,5 +1,5 @@
 use crate::cli::commands::validator_age_filter;
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 
 pub fn command() -> Command {
     Command::new("rm")
@@ -39,6 +39,24 @@ pub fn command() -> Command {
                 .requires("bucket")
                 .conflicts_with("UploadId")
                 .num_args(0),
+        )
+        .arg(
+            Arg::new("version-id")
+                .help("Delete a specific object version (Object Lock / versioned buckets)")
+                .long_help("Permanently delete a specific object version by id, instead of inserting a delete marker. Single-object deletes only.")
+                .long("version-id")
+                .conflicts_with("bucket")
+                .conflicts_with("UploadId")
+                .conflicts_with("older-than")
+                .num_args(1),
+        )
+        .arg(
+            Arg::new("bypass-governance")
+                .help("Send x-amz-bypass-governance-retention to delete GOVERNANCE-locked versions")
+                .long_help("Bypass GOVERNANCE-mode Object Lock retention when deleting (requires the s3:BypassGovernanceRetention permission). Has no effect on COMPLIANCE-locked objects.")
+                .long("bypass-governance")
+                .conflicts_with("UploadId")
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("older-than")

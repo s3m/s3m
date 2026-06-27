@@ -10,12 +10,16 @@ use std::collections::BTreeMap;
 #[derive(Debug)]
 pub struct CreateBucket<'a> {
     acl: &'a str,
+    object_lock_enabled: bool,
 }
 
 impl<'a> CreateBucket<'a> {
     #[must_use]
-    pub const fn new(acl: &'a str) -> Self {
-        Self { acl }
+    pub const fn new(acl: &'a str, object_lock_enabled: bool) -> Self {
+        Self {
+            acl,
+            object_lock_enabled,
+        }
     }
 
     /// # Errors
@@ -63,6 +67,13 @@ impl Action for CreateBucket<'_> {
 
         map.insert("x-amz-acl", self.acl);
 
+        // Object Lock can only be enabled at bucket creation; it also enables
+        // versioning on the bucket.
+        // <https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-overview.html>
+        if self.object_lock_enabled {
+            map.insert("x-amz-bucket-object-lock-enabled", "true");
+        }
+
         Some(map)
     }
 
@@ -88,27 +99,47 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = CreateBucket::new("private");
+        let action = CreateBucket::new("private", false);
         assert_eq!(Method::PUT, action.http_method().unwrap());
     }
 
     #[test]
     fn test_headers() {
-        let action = CreateBucket::new("private");
+        let action = CreateBucket::new("private", false);
         let mut map = BTreeMap::new();
         map.insert("x-amz-acl", "private");
         assert_eq!(Some(map), action.headers());
     }
 
     #[test]
+    fn test_headers_object_lock() {
+        let action = CreateBucket::new("private", true);
+        let headers = action.headers().unwrap();
+        assert_eq!(
+            headers.get("x-amz-bucket-object-lock-enabled"),
+            Some(&"true")
+        );
+
+        // header absent when not enabled
+        let action = CreateBucket::new("private", false);
+        assert_eq!(
+            action
+                .headers()
+                .unwrap()
+                .get("x-amz-bucket-object-lock-enabled"),
+            None
+        );
+    }
+
+    #[test]
     fn test_query_pairs() {
-        let action = CreateBucket::new("private");
+        let action = CreateBucket::new("private", false);
         assert_eq!(None, action.query_pairs());
     }
 
     #[test]
     fn test_path() {
-        let action = CreateBucket::new("private");
+        let action = CreateBucket::new("private", false);
         assert_eq!(None, action.path());
     }
 }

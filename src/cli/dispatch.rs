@@ -2,7 +2,7 @@ use crate::{
     cli::{
         Config,
         actions::{
-            Action, DeleteGroup, DuGroupBy, StreamCommand,
+            Action, DeleteGroup, DuGroupBy, ObjectLockSetTarget, StreamCommand,
             monitor::{MonitorOutputFormat, prepare_checks},
         },
         age_filter::AgeFilter,
@@ -10,9 +10,10 @@ use crate::{
         s3_location::{S3Location, parse_location},
         start::get_host,
     },
-    s3::{Credentials, S3, actions::ObjectIdentifier},
+    s3::{Credentials, ObjectLock, ObjectLockMode, S3, actions::ObjectIdentifier},
 };
 use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, SecondsFormat, Utc};
 use colored::Colorize;
 use std::{
     borrow::ToOwned,
@@ -259,7 +260,9 @@ fn dispatch_create_bucket(matches: &clap::ArgMatches) -> Result<Action> {
         .get_one("acl")
         .map_or_else(|| String::from("private"), |s: &String| s.clone());
 
-    Ok(Action::CreateBucket { acl })
+    let object_lock = sub_m.get_flag("object-lock");
+
+    Ok(Action::CreateBucket { acl, object_lock })
 }
 
 fn dispatch_delete(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
@@ -270,6 +273,8 @@ fn dispatch_delete(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Actio
         .map_or_else(String::new, |s: &String| s.clone());
     let bucket = sub_m.get_one("bucket").copied().unwrap_or(false);
     let recursive = sub_m.get_one("recursive").copied().unwrap_or(false);
+    let version_id = sub_m.get_one::<String>("version-id").cloned();
+    let bypass_governance = sub_m.get_flag("bypass-governance");
 
     let key = if bucket {
         String::new()
@@ -306,6 +311,8 @@ fn dispatch_delete(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Actio
         older_than,
         recursive,
         targets: Vec::new(),
+        version_id,
+        bypass_governance,
     })
 }
 
@@ -315,6 +322,132 @@ fn dispatch_share(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action
     let expire = sub_m.get_one::<usize>("expire").map_or_else(|| 0, |s| *s);
 
     Ok(Action::ShareObject { key, expire })
+}
+
+/// Parse an RFC 3339 date and normalize it to an explicit UTC instant ("…Z")
+/// that S3 accepts.
+fn parse_retain_until(date: &str) -> Result<String> {
+    Ok(DateTime::parse_from_rfc3339(date)
+        .with_context(|| {
+            format!("invalid date {date:?}, expected RFC 3339 (e.g. 2027-01-01T00:00:00Z)")
+        })?
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(SecondsFormat::Secs, true))
+}
+
+/// Build the [`ObjectLock`] settings from the upload-time flags, validating
+/// that retention `mode` and `retain-until` are supplied together and that the
+/// date parses as RFC 3339. Returns `None` when no Object Lock flag is set.
+fn build_object_lock(matches: &clap::ArgMatches) -> Result<Option<ObjectLock>> {
+    let mode = matches.get_one::<String>("object-lock-mode");
+    let retain_until = matches.get_one::<String>("retain-until");
+    let legal_hold = matches.get_flag("legal-hold");
+
+    let retention = match (mode, retain_until) {
+        (Some(mode), Some(date)) => {
+            let mode: ObjectLockMode = mode.parse()?;
+            Some((mode, parse_retain_until(date)?))
+        }
+        (None, None) => None,
+        _ => {
+            return Err(anyhow!(
+                "{} and {} must be used together",
+                "--object-lock-mode".yellow(),
+                "--retain-until".yellow(),
+            ));
+        }
+    };
+
+    if retention.is_none() && !legal_hold {
+        return Ok(None);
+    }
+
+    Ok(Some(ObjectLock {
+        retention,
+        legal_hold: if legal_hold { Some(true) } else { None },
+    }))
+}
+
+fn dispatch_object_lock(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
+    let (verb, sub) = matches
+        .subcommand_matches("object-lock")
+        .and_then(clap::ArgMatches::subcommand)
+        .ok_or_else(|| anyhow!("object-lock requires a 'get' or 'set' subcommand"))?;
+
+    match verb {
+        "get" => Ok(Action::ObjectLockGet {
+            key: hbk.key.clone(),
+            version_id: sub.get_one::<String>("version-id").cloned(),
+            json: sub.get_flag("json"),
+        }),
+        "set" => dispatch_object_lock_set(hbk, sub),
+        other => Err(anyhow!("unknown object-lock subcommand: {other}")),
+    }
+}
+
+fn dispatch_object_lock_set(hbk: &S3Location, sub: &clap::ArgMatches) -> Result<Action> {
+    let mode = sub
+        .get_one::<String>("mode")
+        .map(|m| m.parse::<ObjectLockMode>())
+        .transpose()?;
+    let days = sub.get_one::<u32>("days").copied();
+    let years = sub.get_one::<u32>("years").copied();
+    let retain_until = sub.get_one::<String>("retain-until");
+    let legal_hold = sub.get_one::<String>("legal-hold").map(|s| s == "on");
+    let version_id = sub.get_one::<String>("version-id").cloned();
+    let bypass_governance = sub.get_flag("bypass-governance");
+
+    match &hbk.key {
+        // Bucket-level default retention.
+        None => {
+            if retain_until.is_some() || legal_hold.is_some() || version_id.is_some() {
+                return Err(anyhow!(
+                    "--retain-until/--legal-hold/--version-id apply to an object target (host/bucket/key), not a bucket"
+                ));
+            }
+            let mode = mode
+                .ok_or_else(|| anyhow!("--mode is required to set a bucket default retention"))?;
+            if days.is_some() == years.is_some() {
+                return Err(anyhow!(
+                    "bucket default retention requires exactly one of --days or --years"
+                ));
+            }
+            Ok(Action::ObjectLockSet(ObjectLockSetTarget::BucketDefault {
+                mode,
+                days,
+                years,
+            }))
+        }
+        // Per-object retention and/or legal hold.
+        Some(key) => {
+            if days.is_some() || years.is_some() {
+                return Err(anyhow!(
+                    "--days/--years apply to a bucket target; use --retain-until for an object"
+                ));
+            }
+            let retention = match (mode, retain_until) {
+                (Some(mode), Some(date)) => Some((mode, parse_retain_until(date)?)),
+                (None, None) => None,
+                _ => {
+                    return Err(anyhow!(
+                        "--mode and --retain-until must be used together for an object"
+                    ));
+                }
+            };
+            if retention.is_none() && legal_hold.is_none() {
+                return Err(anyhow!(
+                    "nothing to set: provide --mode with --retain-until and/or --legal-hold"
+                ));
+            }
+            Ok(Action::ObjectLockSet(ObjectLockSetTarget::Object {
+                key: key.clone(),
+                retention,
+                legal_hold,
+                version_id,
+                bypass_governance,
+            }))
+        }
+    }
 }
 
 fn dispatch_put(
@@ -370,6 +503,10 @@ fn dispatch_put(
         global_args.compress = matches.get_one("compress").copied().unwrap_or(false);
     }
 
+    if let Some(object_lock) = build_object_lock(matches)? {
+        global_args.object_lock = Some(object_lock);
+    }
+
     let pipe = matches.get_one("pipe").copied().unwrap_or(false);
     if src.is_none() && !pipe {
         return Err(anyhow!(
@@ -417,6 +554,7 @@ pub fn dispatch(
         Some("cb") => dispatch_create_bucket(matches),
         Some("rm") => dispatch_delete(hbk, matches),
         Some("share") => dispatch_share(hbk, matches),
+        Some("object-lock") => dispatch_object_lock(hbk, matches),
         _ => dispatch_put(hbk, buf_size, s3m_dir, matches, global_args),
     }
 }
@@ -459,6 +597,7 @@ fn finalize_monitor_action(action: Action, config: &Config) -> Result<Action> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_delete_action(
     bucket: bool,
     key: String,
@@ -466,6 +605,8 @@ fn build_delete_action(
     recursive: bool,
     upload_id: String,
     targets: Vec<DeleteGroup>,
+    version_id: Option<String>,
+    bypass_governance: bool,
 ) -> Action {
     Action::DeleteObject {
         bucket,
@@ -474,6 +615,8 @@ fn build_delete_action(
         recursive,
         targets,
         upload_id,
+        version_id,
+        bypass_governance,
     }
 }
 
@@ -490,6 +633,8 @@ fn finalize_delete_action(
         recursive,
         targets: _,
         upload_id,
+        version_id,
+        bypass_governance,
     } = action
     else {
         return Ok(action);
@@ -503,6 +648,8 @@ fn finalize_delete_action(
             recursive,
             upload_id,
             Vec::new(),
+            version_id,
+            bypass_governance,
         ));
     }
 
@@ -527,6 +674,8 @@ fn finalize_delete_action(
             recursive,
             upload_id,
             Vec::new(),
+            version_id,
+            bypass_governance,
         ));
     }
 
@@ -544,6 +693,8 @@ fn finalize_delete_action(
             recursive,
             upload_id,
             Vec::new(),
+            version_id,
+            bypass_governance,
         ));
     }
 
@@ -561,6 +712,8 @@ fn finalize_delete_action(
             recursive,
             upload_id,
             Vec::new(),
+            version_id,
+            bypass_governance,
         ));
     }
 
@@ -576,6 +729,8 @@ fn finalize_delete_action(
         recursive,
         upload_id,
         build_delete_groups(&args, config, config_path, no_sign_request)?,
+        version_id,
+        bypass_governance,
     ))
 }
 
@@ -1043,9 +1198,175 @@ hosts:
         )
         .unwrap();
         match action {
-            Action::CreateBucket { acl } => {
+            Action::CreateBucket { acl, object_lock } => {
                 assert_eq!(acl, "private");
+                assert!(!object_lock);
                 assert!(!globals.compress);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_build_object_lock() {
+        use clap::{Arg, ArgAction};
+
+        fn cmd() -> Command {
+            Command::new("t")
+                .arg(
+                    Arg::new("object-lock-mode")
+                        .long("object-lock-mode")
+                        .num_args(1),
+                )
+                .arg(Arg::new("retain-until").long("retain-until").num_args(1))
+                .arg(
+                    Arg::new("legal-hold")
+                        .long("legal-hold")
+                        .action(ArgAction::SetTrue),
+                )
+        }
+
+        // nothing set
+        let m = cmd().try_get_matches_from(["t"]).unwrap();
+        assert!(build_object_lock(&m).unwrap().is_none());
+
+        // retention is normalized to a trailing-Z UTC instant
+        let m = cmd()
+            .try_get_matches_from([
+                "t",
+                "--object-lock-mode",
+                "COMPLIANCE",
+                "--retain-until",
+                "2027-01-01T00:00:00+00:00",
+            ])
+            .unwrap();
+        let ol = build_object_lock(&m).unwrap().unwrap();
+        assert_eq!(
+            ol.retention.unwrap(),
+            (
+                ObjectLockMode::Compliance,
+                "2027-01-01T00:00:00Z".to_string()
+            )
+        );
+        assert_eq!(ol.legal_hold, None);
+
+        // legal hold on its own
+        let m = cmd().try_get_matches_from(["t", "--legal-hold"]).unwrap();
+        let ol = build_object_lock(&m).unwrap().unwrap();
+        assert_eq!(ol.legal_hold, Some(true));
+        assert!(ol.retention.is_none());
+
+        // mode without a date is rejected
+        let m = cmd()
+            .try_get_matches_from(["t", "--object-lock-mode", "GOVERNANCE"])
+            .unwrap();
+        assert!(build_object_lock(&m).is_err());
+
+        // unparseable date is rejected
+        let m = cmd()
+            .try_get_matches_from([
+                "t",
+                "--object-lock-mode",
+                "GOVERNANCE",
+                "--retain-until",
+                "not-a-date",
+            ])
+            .unwrap();
+        assert!(build_object_lock(&m).is_err());
+    }
+
+    #[test]
+    fn test_dispatch_object_lock_set_validation() {
+        use crate::cli::{commands::cmd_object_lock, s3_location::S3Location};
+
+        fn set_matches(args: &[&str]) -> clap::ArgMatches {
+            let full = std::iter::once("object-lock")
+                .chain(std::iter::once("set"))
+                .chain(args.iter().copied())
+                .collect::<Vec<_>>();
+            let m = cmd_object_lock::command()
+                .try_get_matches_from(full)
+                .expect("parse object-lock set");
+            m.subcommand_matches("set").expect("set matches").clone()
+        }
+
+        let bucket = S3Location {
+            host: "h".to_string(),
+            bucket: Some("b".to_string()),
+            key: None,
+        };
+        let object = S3Location {
+            host: "h".to_string(),
+            bucket: Some("b".to_string()),
+            key: Some("k".to_string()),
+        };
+
+        // Bucket default: requires exactly one of --days/--years.
+        assert!(
+            dispatch_object_lock_set(
+                &bucket,
+                &set_matches(&["b", "--mode", "GOVERNANCE", "--days", "1"])
+            )
+            .is_ok()
+        );
+        assert!(
+            dispatch_object_lock_set(&bucket, &set_matches(&["b", "--mode", "GOVERNANCE"]))
+                .is_err(),
+            "bucket default needs a duration"
+        );
+        // Object-only flags on a bucket target are rejected.
+        assert!(
+            dispatch_object_lock_set(
+                &bucket,
+                &set_matches(&["b", "--retain-until", "2099-01-01T00:00:00Z"])
+            )
+            .is_err()
+        );
+
+        // Object: --mode + --retain-until together; --days rejected.
+        assert!(
+            dispatch_object_lock_set(
+                &object,
+                &set_matches(&[
+                    "b/k",
+                    "--mode",
+                    "GOVERNANCE",
+                    "--retain-until",
+                    "2099-01-01T00:00:00Z"
+                ])
+            )
+            .is_ok()
+        );
+        assert!(
+            dispatch_object_lock_set(&object, &set_matches(&["b/k", "--mode", "GOVERNANCE"]))
+                .is_err(),
+            "object retention needs a date"
+        );
+        assert!(
+            dispatch_object_lock_set(&object, &set_matches(&["b/k", "--days", "1"])).is_err(),
+            "--days is a bucket flag"
+        );
+        // Legal hold alone on an object is valid.
+        assert!(
+            dispatch_object_lock_set(&object, &set_matches(&["b/k", "--legal-hold", "on"])).is_ok()
+        );
+    }
+
+    #[test]
+    fn test_dispatch_cb_object_lock() {
+        let cmd = Command::new("test").subcommand(cmd_cb::command());
+        let matches = cmd
+            .try_get_matches_from(vec!["test", "cb", "h/bucket", "--object-lock"])
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+
+        let s3_location = host_bucket_key(&matches).unwrap();
+
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals).unwrap();
+        match action {
+            Action::CreateBucket { acl, object_lock } => {
+                assert_eq!(acl, "private");
+                assert!(object_lock);
             }
             _ => panic!("wrong action"),
         }
@@ -1100,6 +1421,7 @@ hosts:
                 older_than,
                 recursive,
                 targets,
+                ..
             } => {
                 assert_eq!(key, "key");
                 assert_eq!(upload_id, "");
@@ -1143,6 +1465,7 @@ hosts:
                 older_than,
                 recursive,
                 targets,
+                ..
             } => {
                 assert_eq!(key, "");
                 assert_eq!(upload_id, "");
@@ -1186,6 +1509,7 @@ hosts:
                 older_than,
                 recursive,
                 targets,
+                ..
             } => {
                 assert_eq!(key, "");
                 assert_eq!(upload_id, "");
@@ -1221,6 +1545,7 @@ hosts:
                 older_than,
                 recursive,
                 targets,
+                ..
             } => {
                 let target = targets.first().unwrap();
                 let object = target.objects.first().unwrap();

@@ -31,6 +31,7 @@ pub async fn upload(request: UploadRequest<'_>) -> Result<String> {
         request.meta,
         progress_sender,
         request.additional_checksum,
+        request.globals.object_lock.clone(),
     );
 
     let response = action.request(request.s3, request.globals).await?;

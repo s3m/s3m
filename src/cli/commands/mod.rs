@@ -4,6 +4,7 @@ pub mod cmd_du;
 pub mod cmd_get;
 pub mod cmd_ls;
 pub mod cmd_monitor;
+pub mod cmd_object_lock;
 pub mod cmd_rm;
 pub mod cmd_share;
 pub mod cmd_show;
@@ -11,7 +12,7 @@ pub mod cmd_streams;
 
 use crate::cli::age_filter::{AgeFilter, parse_age_filter};
 use clap::{
-    Arg, ColorChoice, Command,
+    Arg, ArgAction, ColorChoice, Command,
     builder::ValueParser,
     builder::styling::{AnsiColor, Effects, Styles},
 };
@@ -124,7 +125,7 @@ fn add_transfer_args(
     config_file_path: PathBuf,
     config_streams_path: &Path,
 ) -> Command {
-    cmd
+    let cmd = cmd
         .arg(
             Arg::new("clean")
             .long("clean")
@@ -218,6 +219,37 @@ fn add_transfer_args(
             .long_help("Upload syntax:\n  /path/to/file host/bucket/object\n\nExamples:\n  file.dat s3/my-bucket/file.dat\n  /backups/db.sql minio/backups/db.sql\n\nWhen using --pipe, only the destination object path is required:\n  s3/backups/db.sql")
             .required_unless_present_any(["clean", "decrypt"])
             .num_args(1..=2)
+        );
+
+    add_object_lock_args(cmd)
+}
+
+/// S3 Object Lock (WORM) flags for the upload path.
+fn add_object_lock_args(cmd: Command) -> Command {
+    cmd
+        .arg(
+            Arg::new("object-lock-mode")
+            .long("object-lock-mode")
+            .help("Object Lock retention mode: GOVERNANCE or COMPLIANCE")
+            .long_help("Apply S3 Object Lock retention to the uploaded object.\n\nGOVERNANCE: privileged users may bypass and delete.\nCOMPLIANCE: nobody can delete/overwrite until the retention date.\n\nRequires --retain-until and a bucket created with --object-lock.")
+            .value_parser(["GOVERNANCE", "COMPLIANCE"])
+            .requires("retain-until")
+            .num_args(1)
+        )
+        .arg(
+            Arg::new("retain-until")
+            .long("retain-until")
+            .help("Retain-until date (RFC 3339), e.g. 2027-01-01T00:00:00Z")
+            .long_help("Date until which the object is retained, in RFC 3339 format\n(e.g. 2027-01-01T00:00:00Z). Used with --object-lock-mode.")
+            .requires("object-lock-mode")
+            .num_args(1)
+        )
+        .arg(
+            Arg::new("legal-hold")
+            .long("legal-hold")
+            .help("Apply an Object Lock legal hold (ON) to the uploaded object")
+            .long_help("Place a legal hold on the uploaded object.\n\nIndependent of retention: the object cannot be deleted while the\nhold is ON. Requires a bucket created with --object-lock.")
+            .action(ArgAction::SetTrue)
         )
 }
 
@@ -308,6 +340,7 @@ fn add_subcommands(cmd: Command) -> Command {
         .subcommand(cmd_get::command())
         .subcommand(cmd_ls::command())
         .subcommand(cmd_monitor::command())
+        .subcommand(cmd_object_lock::command())
         .subcommand(cmd_cb::command())
         .subcommand(cmd_rm::command())
         .subcommand(cmd_share::command())

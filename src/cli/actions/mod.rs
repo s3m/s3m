@@ -5,13 +5,33 @@ pub mod object_delete;
 pub mod object_du;
 pub mod object_get;
 pub mod object_list;
+pub mod object_lock;
 pub mod object_put;
 pub mod object_share;
 pub mod streams;
 
 use crate::cli::age_filter::AgeFilter;
-use crate::s3::{S3, actions::ObjectIdentifier};
+use crate::s3::{ObjectLockMode, S3, actions::ObjectIdentifier};
 use std::{collections::BTreeMap, path::PathBuf};
+
+/// Target of an `object-lock set` operation, resolved during dispatch.
+#[derive(Debug)]
+pub enum ObjectLockSetTarget {
+    /// Bucket-level default retention (`PutObjectLockConfiguration`).
+    BucketDefault {
+        mode: ObjectLockMode,
+        days: Option<u32>,
+        years: Option<u32>,
+    },
+    /// Per-object retention and/or legal hold.
+    Object {
+        key: String,
+        retention: Option<(ObjectLockMode, String)>,
+        legal_hold: Option<bool>,
+        version_id: Option<String>,
+        bypass_governance: bool,
+    },
+}
 
 #[derive(Debug, Clone)]
 pub struct DeleteGroup {
@@ -40,6 +60,7 @@ pub enum Action {
     },
     CreateBucket {
         acl: String,
+        object_lock: bool,
     },
     DeleteObject {
         bucket: bool,
@@ -48,6 +69,8 @@ pub enum Action {
         recursive: bool,
         targets: Vec<DeleteGroup>,
         upload_id: String,
+        version_id: Option<String>,
+        bypass_governance: bool,
     },
     DiskUsage {
         group_by: Option<DuGroupBy>,
@@ -93,6 +116,13 @@ pub enum Action {
         expire: usize,
         key: String,
     },
+    ObjectLockGet {
+        // None => bucket-level configuration; Some => per-object.
+        key: Option<String>,
+        version_id: Option<String>,
+        json: bool,
+    },
+    ObjectLockSet(ObjectLockSetTarget),
     Monitor {
         host: String,
         checks: Vec<monitor::MonitorCheck>,

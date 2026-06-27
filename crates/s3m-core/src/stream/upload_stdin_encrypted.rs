@@ -41,7 +41,8 @@ pub async fn stream_stdin_encrypted(
         "application/vnd.s3m.encrypted".to_string(),
     );
 
-    let upload_id = initiate_multipart_upload(s3, &key, acl, meta).await?;
+    let upload_id =
+        initiate_multipart_upload(s3, &key, acl, meta, globals.object_lock.clone()).await?;
     let progress_sender = setup_stream_progress(quiet).await;
 
     let (cipher, nonce_bytes) = init_encryption(encryption_key);

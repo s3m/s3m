@@ -73,7 +73,7 @@ pub use self::abortmultipartupload::AbortMultipartUpload;
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html>
 mod deleteobject;
-pub use self::deleteobject::DeleteObject;
+pub use self::deleteobject::{DeleteObject, DeleteObjectOutput};
 
 // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html>
 mod deleteobjects;
@@ -86,6 +86,30 @@ pub use self::createbucket::CreateBucket;
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html
 mod deletebucket;
 pub use self::deletebucket::DeleteBucket;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectLockConfiguration.html>
+mod getobjectlockconfiguration;
+pub use self::getobjectlockconfiguration::GetObjectLockConfiguration;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectLockConfiguration.html>
+mod putobjectlockconfiguration;
+pub use self::putobjectlockconfiguration::PutObjectLockConfiguration;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectRetention.html>
+mod getobjectretention;
+pub use self::getobjectretention::GetObjectRetention;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectRetention.html>
+mod putobjectretention;
+pub use self::putobjectretention::PutObjectRetention;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectLegalHold.html>
+mod getobjectlegalhold;
+pub use self::getobjectlegalhold::GetObjectLegalHold;
+
+// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectLegalHold.html>
+mod putobjectlegalhold;
+pub use self::putobjectlegalhold::PutObjectLegalHold;
 
 pub trait Action {
     // headers to send in the request

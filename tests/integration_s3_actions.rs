@@ -36,20 +36,6 @@ fn test_s3(endpoint: String, bucket: Option<&str>) -> S3 {
     S3::new(&credentials, &region, bucket.map(str::to_string), false)
 }
 
-fn list_objects_xml(keys: &[String], is_truncated: bool) -> String {
-    let mut contents = String::new();
-    for key in keys {
-        let _ = write!(
-            contents,
-            "<Contents><Key>{key}</Key><LastModified>2025-03-13T00:00:00.000Z</LastModified><ETag>\"etag\"</ETag><Size>1</Size><StorageClass>STANDARD</StorageClass></Contents>"
-        );
-    }
-
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>bucket</Name><Prefix></Prefix><MaxKeys>1000</MaxKeys><IsTruncated>{is_truncated}</IsTruncated>{contents}</ListBucketResult>"#
-    )
-}
-
 fn list_objects_page_xml(
     entries: &[(&str, u64)],
     prefix: &str,
@@ -114,6 +100,37 @@ fn delete_result_xml(keys: &[String]) -> String {
     }
 
     format!(r#"<?xml version="1.0" encoding="UTF-8"?><DeleteResult>{deleted}</DeleteResult>"#)
+}
+
+/// `ListObjectVersions` response; each key gets a synthetic `ver-<key>` version id.
+fn list_versions_xml(keys: &[String], is_truncated: bool) -> String {
+    let mut versions = String::new();
+    for key in keys {
+        let _ = write!(
+            versions,
+            "<Version><Key>{key}</Key><VersionId>ver-{key}</VersionId><IsLatest>true</IsLatest><LastModified>2025-03-13T00:00:00.000Z</LastModified><ETag>\"etag\"</ETag><Size>1</Size><Owner><ID>owner</ID></Owner><StorageClass>STANDARD</StorageClass></Version>"
+        );
+    }
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult><Name>bucket</Name><Prefix></Prefix><KeyMarker></KeyMarker><MaxKeys>1000</MaxKeys><IsTruncated>{is_truncated}</IsTruncated>{versions}</ListVersionsResult>"#
+    )
+}
+
+/// `DeleteObjects` body the recursive path sends — each object carries its
+/// `ver-<key>` version id (matches `quick_xml` serialization).
+fn delete_versions_body(keys: &[String]) -> String {
+    let mut objects = String::new();
+    for key in keys {
+        let _ = write!(
+            objects,
+            "<Object><Key>{key}</Key><VersionId>ver-{key}</VersionId></Object>"
+        );
+    }
+
+    format!(
+        r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/">{objects}<Quiet>true</Quiet></Delete>"#
+    )
 }
 
 fn delete_group(endpoint: &str, bucket: &str, keys: &[String]) -> DeleteGroup {
@@ -221,7 +238,7 @@ async fn test_delete_actions_request_success_and_error() {
 
     assert!(abort.is_empty());
     assert!(delete_bucket.is_empty());
-    assert!(delete_object.is_empty());
+    assert!(!delete_object.delete_marker && delete_object.version_id.is_none());
     assert_eq!(delete_objects.deleted.len(), 2);
     assert!(delete_objects.errors.is_empty());
     assert!(abort_error.contains("HTTP Status Code: 404 Not Found"));
@@ -251,6 +268,8 @@ async fn test_multi_rm_single_object_uses_delete_object() {
             recursive: false,
             targets: vec![delete_group(&server.url(), "bucket", &keys)],
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -285,6 +304,8 @@ async fn test_multi_rm_multiple_objects_use_delete_objects() {
             recursive: false,
             targets: vec![delete_group(&server.url(), "bucket", &keys)],
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -337,6 +358,8 @@ async fn test_multi_rm_batches_delete_objects_requests_over_1000_keys() {
             recursive: false,
             targets: vec![delete_group(&server.url(), "bucket", &all_keys)],
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -388,6 +411,8 @@ async fn test_multi_rm_groups_by_bucket_and_uses_delete_objects_per_group() {
                 delete_group(&server.url(), "bucket-b", &bucket_b),
             ],
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -435,6 +460,8 @@ async fn test_multi_rm_surfaces_partial_delete_errors() {
             recursive: false,
             targets: vec![delete_group(&server.url(), "bucket", &keys)],
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -490,6 +517,8 @@ async fn test_rm_older_than_deletes_only_matching_single_object() {
             recursive: false,
             targets: Vec::new(),
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -566,6 +595,8 @@ async fn test_rm_older_than_uses_delete_objects_for_multiple_matches_across_page
             recursive: false,
             targets: Vec::new(),
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -610,6 +641,8 @@ async fn test_rm_older_than_no_matches_is_ok() {
             recursive: false,
             targets: Vec::new(),
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -625,41 +658,39 @@ async fn test_recursive_bucket_delete_batches_and_deletes_bucket() {
     let first_batch: Vec<String> = (0..1_000).map(|index| format!("bulk-{index:04}")).collect();
     let second_batch = vec!["bulk-1000".to_string()];
 
+    let versions_query = || {
+        Matcher::AllOf(vec![
+            Matcher::UrlEncoded("versions".into(), String::new()),
+            Matcher::UrlEncoded("prefix".into(), String::new()),
+        ])
+    };
+
     let list_1 = server
         .mock("GET", "/bucket")
-        .match_query(Matcher::AllOf(vec![
-            Matcher::UrlEncoded("list-type".into(), "2".into()),
-            Matcher::UrlEncoded("max-keys".into(), "1000".into()),
-        ]))
+        .match_query(versions_query())
         .with_status(200)
         .with_header("content-type", "application/xml")
-        .with_body(list_objects_xml(&first_batch, true))
+        .with_body(list_versions_xml(&first_batch, true))
         .expect(1)
         .create_async()
         .await;
 
     let list_2 = server
         .mock("GET", "/bucket")
-        .match_query(Matcher::AllOf(vec![
-            Matcher::UrlEncoded("list-type".into(), "2".into()),
-            Matcher::UrlEncoded("max-keys".into(), "1000".into()),
-        ]))
+        .match_query(versions_query())
         .with_status(200)
         .with_header("content-type", "application/xml")
-        .with_body(list_objects_xml(&second_batch, false))
+        .with_body(list_versions_xml(&second_batch, false))
         .expect(1)
         .create_async()
         .await;
 
     let list_3 = server
         .mock("GET", "/bucket")
-        .match_query(Matcher::AllOf(vec![
-            Matcher::UrlEncoded("list-type".into(), "2".into()),
-            Matcher::UrlEncoded("max-keys".into(), "1000".into()),
-        ]))
+        .match_query(versions_query())
         .with_status(200)
         .with_header("content-type", "application/xml")
-        .with_body(list_objects_xml(&[], false))
+        .with_body(list_versions_xml(&[], false))
         .expect(1)
         .create_async()
         .await;
@@ -667,7 +698,7 @@ async fn test_recursive_bucket_delete_batches_and_deletes_bucket() {
     let delete_1 = server
         .mock("POST", "/bucket")
         .match_query(Matcher::UrlEncoded("delete".into(), String::new()))
-        .match_body(Matcher::Exact(delete_objects_body(&first_batch)))
+        .match_body(Matcher::Exact(delete_versions_body(&first_batch)))
         .with_status(200)
         .with_header("content-type", "application/xml")
         .with_body(delete_result_xml(&first_batch))
@@ -678,7 +709,7 @@ async fn test_recursive_bucket_delete_batches_and_deletes_bucket() {
     let delete_2 = server
         .mock("POST", "/bucket")
         .match_query(Matcher::UrlEncoded("delete".into(), String::new()))
-        .match_body(Matcher::Exact(delete_objects_body(&second_batch)))
+        .match_body(Matcher::Exact(delete_versions_body(&second_batch)))
         .with_status(200)
         .with_header("content-type", "application/xml")
         .with_body(delete_result_xml(&second_batch))
@@ -705,6 +736,8 @@ async fn test_recursive_bucket_delete_batches_and_deletes_bucket() {
             recursive: true,
             targets: Vec::new(),
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -726,12 +759,12 @@ async fn test_recursive_bucket_delete_stops_on_partial_delete_error() {
     let list = server
         .mock("GET", "/bucket")
         .match_query(Matcher::AllOf(vec![
-            Matcher::UrlEncoded("list-type".into(), "2".into()),
-            Matcher::UrlEncoded("max-keys".into(), "1000".into()),
+            Matcher::UrlEncoded("versions".into(), String::new()),
+            Matcher::UrlEncoded("prefix".into(), String::new()),
         ]))
         .with_status(200)
         .with_header("content-type", "application/xml")
-        .with_body(list_objects_xml(&keys, false))
+        .with_body(list_versions_xml(&keys, false))
         .expect(1)
         .create_async()
         .await;
@@ -739,7 +772,7 @@ async fn test_recursive_bucket_delete_stops_on_partial_delete_error() {
     let delete = server
         .mock("POST", "/bucket")
         .match_query(Matcher::UrlEncoded("delete".into(), String::new()))
-        .match_body(Matcher::Exact(delete_objects_body(&keys)))
+        .match_body(Matcher::Exact(delete_versions_body(&keys)))
         .with_status(200)
         .with_header("content-type", "application/xml")
         .with_body(
@@ -767,6 +800,8 @@ async fn test_recursive_bucket_delete_stops_on_partial_delete_error() {
             recursive: true,
             targets: Vec::new(),
             upload_id: String::new(),
+            version_id: None,
+            bypass_governance: false,
         },
     )
     .await
@@ -807,7 +842,10 @@ async fn test_bucket_and_acl_actions_request_success() {
 
     let s3 = test_s3(server.url(), Some("bucket"));
 
-    let created = CreateBucket::new("private").request(&s3).await.unwrap();
+    let created = CreateBucket::new("private", false)
+        .request(&s3)
+        .await
+        .unwrap();
     let acl_set = PutObjectAcl::new("key", "private")
         .request(&s3)
         .await
@@ -1275,7 +1313,7 @@ async fn test_create_multipart_upload_request_success() {
 
     let s3 = test_s3(server.url(), Some("bucket"));
 
-    let created = CreateMultipartUpload::new("key", None, None, None)
+    let created = CreateMultipartUpload::new("key", None, None, None, None)
         .request(&s3)
         .await
         .unwrap();

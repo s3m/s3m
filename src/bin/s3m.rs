@@ -45,6 +45,10 @@ async fn main() -> Result<()> {
         Action::Streams { .. } => {
             actions::streams::handle(action, globals).await?;
         }
+
+        Action::ObjectLockGet { .. } | Action::ObjectLockSet(_) => {
+            actions::object_lock::handle(&s3, action).await?;
+        }
     }
 
     Ok(())

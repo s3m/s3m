@@ -33,6 +33,7 @@ struct DeletePayload<'a> {
 pub struct DeleteObjects {
     objects: Vec<ObjectIdentifier>,
     quiet: bool,
+    bypass_governance: bool,
 }
 
 impl DeleteObjects {
@@ -40,7 +41,19 @@ impl DeleteObjects {
 
     #[must_use]
     pub fn new(objects: Vec<ObjectIdentifier>, quiet: bool) -> Self {
-        Self { objects, quiet }
+        Self {
+            objects,
+            quiet,
+            bypass_governance: false,
+        }
+    }
+
+    /// Send `x-amz-bypass-governance-retention` so `GOVERNANCE`-locked versions
+    /// in the batch can be deleted.
+    #[must_use]
+    pub const fn bypass_governance(mut self, bypass: bool) -> Self {
+        self.bypass_governance = bypass;
+        self
     }
 
     // Explicit `Result<T, Error>`, not the `s3::error::Result` alias: importing
@@ -99,7 +112,13 @@ impl Action for DeleteObjects {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        None
+        if self.bypass_governance {
+            let mut map: BTreeMap<&str, &str> = BTreeMap::new();
+            map.insert("x-amz-bypass-governance-retention", "true");
+            Some(map)
+        } else {
+            None
+        }
     }
 
     fn query_pairs(&self) -> Option<BTreeMap<&str, &str>> {

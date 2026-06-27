@@ -6,6 +6,7 @@
 use crate::s3::error::Result;
 use crate::{
     s3::actions::{Action, response_error},
+    s3::object_lock::ObjectLock,
     s3::responses::InitiateMultipartUploadResult,
     s3::{S3, checksum::Checksum, request, tools},
 };
@@ -19,6 +20,7 @@ pub struct CreateMultipartUpload<'a> {
     acl: Option<String>,
     meta: Option<BTreeMap<String, String>>,
     additional_checksum: Option<Checksum>,
+    object_lock: Option<ObjectLock>,
 }
 
 impl<'a> CreateMultipartUpload<'a> {
@@ -28,12 +30,14 @@ impl<'a> CreateMultipartUpload<'a> {
         acl: Option<String>,
         meta: Option<BTreeMap<String, String>>,
         additional_checksum: Option<Checksum>,
+        object_lock: Option<ObjectLock>,
     ) -> Self {
         Self {
             key,
             acl,
             meta,
             additional_checksum,
+            object_lock,
         }
     }
 
@@ -97,6 +101,11 @@ impl Action for CreateMultipartUpload<'_> {
             );
         }
 
+        // <https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html>
+        if let Some(object_lock) = &self.object_lock {
+            object_lock.apply(&mut map);
+        }
+
         Some(map)
     }
 
@@ -133,13 +142,13 @@ mod tests {
 
     #[test]
     fn test_method() {
-        let action = CreateMultipartUpload::new("key", None, None, None);
+        let action = CreateMultipartUpload::new("key", None, None, None, None);
         assert_eq!(Method::POST, action.http_method().unwrap());
     }
 
     #[test]
     fn test_headers() {
-        let action = CreateMultipartUpload::new("key", None, None, None);
+        let action = CreateMultipartUpload::new("key", None, None, None, None);
         let headers = action.headers().unwrap();
         assert_eq!(None, headers.get("x-amz-acl"));
         assert_eq!(None, headers.get("x-amz-meta-"));
@@ -158,7 +167,7 @@ mod tests {
             "bucket-owner-full-control",
         ];
         for acl in test {
-            let action = CreateMultipartUpload::new("key", Some(acl.to_string()), None, None);
+            let action = CreateMultipartUpload::new("key", Some(acl.to_string()), None, None, None);
             let headers = action.headers().unwrap();
             assert_eq!(Some(acl), headers.get("x-amz-acl").copied());
         }
@@ -178,6 +187,7 @@ mod tests {
                 None,
                 None,
                 Some(Checksum::new(algorithm.clone())),
+                None,
             );
             let headers = action.headers().unwrap();
             assert_eq!(None, headers.get("x-amz-acl"));
@@ -189,8 +199,33 @@ mod tests {
     }
 
     #[test]
+    fn test_headers_object_lock() {
+        use crate::s3::object_lock::{ObjectLock, ObjectLockMode};
+
+        let action = CreateMultipartUpload::new(
+            "key",
+            None,
+            None,
+            None,
+            Some(ObjectLock {
+                retention: Some((
+                    ObjectLockMode::Compliance,
+                    "2027-01-01T00:00:00Z".to_string(),
+                )),
+                legal_hold: None,
+            }),
+        );
+        let headers = action.headers().unwrap();
+        assert_eq!(headers.get("x-amz-object-lock-mode"), Some(&"COMPLIANCE"));
+        assert_eq!(
+            headers.get("x-amz-object-lock-retain-until-date"),
+            Some(&"2027-01-01T00:00:00Z")
+        );
+    }
+
+    #[test]
     fn test_query_pairs() {
-        let action = CreateMultipartUpload::new("key", None, None, None);
+        let action = CreateMultipartUpload::new("key", None, None, None, None);
         let mut map = BTreeMap::new();
         map.insert("uploads", "");
         assert_eq!(Some(map), action.query_pairs());
@@ -198,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_path() {
-        let action = CreateMultipartUpload::new("key", None, None, None);
+        let action = CreateMultipartUpload::new("key", None, None, None, None);
         assert_eq!(Some(vec!["key"]), action.path());
     }
 
@@ -213,7 +248,7 @@ mod tests {
             Some("awsexamplebucket1".to_string()),
             false,
         );
-        let action = CreateMultipartUpload::new("key", None, None, None);
+        let action = CreateMultipartUpload::new("key", None, None, None, None);
         let (url, headers) = action
             .sign(&s3, tools::sha256_digest("").as_ref(), None, None)
             .unwrap();

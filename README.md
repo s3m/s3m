@@ -231,6 +231,74 @@ Uploads and downloads do not accept `--encrypt` or `--enc-key` flags. Encryption
 
 > **Integrity note:** encryption uses ChaCha20-Poly1305 in a streaming (chunked) mode — every chunk is authenticated, so tampering, reordering, and forged content are detected and decryption fails. It does **not** detect *truncation* of an already-stored object (trailing chunks removed), and incomplete downloads are caught at the transport layer. If you need end-to-end "exactly what I uploaded" verification, validate restores out-of-band (e.g. compare a checksum).
 
+## Object Lock (WORM)
+
+[S3 Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html)
+stores objects using a write-once-read-many (WORM) model so they cannot be
+deleted or overwritten until a retention date passes or a legal hold is removed.
+
+Object Lock can **only be enabled when the bucket is created** — this also
+enables versioning on the bucket:
+
+```bash
+s3m cb --object-lock s3/vault
+```
+
+Then apply retention and/or a legal hold at upload time:
+
+```bash
+# Retain in COMPLIANCE mode until a fixed date (RFC 3339)
+s3m --object-lock-mode COMPLIANCE --retain-until 2027-01-01T00:00:00Z backup.tar s3/vault/backup.tar
+
+# GOVERNANCE mode (privileged users can bypass) + a legal hold
+s3m --object-lock-mode GOVERNANCE --retain-until 2027-01-01T00:00:00Z --legal-hold db.sql s3/vault/db.sql
+
+# Legal hold only (no fixed retention date)
+s3m --legal-hold report.pdf s3/vault/report.pdf
+```
+
+`--object-lock-mode` and `--retain-until` must be used together. The retention
+and legal-hold settings apply to every upload path, including `--pipe`,
+`--compress`, and encrypted streams.
+
+> **Note:** the target bucket must already have Object Lock enabled. Uploading
+> lock settings into a plain bucket is rejected by S3 (`InvalidRequest`); s3m
+> surfaces a hint to create the bucket with `s3m cb --object-lock`.
+
+### Bucket default retention
+
+Instead of passing lock flags on every upload, set a **bucket default
+retention** once — S3 then applies it to every new object automatically. The
+bucket default uses a duration (`--days` or `--years`), not a fixed date:
+
+```bash
+# Every new object gets 30 days of COMPLIANCE retention
+s3m object-lock set s3/vault --mode COMPLIANCE --days 30
+
+# View the bucket's Object Lock configuration
+s3m object-lock get s3/vault
+s3m object-lock get s3/vault --json
+```
+
+### Managing retention & legal hold on existing objects
+
+```bash
+# Show an object's retention + legal hold
+s3m object-lock get s3/vault/file.dat
+
+# Set/extend per-object retention (uses a date, like uploads)
+s3m object-lock set s3/vault/file.dat --mode GOVERNANCE --retain-until 2027-01-01T00:00:00Z
+
+# Shorten GOVERNANCE retention needs an explicit bypass
+s3m object-lock set s3/vault/file.dat --mode GOVERNANCE --retain-until 2026-07-01T00:00:00Z --bypass-governance
+
+# Toggle a legal hold
+s3m object-lock set s3/vault/file.dat --legal-hold on
+s3m object-lock set s3/vault/file.dat --legal-hold off
+```
+
+A specific version can be targeted with `--version-id <id>`.
+
 ## Advanced Options
 
 ### Buffer size

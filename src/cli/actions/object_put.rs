@@ -69,6 +69,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
         number,
     } = action
     {
+        let has_object_lock = globals.object_lock.is_some();
         return handle_put_object(
             s3,
             PutObjectRequest {
@@ -87,10 +88,29 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
             },
             globals,
         )
-        .await;
+        .await
+        .map_err(|e| augment_object_lock_error(e, has_object_lock));
     }
 
     Ok(())
+}
+
+/// When an upload carrying Object Lock headers is rejected with `InvalidRequest`,
+/// the usual cause is a bucket that was not created with Object Lock enabled.
+/// Attach an actionable hint instead of forcing a pre-flight check on every upload.
+fn augment_object_lock_error(err: anyhow::Error, has_object_lock: bool) -> anyhow::Error {
+    let missing_lock_config = has_object_lock
+        && err
+            .downcast_ref::<crate::s3::Error>()
+            .is_some_and(|e| e.code() == Some("InvalidRequest"));
+
+    if missing_lock_config {
+        err.context(
+            "the target bucket is not Object-Lock-enabled; create it with `s3m cb --object-lock`",
+        )
+    } else {
+        err
+    }
 }
 
 async fn handle_put_object(s3: &S3, request: PutObjectRequest, globals: GlobalArgs) -> Result<()> {
@@ -445,5 +465,43 @@ async fn calculate_additional_checksum(
         }
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::augment_object_lock_error;
+    use crate::s3::{ApiError, Error};
+
+    fn api_error(code: &str) -> anyhow::Error {
+        anyhow::Error::new(Error::Api(ApiError {
+            status: 400,
+            code: Some(code.to_string()),
+            message: None,
+            details: String::new(),
+        }))
+    }
+
+    #[test]
+    fn test_hint_added_for_invalid_request_with_object_lock() {
+        let err = augment_object_lock_error(api_error("InvalidRequest"), true);
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("cb --object-lock") && rendered.contains("not Object-Lock-enabled"),
+            "expected the Object Lock hint, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_no_hint_when_object_lock_not_requested() {
+        let err = augment_object_lock_error(api_error("InvalidRequest"), false);
+        assert!(!format!("{err:#}").contains("cb --object-lock"));
+    }
+
+    #[test]
+    fn test_no_hint_for_other_error_codes() {
+        let err = augment_object_lock_error(api_error("AccessDenied"), true);
+        assert!(!format!("{err:#}").contains("cb --object-lock"));
     }
 }

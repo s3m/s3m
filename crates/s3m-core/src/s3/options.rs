@@ -1,3 +1,4 @@
+use crate::s3::object_lock::ObjectLock;
 use secrecy::SecretString;
 use std::convert::TryFrom;
 
@@ -15,6 +16,8 @@ pub struct RequestOptions {
     pub compress: bool,
     pub encrypt: bool,
     pub enc_key: Option<SecretString>,
+    /// Object Lock (WORM) settings applied to uploads, when set.
+    pub object_lock: Option<ObjectLock>,
 }
 
 impl RequestOptions {
@@ -26,6 +29,7 @@ impl RequestOptions {
             compress: false,
             encrypt: false,
             enc_key: None,
+            object_lock: None,
         }
     }
 

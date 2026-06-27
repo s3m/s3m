@@ -15,7 +15,7 @@ pub mod upload_stdin_encrypted;
 use crate::{
     progressbar::Bar,
     s3::RequestOptions,
-    s3::{S3, actions, request::ProgressCallback},
+    s3::{S3, actions, object_lock::ObjectLock, request::ProgressCallback},
 };
 use anyhow::{Context as _, Result, anyhow};
 use bytes::BytesMut;
@@ -157,6 +157,7 @@ async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
         compress: false,
         encrypt: false,
         enc_key: None,
+        object_lock: None,
     };
 
     for attempt in 1..=part.retries {
@@ -319,8 +320,9 @@ async fn initiate_multipart_upload(
     key: &str,
     acl: Option<String>,
     meta: BTreeMap<String, String>,
+    object_lock: Option<ObjectLock>,
 ) -> Result<String> {
-    let action = actions::CreateMultipartUpload::new(key, acl, Some(meta), None);
+    let action = actions::CreateMultipartUpload::new(key, acl, Some(meta), None, object_lock);
     let response = action.request(s3).await?;
     Ok(response.upload_id)
 }
@@ -1014,6 +1016,7 @@ mod tests {
             compress: false,
             encrypt: false,
             enc_key: None,
+            object_lock: None,
         };
 
         let stream = create_initial_stream(InitialStreamParams {
@@ -1044,6 +1047,7 @@ mod tests {
             compress: false,
             encrypt: true,
             enc_key: None,
+            object_lock: None,
         };
         let header = create_nonce_header(&[1, 2, 3, 4, 5, 6, 7]);
         let tmp_dir = PathBuf::new();
@@ -1118,6 +1122,7 @@ mod tests {
             compress: false,
             encrypt: false,
             enc_key: None,
+            object_lock: None,
         };
 
         let stream = create_initial_stream(InitialStreamParams {

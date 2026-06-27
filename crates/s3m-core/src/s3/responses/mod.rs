@@ -349,6 +349,47 @@ pub struct DeleteMarker {
     pub owner: Owner,
 }
 
+/// Bucket-level Object Lock configuration (`GetObjectLockConfiguration`).
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ObjectLockConfiguration {
+    #[serde(rename = "ObjectLockEnabled")]
+    pub object_lock_enabled: Option<String>,
+    #[serde(rename = "Rule")]
+    pub rule: Option<ObjectLockRule>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ObjectLockRule {
+    #[serde(rename = "DefaultRetention")]
+    pub default_retention: Option<DefaultRetention>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DefaultRetention {
+    #[serde(rename = "Mode")]
+    pub mode: Option<String>,
+    #[serde(rename = "Days")]
+    pub days: Option<u32>,
+    #[serde(rename = "Years")]
+    pub years: Option<u32>,
+}
+
+/// Per-object retention (`GetObjectRetention`).
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ObjectRetention {
+    #[serde(rename = "Mode")]
+    pub mode: Option<String>,
+    #[serde(rename = "RetainUntilDate")]
+    pub retain_until_date: Option<String>,
+}
+
+/// Per-object legal hold (`GetObjectLegalHold`).
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ObjectLegalHold {
+    #[serde(rename = "Status")]
+    pub status: Option<String>,
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

@@ -127,7 +127,7 @@ impl MinioContainer {
     /// Result indicating success or failure
     pub async fn create_bucket(&self, bucket_name: &str) -> anyhow::Result<()> {
         let s3 = self.create_s3_client(Some(bucket_name.to_string()));
-        CreateBucket::new("private").request(&s3).await?;
+        CreateBucket::new("private", false).request(&s3).await?;
         Ok(())
     }
 

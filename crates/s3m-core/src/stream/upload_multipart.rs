@@ -76,6 +76,7 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
             request.acl,
             request.meta,
             request.additional_checksum.clone(),
+            request.globals.object_lock.clone(),
         );
 
         let response = action.request(request.s3).await?;

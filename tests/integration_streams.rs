@@ -232,7 +232,7 @@ async fn create_live_resumable_state(
     let part_size = 5 * 1024 * 1024_u64;
 
     let s3 = minio_s3(minio, bucket);
-    let create = CreateMultipartUpload::new(key, None, None, None)
+    let create = CreateMultipartUpload::new(key, None, None, None, None)
         .request(&s3)
         .await
         .unwrap();
@@ -298,7 +298,7 @@ async fn create_partially_uploaded_live_resumable_state(
     let part_size = 5 * 1024 * 1024_u64;
 
     let s3 = minio_s3(minio, bucket);
-    let create = CreateMultipartUpload::new(key, None, None, None)
+    let create = CreateMultipartUpload::new(key, None, None, None, None)
         .request(&s3)
         .await
         .unwrap();

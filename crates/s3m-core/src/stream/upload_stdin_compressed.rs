@@ -32,7 +32,8 @@ pub async fn stream_stdin_compressed(
     meta.insert("Content-Type".to_string(), "application/zstd".to_string());
 
     // S3 setup
-    let upload_id = initiate_multipart_upload(s3, &key, acl, meta).await?;
+    let upload_id =
+        initiate_multipart_upload(s3, &key, acl, meta, globals.object_lock.clone()).await?;
 
     let progress_sender = setup_stream_progress(quiet).await;
 

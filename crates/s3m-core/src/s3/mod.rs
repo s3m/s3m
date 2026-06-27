@@ -3,6 +3,7 @@ pub mod checksum;
 pub mod credentials;
 pub mod error;
 pub mod limits;
+pub mod object_lock;
 pub mod options;
 pub mod region;
 pub mod request;
@@ -12,6 +13,7 @@ pub mod tools;
 pub use self::{
     credentials::Credentials,
     error::{ApiError, Error},
+    object_lock::{ObjectLock, ObjectLockMode},
     options::RequestOptions,
     region::Region,
     signature::Signature,
