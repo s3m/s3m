@@ -93,7 +93,7 @@ impl<'a> Signature<'a> {
         //         HexEncode(Hash(RequestPayload))
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            &self.http_method,
+            self.http_method,
             canonical_uri(url)?,
             canonical_query_string(url),
             canonical_headers(&self.headers),
@@ -196,7 +196,7 @@ impl<'a> Signature<'a> {
         //         UNSIGNED-PAYLOAD
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
-            &self.http_method,
+            self.http_method,
             canonical_uri(&url)?,
             canonical_query_string(&url),
             canonical_headers(&self.headers),

@@ -29,7 +29,7 @@ use minio_runtime::MinioRuntime;
 use std::env;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::{NamedTempFile, TempDir};
 
@@ -698,6 +698,13 @@ fn calculate_file_hash(path: &std::path::Path) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+fn decompress_zstd_to(input: &Path, output: &Path) {
+    let source = std::fs::File::open(input).expect("Failed to open compressed file");
+    let destination = std::fs::File::create(output).expect("Failed to create decompressed file");
+
+    zstd::stream::copy_decode(source, destination).expect("Failed to decompress with zstd");
+}
+
 /// Helper to create a test file with specified size and content
 fn create_test_file_with_content(size: usize, pattern: &str) -> NamedTempFile {
     let mut file = NamedTempFile::new().expect("Failed to create temp file");
@@ -1161,32 +1168,18 @@ async fn test_e2e_decompress_and_verify_hash() {
         "Download compressed file should succeed"
     );
 
-    // Decompress locally using zstd command
+    // Decompress locally without depending on a system zstd binary.
     let decompressed_path = download_dir.path().join("decompressed.dat");
-    let decompress_output = Command::new("zstd")
-        .args([
-            "-d",
-            compressed_path_str,
-            "-o",
-            decompressed_path.to_str().unwrap(),
-        ])
-        .output();
+    decompress_zstd_to(&compressed_path, &decompressed_path);
 
-    match decompress_output {
-        Ok(output) if output.status.success() => {
-            // Verify decompressed hash matches original
-            let decompressed_hash = calculate_file_hash(&decompressed_path);
-            assert_eq!(
-                original_hash, decompressed_hash,
-                "Decompressed file hash should match original"
-            );
-            println!(
-                "✅ Decompress verification: Hash matches - {}",
-                original_hash
-            );
-        }
-        _ => {
-            println!("⚠️  Decompress verification skipped: zstd command not available");
-        }
-    }
+    // Verify decompressed hash matches original
+    let decompressed_hash = calculate_file_hash(&decompressed_path);
+    assert_eq!(
+        original_hash, decompressed_hash,
+        "Decompressed file hash should match original"
+    );
+    println!(
+        "✅ Decompress verification: Hash matches - {}",
+        original_hash
+    );
 }

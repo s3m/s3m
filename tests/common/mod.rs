@@ -17,7 +17,7 @@ use minio_runtime::MinioRuntime;
 
 use std::env;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::NamedTempFile;
 
@@ -204,6 +204,14 @@ pub fn run_s3m(args: &[&str]) -> std::process::Output {
 /// tests verify the actual code users will run (eating our own dog food).
 pub fn calculate_file_hash(path: &std::path::Path) -> String {
     s3m::s3::tools::blake3(path).expect("Failed to calculate blake3 hash")
+}
+
+/// Helper to decompress a zstd file without depending on a system `zstd` binary.
+pub fn decompress_zstd_to(input: &Path, output: &Path) {
+    let source = std::fs::File::open(input).expect("Failed to open compressed file");
+    let destination = std::fs::File::create(output).expect("Failed to create decompressed file");
+
+    zstd::stream::copy_decode(source, destination).expect("Failed to decompress with zstd");
 }
 
 /// Helper to create a test file with specified size and content pattern

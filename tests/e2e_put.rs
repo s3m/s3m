@@ -24,11 +24,10 @@ mod common;
 
 use common::{
     MinioContext, calculate_file_hash, create_config_file, create_config_file_with_options,
-    create_test_file_with_content, get_s3m_binary, run_s3m_with_minio,
+    create_test_file_with_content, decompress_zstd_to, get_s3m_binary, run_s3m_with_minio,
 };
 use std::fs;
 use std::io::Write;
-use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use tempfile::{NamedTempFile, TempDir};
 
@@ -60,24 +59,6 @@ fn run_s3m_with_config(config_path: &str, args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("Failed to execute s3m")
-}
-
-fn decompress_zstd_to(input: &Path, output: &Path) {
-    let status = Command::new("zstd")
-        .args([
-            "-d",
-            input.to_str().expect("input path"),
-            "-o",
-            output.to_str().expect("output path"),
-        ])
-        .output()
-        .expect("Failed to decompress with zstd");
-
-    assert!(
-        status.status.success(),
-        "Decompression should succeed: {}",
-        String::from_utf8_lossy(&status.stderr)
-    );
 }
 
 #[tokio::test]

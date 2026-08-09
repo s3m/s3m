@@ -33,7 +33,7 @@ impl Db {
         let key = format!("{} {} {}", &s3.hash()[0..8], key, mtime);
         let state_dir = Self::state_dir(path, checksum);
 
-        log::debug!("db key: [{}], path: {}", &key, path.display());
+        log::debug!("db key: [{}], path: {}", key, path.display());
 
         let storage = sled::Config::new()
             .path(&state_dir)
@@ -79,7 +79,7 @@ impl Db {
     pub fn check(&self) -> Result<Option<String>> {
         let etag = &self
             .storage
-            .get(format!("etag {}", &self.key).as_bytes())?
+            .get(format!("etag {}", self.key).as_bytes())?
             .map(|s| String::from_utf8(s.to_vec()).map(|s| format!("ETag: {s}")))
             .transpose()?;
         Ok(etag.clone())
@@ -127,7 +127,7 @@ impl Db {
     pub fn save_etag(&self, etag: &str) -> Result<Option<sled::IVec>> {
         let previous = self
             .storage
-            .insert(format!("etag {}", &self.key).as_bytes(), etag)?;
+            .insert(format!("etag {}", self.key).as_bytes(), etag)?;
         self.storage.flush()?;
         state::touch_metadata(&self.state_dir)?;
         Ok(previous)

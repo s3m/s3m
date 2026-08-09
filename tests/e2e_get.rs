@@ -17,7 +17,7 @@ mod common;
 
 use common::{
     MinioContext, calculate_file_hash, create_config_file_with_options,
-    create_test_file_with_content, get_s3m_binary, run_s3m_with_minio,
+    create_test_file_with_content, decompress_zstd_to, get_s3m_binary, run_s3m_with_minio,
 };
 use std::io::Write;
 use std::process::Command;
@@ -172,19 +172,9 @@ async fn test_e2e_decompress_and_verify_hash() {
         "Download compressed file should succeed"
     );
 
-    // Decompress using zstd command
+    // Decompress without depending on a system zstd binary.
     let decompressed_path = download_dir.path().join("decompressed.dat");
-    let decompressed_path_str = decompressed_path.to_str().expect("Invalid path");
-
-    let decompress_output = Command::new("zstd")
-        .args(["-d", compressed_path_str, "-o", decompressed_path_str])
-        .output()
-        .expect("Failed to decompress (is zstd installed?)");
-
-    assert!(
-        decompress_output.status.success(),
-        "Decompression should succeed"
-    );
+    decompress_zstd_to(&compressed_path, &decompressed_path);
 
     // Verify decompressed hash matches original
     let decompressed_hash = calculate_file_hash(&decompressed_path);

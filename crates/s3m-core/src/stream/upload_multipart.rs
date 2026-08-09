@@ -87,7 +87,7 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
         response.upload_id
     };
 
-    log::debug!("upload_id: {}", &upload_id);
+    log::debug!("upload_id: {upload_id}");
 
     // if db_parts is not empty it means that a previous upload did not finish successfully.
     // skip creating the parts again and try to re-upload the pending ones

@@ -181,7 +181,7 @@ pub fn get_config_path() -> Result<PathBuf> {
 
     let config_path = Path::new(&home_dir).join(".config").join("s3m");
     fs::create_dir_all(&config_path)
-        .context(format!("unable to create: {}", &config_path.display()))?;
+        .context(format!("unable to create: {}", config_path.display()))?;
 
     Ok(config_path)
 }
