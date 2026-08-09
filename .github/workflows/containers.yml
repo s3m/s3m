@@ -12,6 +12,8 @@ jobs:
   minio-tests:
     name: MinIO Integration Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -101,6 +103,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: minio-tests
     if: always()
+    permissions: {}
 
     steps:
       - name: Check test results

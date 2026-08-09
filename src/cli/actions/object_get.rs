@@ -585,7 +585,8 @@ mod tests {
         let mut state = DownloadState::new(file, Bar::default(), 1 << 30, true, true, None);
         // Move past the nonce-header stage by injecting a decryptor directly.
         let key = SecretString::new("0123456789abcdef0123456789abcdef".into());
-        state.decryptor = Some(crate::stream::init_decryption(&key, &[0u8; 7]));
+        let (_, nonce) = crate::stream::init_encryption(&key);
+        state.decryptor = Some(crate::stream::init_decryption(&key, &nonce));
         // A frame claiming u32::MAX bytes must be rejected before buffering.
         state.buffer.extend_from_slice(&u32::MAX.to_be_bytes());
         assert!(state.process_encrypted_buffer().await.is_err());
