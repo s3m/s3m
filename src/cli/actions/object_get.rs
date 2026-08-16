@@ -1,16 +1,16 @@
 use crate::{
     cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
     s3::{S3, actions, tools::throttle_download},
-    stream::{decrypt_chunk, parse_nonce_header},
+    stream::{cipher_from_key, decrypt_chunk, parse_nonce_header},
 };
+use aead_stream::DecryptorBE32;
 use anyhow::{Context, Result, anyhow};
 use bytes::{Buf, BytesMut};
 use bytesize::ByteSize;
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::stream::DecryptorBE32};
+use chacha20poly1305::ChaCha20Poly1305;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use http::{HeaderMap, header::CONTENT_TYPE};
-use secrecy::ExposeSecret;
 use serde::Serialize;
 use std::{
     cmp::min,
@@ -469,14 +469,11 @@ fn create_cipher_if_needed(
     can_decrypt: bool,
 ) -> Result<Option<ChaCha20Poly1305>> {
     if can_decrypt {
-        let key_bytes = globals
+        let secret = globals
             .enc_key
             .as_ref()
-            .context("Encryption key is required but not provided")?
-            .expose_secret()
-            .as_bytes()
-            .into();
-        Ok(Some(ChaCha20Poly1305::new(key_bytes)))
+            .context("Encryption key is required but not provided")?;
+        Ok(Some(cipher_from_key(secret)?))
     } else {
         Ok(None)
     }
@@ -585,8 +582,8 @@ mod tests {
         let mut state = DownloadState::new(file, Bar::default(), 1 << 30, true, true, None);
         // Move past the nonce-header stage by injecting a decryptor directly.
         let key = SecretString::new("0123456789abcdef0123456789abcdef".into());
-        let (_, nonce) = crate::stream::init_encryption(&key);
-        state.decryptor = Some(crate::stream::init_decryption(&key, &nonce));
+        let (_, nonce) = crate::stream::init_encryption(&key).unwrap();
+        state.decryptor = Some(crate::stream::init_decryption(&key, &nonce).unwrap());
         // A frame claiming u32::MAX bytes must be rejected before buffering.
         state.buffer.extend_from_slice(&u32::MAX.to_be_bytes());
         assert!(state.process_encrypted_buffer().await.is_err());

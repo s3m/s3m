@@ -56,7 +56,7 @@ pub fn decrypt(enc_file: &PathBuf, enc_key: &str) -> Result<()> {
         .read_exact(&mut header)
         .context("Failed to read nonce header")?;
     let nonce = parse_nonce_header(&header)?;
-    let mut decryptor = init_decryption(&SecretString::new(enc_key.into()), &nonce);
+    let mut decryptor = init_decryption(&SecretString::new(enc_key.into()), &nonce)?;
 
     let mut chunk_idx = 0;
     let mut total_decrypted_bytes = 0u64;

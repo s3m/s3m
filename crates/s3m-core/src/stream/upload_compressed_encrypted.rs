@@ -4,8 +4,8 @@ use crate::stream::{
     init_encryption, initiate_multipart_upload, maybe_upload_part, setup_stream_progress,
     upload_final_part, write_to_stream,
 };
+use aead_stream::EncryptorBE32;
 use anyhow::{Result, anyhow};
-use chacha20poly1305::aead::stream::EncryptorBE32;
 use futures::stream::TryStreamExt;
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
@@ -49,7 +49,7 @@ pub async fn stream_compressed_encrypted(request: FileStreamUpload<'_>) -> Resul
     let progress_sender = setup_stream_progress(quiet).await;
 
     // Initialize encryption
-    let (cipher, nonce_bytes) = init_encryption(encryption_key);
+    let (cipher, nonce_bytes) = init_encryption(encryption_key)?;
     let encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
     let nonce_header = create_nonce_header(&nonce_bytes);

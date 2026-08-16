@@ -1,3 +1,15 @@
+## 0.20.0 🔒 (2026-08-16)
+* **Nonce hardening (code-scanning alert #9)**: the streaming-encryption nonce is now generated directly as a CSPRNG-random `[u8; 7]` (`rng().random()`) instead of zero-initializing a buffer and overwriting it with `fill_bytes`. Behavior is unchanged — the nonce was already random — but the refactor clears a `rust/hard-coded-cryptographic-value` false positive that CodeQL raised because it did not model the in-place `&mut` fill.
+* **Dependencies — upgraded to the latest set, including semver-incompatible majors** (`cargo upgrade --incompatible` + `cargo update`):
+  * `chacha20poly1305` 0.10 → **0.11** (pulls in `aead` 0.6). `aead` 0.6 removed its bundled `stream` module — it now lives in the standalone **`aead-stream`** crate, which is a new direct dependency of `s3m-core` (`EncryptorBE32` / `DecryptorBE32` STREAM primitives). `aead` 0.6 also switched from `generic-array` to `hybrid-array`, dropping the old panicking `From<&[u8]>` key conversion (see the breaking note below).
+  * `quick-xml` 0.39 → **0.41**; `testcontainers` (dev) 0.27 → **0.28**. All other dependencies were already at their latest versions.
+* **BREAKING (`s3m-core` public API)** — encryption/decryption setup is now fallible, since `aead` 0.6 made 32-byte key construction fallible:
+  * New `stream::cipher_from_key(&SecretString) -> Result<ChaCha20Poly1305>` builds the cipher, returning an error if the key is not exactly 32 bytes.
+  * `stream::init_encryption(..)` now returns `Result<(ChaCha20Poly1305, [u8; 7])>` (was `(ChaCha20Poly1305, [u8; 7])`).
+  * `stream::init_decryption(..)` now returns `Result<DecryptorBE32<ChaCha20Poly1305>>` (was `DecryptorBE32<ChaCha20Poly1305>`).
+  * Call sites must add `?`/handle the `Result`. In practice the error path is unreachable in the CLI, where the key length is validated to 32 bytes upstream. The `EncryptorBE32`/`DecryptorBE32` STREAM types are now imported from `aead-stream` rather than `chacha20poly1305::aead::stream`.
+* **Versioning — aligned & centralized**: `s3m` (bin) and `s3m-core` (lib) now share a single version defined once in `[workspace.package]` and inherited by both crates via `version.workspace = true` — both are **0.20.0** — replacing the previous independent-versioning policy.
+
 ## 0.19.0 ⚽ (2026-06-27)
 * **S3 Object Lock (WORM)**: new support for write-once-read-many retention and legal holds (issue #67).
   * `s3m cb --object-lock <host>/<bucket>` creates a bucket with Object Lock enabled (which also enables versioning).

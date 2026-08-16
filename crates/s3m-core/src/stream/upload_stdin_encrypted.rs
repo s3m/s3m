@@ -8,8 +8,8 @@ use crate::{
         write_to_stream,
     },
 };
+use aead_stream::EncryptorBE32;
 use anyhow::{Result, anyhow};
-use chacha20poly1305::aead::stream::EncryptorBE32;
 use futures::stream::TryStreamExt;
 use std::{collections::BTreeMap, path::PathBuf};
 use tokio::io::stdin;
@@ -45,7 +45,7 @@ pub async fn stream_stdin_encrypted(
         initiate_multipart_upload(s3, &key, acl, meta, globals.object_lock.clone()).await?;
     let progress_sender = setup_stream_progress(quiet).await;
 
-    let (cipher, nonce_bytes) = init_encryption(encryption_key);
+    let (cipher, nonce_bytes) = init_encryption(encryption_key)?;
     let encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
     let nonce_header = create_nonce_header(&nonce_bytes);
 

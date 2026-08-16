@@ -1,6 +1,6 @@
 [package]
 name = "s3m-core"
-version = "0.19.0"
+version.workspace = true
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "Reusable S3 client and streaming engine behind the s3m CLI"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -16,12 +16,13 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+aead-stream = { version = "0.6.0", features = ["alloc"] }
 anyhow = "1"
 base64ct = { version = "1.8", features = ["alloc"] }
 blake3 = "1"
 bytes = "1"
 bytesize = "2"
-chacha20poly1305 = { version = "0.10.1", features = ["stream"] }
+chacha20poly1305 = "0.11.0"
 chrono = "0.4"
 crc32c = "0.6"
 crc32fast = "1.5"
@@ -31,7 +32,7 @@ indicatif = "0.18"
 log = "0.4"
 md5 = "0.8"
 percent-encoding = "2.3"
-quick-xml = { version = "0.39", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 rand = "0.10.2"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
 ring = "0.17"

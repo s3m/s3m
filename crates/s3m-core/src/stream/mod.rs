@@ -17,18 +17,13 @@ use crate::{
     s3::RequestOptions,
     s3::{S3, actions, object_lock::ObjectLock, request::ProgressCallback},
 };
+use aead_stream::{DecryptorBE32, EncryptorBE32};
 use anyhow::{Context as _, Result, anyhow};
 use bytes::BytesMut;
 use bytesize::ByteSize;
-use chacha20poly1305::{
-    ChaCha20Poly1305,
-    aead::{
-        KeyInit,
-        stream::{DecryptorBE32, EncryptorBE32},
-    },
-};
+use chacha20poly1305::{ChaCha20Poly1305, Key, aead::KeyInit};
 use indicatif::ProgressBar;
-use rand::{Rng, RngExt, rng};
+use rand::{RngExt, rng};
 use ring::digest::{Context, SHA256};
 use secrecy::ExposeSecret;
 use std::{
@@ -290,28 +285,44 @@ pub async fn decompress_chunk(data: Vec<u8>, max_output: usize) -> Result<Vec<u8
     .context("decompression task panicked or was cancelled")?
 }
 
-#[must_use]
-pub fn init_encryption(encryption_key: &secrecy::SecretString) -> (ChaCha20Poly1305, [u8; 7]) {
-    let cipher = ChaCha20Poly1305::new(encryption_key.expose_secret().as_bytes().into());
+/// Build a `ChaCha20Poly1305` cipher from a 32-byte encryption key.
+///
+/// # Errors
+/// Returns an error if the key is not exactly 32 bytes.
+pub fn cipher_from_key(encryption_key: &secrecy::SecretString) -> Result<ChaCha20Poly1305> {
+    let key = Key::try_from(encryption_key.expose_secret().as_bytes())
+        .map_err(|_| anyhow!("encryption key must be exactly 32 bytes"))?;
+    Ok(ChaCha20Poly1305::new(&key))
+}
 
-    // Generate a random nonce of 7 bytes
-    let mut nonce_bytes = [0u8; 7];
-    rng().fill_bytes(&mut nonce_bytes);
+/// Initialize a streaming encryptor cipher and generate a fresh random 7-byte nonce.
+///
+/// # Errors
+/// Returns an error if the key is not exactly 32 bytes.
+pub fn init_encryption(
+    encryption_key: &secrecy::SecretString,
+) -> Result<(ChaCha20Poly1305, [u8; 7])> {
+    let cipher = cipher_from_key(encryption_key)?;
 
-    (cipher, nonce_bytes)
+    // Generate a random 7-byte nonce
+    let nonce_bytes: [u8; 7] = rng().random();
+
+    Ok((cipher, nonce_bytes))
 }
 
 /// Build a streaming decryptor from the encryption key and the 7-byte nonce.
 ///
 /// Counterpart of [`init_encryption`]: the nonce is the one carried by
 /// [`create_nonce_header`] and recovered with [`parse_nonce_header`].
-#[must_use]
+///
+/// # Errors
+/// Returns an error if the key is not exactly 32 bytes.
 pub fn init_decryption(
     encryption_key: &secrecy::SecretString,
     nonce: &[u8; 7],
-) -> DecryptorBE32<ChaCha20Poly1305> {
-    let cipher = ChaCha20Poly1305::new(encryption_key.expose_secret().as_bytes().into());
-    DecryptorBE32::from_aead(cipher, nonce.into())
+) -> Result<DecryptorBE32<ChaCha20Poly1305>> {
+    let cipher = cipher_from_key(encryption_key)?;
+    Ok(DecryptorBE32::from_aead(cipher, nonce.into()))
 }
 
 /// Initialize multipart upload
@@ -740,7 +751,7 @@ async fn upload_final_part(
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region, S3};
-    use chacha20poly1305::aead::stream::EncryptorBE32;
+    use aead_stream::EncryptorBE32;
     use indicatif::ProgressBar;
     use mockito::{Matcher, Server};
     use secrecy::SecretString;
@@ -784,7 +795,7 @@ mod tests {
         let key = SecretString::new("0123456789abcdef0123456789abcdef".into());
 
         // Encode: header + framed chunks, exactly as the upload paths produce.
-        let (cipher, nonce) = init_encryption(&key);
+        let (cipher, nonce) = init_encryption(&key).unwrap();
         let mut enc = EncryptorBE32::from_aead(cipher, (&nonce).into());
         let header = create_nonce_header(&nonce);
         let p1 = b"first plaintext chunk".to_vec();
@@ -799,7 +810,7 @@ mod tests {
         // Decode: recover nonce, then unframe + decrypt each chunk in order.
         let nonce2 = parse_nonce_header(&stream[..8]).unwrap();
         assert_eq!(nonce2, nonce);
-        let mut dec = init_decryption(&key, &nonce2);
+        let mut dec = init_decryption(&key, &nonce2).unwrap();
 
         let mut pos = 8;
         let len1 = u32::from_be_bytes(stream[pos..pos + 4].try_into().unwrap()) as usize;
@@ -891,7 +902,7 @@ mod tests {
     #[test]
     fn test_encrypt_chunk() {
         let key = secrecy::SecretString::new("0123456789abcdef0123456789abcdef".into());
-        let (cipher, nonce) = init_encryption(&key);
+        let (cipher, nonce) = init_encryption(&key).unwrap();
         let mut encryptor: EncryptorBE32<ChaCha20Poly1305> =
             EncryptorBE32::from_aead(cipher, (&nonce).into());
 

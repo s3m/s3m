@@ -13,7 +13,7 @@
     clippy::panic
 )]
 
-use chacha20poly1305::aead::stream::EncryptorBE32;
+use aead_stream::EncryptorBE32;
 use s3m::stream::{create_nonce_header, encrypt_chunk, init_encryption};
 use secrecy::SecretString;
 
@@ -31,7 +31,7 @@ fn test_encryption_key_length_validation() {
 
     // Verify key generation produces valid length
     let key = SecretString::new(valid_key.into());
-    let (_cipher, _nonce) = init_encryption(&key);
+    let (_cipher, _nonce) = init_encryption(&key).unwrap();
     // If we get here, the key was valid
 }
 
@@ -39,7 +39,7 @@ fn test_encryption_key_length_validation() {
 fn test_encryption_initialization() {
     // Test that encryption can be properly initialized
     let key = SecretString::new(generate_test_key().into());
-    let (_cipher, nonce) = init_encryption(&key);
+    let (_cipher, nonce) = init_encryption(&key).unwrap();
 
     // Verify nonce is correct length (7 bytes for ChaCha20Poly1305)
     assert_eq!(nonce.len(), 7, "Nonce should be 7 bytes");
@@ -64,7 +64,7 @@ fn test_nonce_header_creation() {
 fn test_encrypt_decrypt_roundtrip() {
     // Test that we can encrypt and decrypt data successfully
     let key = SecretString::new(generate_test_key().into());
-    let (cipher, nonce_bytes) = init_encryption(&key);
+    let (cipher, nonce_bytes) = init_encryption(&key).unwrap();
 
     let plaintext = b"The quick brown fox jumps over the lazy dog";
 
@@ -92,7 +92,7 @@ fn test_encrypt_decrypt_roundtrip() {
 fn test_encrypt_chunk_format() {
     // Test that encrypted chunks have correct format: [len(4)][encrypted_data]
     let key = SecretString::new(generate_test_key().into());
-    let (cipher, nonce_bytes) = init_encryption(&key);
+    let (cipher, nonce_bytes) = init_encryption(&key).unwrap();
     let mut encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
     let data = b"Hello, World!";
@@ -121,7 +121,7 @@ fn test_encryption_preserves_data_size_approximately() {
     // ChaCha20Poly1305 adds 16 bytes (tag) + our 4 byte length prefix = 20 bytes overhead
 
     let key = SecretString::new(generate_test_key().into());
-    let (cipher, nonce_bytes) = init_encryption(&key);
+    let (cipher, nonce_bytes) = init_encryption(&key).unwrap();
     let mut encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
     let plaintext_size = 1024; // 1KB
@@ -143,9 +143,9 @@ fn test_nonce_uniqueness() {
     // Test that nonces are unique across multiple initializations
     let key = SecretString::new(generate_test_key().into());
 
-    let (_cipher1, nonce1) = init_encryption(&key);
-    let (_cipher2, nonce2) = init_encryption(&key);
-    let (_cipher3, nonce3) = init_encryption(&key);
+    let (_cipher1, nonce1) = init_encryption(&key).unwrap();
+    let (_cipher2, nonce2) = init_encryption(&key).unwrap();
+    let (_cipher3, nonce3) = init_encryption(&key).unwrap();
 
     // Nonces should be different (extremely high probability)
     assert_ne!(nonce1, nonce2, "Nonces should be unique");
@@ -157,7 +157,7 @@ fn test_nonce_uniqueness() {
 fn test_empty_data_encryption() {
     // Test that we can encrypt empty data
     let key = SecretString::new(generate_test_key().into());
-    let (cipher, nonce_bytes) = init_encryption(&key);
+    let (cipher, nonce_bytes) = init_encryption(&key).unwrap();
     let mut encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
     let empty_data = b"";
@@ -176,7 +176,7 @@ fn test_empty_data_encryption() {
 fn test_large_chunk_encryption() {
     // Test encrypting a larger chunk (1MB)
     let key = SecretString::new(generate_test_key().into());
-    let (cipher, nonce_bytes) = init_encryption(&key);
+    let (cipher, nonce_bytes) = init_encryption(&key).unwrap();
     let mut encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
     let large_data = vec![0xAB; 1024 * 1024]; // 1MB of 0xAB
@@ -214,7 +214,7 @@ fn test_encryption_key_from_different_sources() {
         assert_eq!(key.len(), 32, "Key should be 32 characters");
 
         let secret_key = SecretString::new(key.to_string().into());
-        let (cipher, nonce) = init_encryption(&secret_key);
+        let (cipher, nonce) = init_encryption(&secret_key).unwrap();
 
         assert_eq!(nonce.len(), 7, "Nonce should be 7 bytes for key: {}", key);
 

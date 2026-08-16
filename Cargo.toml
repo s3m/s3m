@@ -1,6 +1,6 @@
 [package]
 name = "s3m"
-version = "0.19.1"
+version.workspace = true
 authors = ["Nicolas Embriz <nbari@tequila.io>"]
 description = "CLI for streams of data in S3 buckets"
 documentation = "https://github.com/s3m/s3m/blob/master/README.md"
@@ -18,9 +18,13 @@ workspace = true
 [workspace]
 members = ["crates/s3m-core"]
 
-# s3m (bin) and s3m-core (lib) are versioned independently — each bumps only
-# when its own code changes. The s3m-core dependency below pins the library
-# version the binary builds against.
+# s3m (bin) and s3m-core (lib) share a single aligned version, defined once here
+# and inherited by both crates via `version.workspace = true`. When bumping, also
+# update the s3m-core dependency pin below (a dependency's version requirement
+# cannot be inherited from the workspace).
+[workspace.package]
+version = "0.20.0"
+
 [workspace.lints.rust]
 warnings = "deny"
 
@@ -51,12 +55,13 @@ needless_collect = "deny"
 large_stack_arrays = "deny"
 
 [dependencies]
-s3m-core = { path = "crates/s3m-core", version = "0.19.0" }
+s3m-core = { path = "crates/s3m-core", version = "0.20.0" }
+aead-stream = { version = "0.6.0", features = ["alloc"] }
 anyhow = "1"
 blake3 = "1"
 bytes = "1"
 bytesize = "2"
-chacha20poly1305 = { version = "0.10.1", features = ["stream"] }
+chacha20poly1305 = "0.11.0"
 chrono = "0.4"
 clap = { version = "4", features = ["env", "string"] }
 colored = "3"
@@ -105,7 +110,7 @@ md5 = "0.8"
 mockito = "1.7.2"
 ring = "0.17"
 rkyv = { version = "0.8", features = ["bytecheck"] }
-testcontainers = "0.27"
+testcontainers = "0.28"
 tokio-util = { version = "0.7", features = ["codec"] }
 
 [[bench]]
