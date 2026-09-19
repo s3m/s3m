@@ -1,6 +1,6 @@
-//! End-to-end binary tests for s3m against `MinIO`
+//! End-to-end binary tests for s3m against `RustFS`
 //!
-//! These tests compile and run the actual s3m binary against a real `MinIO`
+//! These tests compile and run the actual s3m binary against a real `RustFS`
 //! container, providing comprehensive integration testing of the CLI.
 //!
 //! Run with:
@@ -74,7 +74,7 @@ hosts:
     config_file
 }
 
-/// `MinIO` test context - either external or testcontainer-based
+/// S3 test context - either external or `RustFS` testcontainer-based
 enum MinioContext {
     External {
         endpoint: String,
@@ -85,11 +85,11 @@ enum MinioContext {
 }
 
 impl MinioContext {
-    /// Get or start `MinIO` - uses external if `MINIO_ENDPOINT` is set, otherwise starts container
+    /// Use the configured endpoint or start a `RustFS` container.
     async fn get_or_start() -> Self {
         match minio_runtime::resolve_minio_runtime(MINIO_ROOT_USER, MINIO_ROOT_PASSWORD) {
             MinioRuntime::External(config) => {
-                println!("Using external MinIO at {}", config.endpoint);
+                println!("Using external S3 endpoint at {}", config.endpoint);
 
                 MinioContext::External {
                     endpoint: config.endpoint,
@@ -102,9 +102,9 @@ impl MinioContext {
                     println!("Auto-configured Podman socket at {}", socket.display());
                 }
 
-                println!("Starting MinIO testcontainer");
+                println!("Starting RustFS testcontainer");
                 let container = MinioContainer::start().await;
-                container.wait_for_ready().await.expect("MinIO ready");
+                container.wait_for_ready().await.expect("RustFS ready");
                 MinioContext::Container(Box::new(container))
             }
         }
@@ -180,7 +180,7 @@ fn get_s3m_binary() -> PathBuf {
     path
 }
 
-/// Run s3m command with `MinIO` context - creates config file automatically
+/// Run s3m command with the S3 test context - creates a config file automatically.
 fn run_s3m_with_minio(minio: &MinioContext, args: &[&str]) -> std::process::Output {
     let config_file = create_config_file(minio.endpoint(), minio.access_key(), minio.secret_key());
     let config_path = config_file.path().to_str().expect("Invalid config path");

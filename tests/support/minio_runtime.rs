@@ -16,7 +16,7 @@ pub enum MinioRuntime {
 }
 
 #[allow(dead_code)]
-pub const STARTUP_HINT: &str = "Set MINIO_ENDPOINT/MINIO_ACCESS_KEY/MINIO_SECRET_KEY to use an external MinIO, or start a Docker/Podman socket before running the e2e suite.";
+pub const STARTUP_HINT: &str = "Set MINIO_ENDPOINT/MINIO_ACCESS_KEY/MINIO_SECRET_KEY to use an external S3 service, or start a Docker/Podman socket for the RustFS testcontainer before running the e2e suite.";
 
 #[allow(dead_code)]
 static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));

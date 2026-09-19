@@ -23,7 +23,7 @@ members = ["crates/s3m-core"]
 # update the s3m-core dependency pin below (a dependency's version requirement
 # cannot be inherited from the workspace).
 [workspace.package]
-version = "0.20.0"
+version = "0.20.1"
 
 [workspace.lints.rust]
 warnings = "deny"
@@ -55,7 +55,7 @@ needless_collect = "deny"
 large_stack_arrays = "deny"
 
 [dependencies]
-s3m-core = { path = "crates/s3m-core", version = "0.20.0" }
+s3m-core = { path = "crates/s3m-core", version = "0.20.1" }
 aead-stream = { version = "0.6.0", features = ["alloc"] }
 anyhow = "1"
 blake3 = "1"
@@ -66,7 +66,7 @@ chrono = "0.4"
 clap = { version = "4", features = ["env", "string"] }
 colored = "3"
 crc32c = "0.6"
-dirs = "6"
+dirs = "7"
 env_logger = "0.11"
 futures = "0.3"
 http = "1"
@@ -91,7 +91,7 @@ tokio = { version = "1", features = [
     "time",
 ] }
 url = "2.5"
-zstd = "0.13"
+zstd = "0.14"
 
 [package.metadata.generate-rpm]
 assets = [

@@ -17,20 +17,20 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      - name: Pull MinIO Docker image
-        run: docker pull minio/minio:latest
+      - name: Pull RustFS Docker image
+        run: docker pull ghcr.io/rustfs/rustfs:1.0.0
 
-      - name: Start MinIO for integration coverage
+      - name: Start RustFS for integration coverage
         run: |
-          docker rm -f s3m-coverage-minio 2>/dev/null || true
-          docker run -d --name s3m-coverage-minio \
+          docker rm -f s3m-coverage-rustfs 2>/dev/null || true
+          docker run -d --name s3m-coverage-rustfs \
             -p 9000:9000 \
             -p 9001:9001 \
-            -e MINIO_ROOT_USER=minioadmin \
-            -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:latest server /data --console-address ":9001"
+            -e RUSTFS_ACCESS_KEY=minioadmin \
+            -e RUSTFS_SECRET_KEY=minioadmin \
+            ghcr.io/rustfs/rustfs:1.0.0
 
-      - name: Wait for MinIO readiness
+      - name: Wait for RustFS readiness
         run: |
           set -euo pipefail
           for _ in {1..30}; do
@@ -39,8 +39,8 @@ jobs:
             fi
             sleep 1
           done
-          echo "MinIO did not become ready in time" >&2
-          docker logs s3m-coverage-minio || true
+          echo "RustFS did not become ready in time" >&2
+          docker logs s3m-coverage-rustfs || true
           exit 1
 
       - name: Run unit tests with coverage
@@ -71,11 +71,9 @@ jobs:
         run: grcov . --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing
           --ignore '../**' --ignore '/*' -o coverage.lcov
 
-      - name: Stop MinIO
+      - name: Stop RustFS
         if: always()
-        run: |
-          docker ps -aq | xargs -r docker stop
-          docker ps -aq | xargs -r docker rm
+        run: docker rm -f s3m-coverage-rustfs 2>/dev/null || true
 
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v7

@@ -780,7 +780,7 @@ async fn test_e2e_concurrent_uploads() {
             },
             MinioContext::Container(_) => {
                 // For container, we can't clone easily, so skip concurrent test
-                println!("Skipping concurrent test for container-based MinIO");
+                println!("Skipping concurrent test for container-based RustFS");
                 return;
             }
         };

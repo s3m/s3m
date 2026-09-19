@@ -2,7 +2,7 @@
 //! drive S3 Object Lock end-to-end through the **public `s3m_core` API alone** —
 //! no CLI types. Every call below goes through `s3m_core::*`.
 //!
-//! The `MinIO` container harness only provides an endpoint + credentials; the S3
+//! The `RustFS` container harness only provides an endpoint + credentials; the S3
 //! client and all Object Lock operations are built purely from `s3m_core`.
 
 #![allow(
@@ -23,6 +23,7 @@ use s3m_core::{
     },
 };
 use secrecy::SecretString;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn client(minio: &MinioContext, bucket: &str) -> S3 {
     let credentials = Credentials::new(
@@ -36,8 +37,12 @@ fn client(minio: &MinioContext, bucket: &str) -> S3 {
 #[tokio::test]
 async fn test_object_lock_via_public_api() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "api-objlock";
-    let s3 = client(&minio, bucket);
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time must be after the Unix epoch")
+        .as_nanos();
+    let bucket = format!("api-objlock-{}-{unique}", std::process::id());
+    let s3 = client(&minio, &bucket);
 
     // 1. Enable Object Lock at bucket creation (also enables versioning).
     CreateBucket::new("private", true)

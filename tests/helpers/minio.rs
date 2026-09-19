@@ -1,12 +1,12 @@
-//! `MinIO` test helper for integration tests
+//! `RustFS` test helper for integration tests
 //!
-//! Provides utilities to spin up a `MinIO` container for S3 API testing.
+//! Provides utilities to spin up a `RustFS` container for S3 API testing.
 //! Supports both Docker and Podman container runtimes.
 //!
 //! ## Usage with Podman
 //!
 //! The test harness auto-detects common Podman socket paths. You can also
-//! point tests at an already-running external `MinIO` via:
+//! point tests at an already-running external S3-compatible service via:
 //! ```bash
 //! export MINIO_ENDPOINT=http://127.0.0.1:9000
 //! export MINIO_ACCESS_KEY=minioadmin
@@ -33,11 +33,11 @@ use testcontainers::{
     runners::AsyncRunner,
 };
 
-/// Default `MinIO` credentials for testing
+/// Default `RustFS` credentials for testing
 pub const MINIO_ROOT_USER: &str = "minioadmin";
 pub const MINIO_ROOT_PASSWORD: &str = "minioadmin";
 
-/// `MinIO` test fixture that manages container lifecycle
+/// `RustFS` test fixture that manages container lifecycle
 pub struct MinioContainer {
     #[allow(dead_code)]
     container: ContainerAsync<GenericImage>,
@@ -47,22 +47,21 @@ pub struct MinioContainer {
 }
 
 impl MinioContainer {
-    /// Start a new `MinIO` container
+    /// Start a new `RustFS` container
     ///
     /// This will:
-    /// 1. Pull the `MinIO` image (if not cached)
+    /// 1. Pull the `RustFS` image (if not cached)
     /// 2. Start the container with exposed ports
-    /// 3. Wait for `MinIO` to be ready
+    /// 3. Wait for `RustFS` to be ready
     ///
     /// # Returns
     ///
     /// A `MinioContainer` instance with connection details
     pub async fn start() -> Self {
-        let image = GenericImage::new("minio/minio", "latest")
-            .with_wait_for(WaitFor::message_on_stderr("MinIO Object Storage Server"))
-            .with_env_var("MINIO_ROOT_USER", MINIO_ROOT_USER)
-            .with_env_var("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
-            .with_cmd(vec!["server", "/data", "--console-address", ":9001"]);
+        let image = GenericImage::new("ghcr.io/rustfs/rustfs", "1.0.0")
+            .with_wait_for(WaitFor::seconds(1))
+            .with_env_var("RUSTFS_ACCESS_KEY", MINIO_ROOT_USER)
+            .with_env_var("RUSTFS_SECRET_KEY", MINIO_ROOT_PASSWORD);
 
         let container = image
             .start()
@@ -72,11 +71,11 @@ impl MinioContainer {
         let port = container
             .get_host_port_ipv4(ContainerPort::Tcp(9000))
             .await
-            .expect("Failed to get MinIO port");
+            .expect("Failed to get RustFS port");
 
         let endpoint = format!("http://127.0.0.1:{}", port);
 
-        // Give MinIO a moment to fully initialize
+        // Give RustFS a moment to fully initialize
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
         Self {
@@ -87,7 +86,7 @@ impl MinioContainer {
         }
     }
 
-    /// Create an S3 client configured for this `MinIO` instance
+    /// Create an S3 client configured for this `RustFS` instance
     ///
     /// # Arguments
     ///
@@ -95,7 +94,7 @@ impl MinioContainer {
     ///
     /// # Returns
     ///
-    /// An `S3` client configured to connect to the `MinIO` container
+    /// An `S3` client configured to connect to the `RustFS` container
     #[allow(dead_code)]
     pub fn create_s3_client(&self, bucket: Option<String>) -> S3 {
         let credentials = Credentials::new(
@@ -111,12 +110,12 @@ impl MinioContainer {
         S3::new(&credentials, &region, bucket, false)
     }
 
-    /// Get the `MinIO` endpoint URL
+    /// Get the `RustFS` endpoint URL
     pub fn endpoint(&self) -> &str {
         &self.endpoint
     }
 
-    /// Create a test bucket in `MinIO`
+    /// Create a test bucket in `RustFS`
     ///
     /// # Arguments
     ///
@@ -131,7 +130,7 @@ impl MinioContainer {
         Ok(())
     }
 
-    /// List all buckets in `MinIO`
+    /// List all buckets in `RustFS`
     #[allow(dead_code)]
     pub async fn list_buckets(&self) -> anyhow::Result<Vec<String>> {
         let s3 = self.create_s3_client(None);
@@ -144,7 +143,7 @@ impl MinioContainer {
             .collect())
     }
 
-    /// Wait for `MinIO` to be ready to accept connections
+    /// Wait for `RustFS` to be ready to accept connections
     ///
     /// This is useful for ensuring the container is fully started
     /// before running tests.
@@ -169,7 +168,7 @@ impl MinioContainer {
         }
 
         Err(anyhow::anyhow!(
-            "MinIO did not become ready after {} attempts",
+            "RustFS did not become ready after {} attempts",
             max_attempts
         ))
     }

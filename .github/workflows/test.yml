@@ -76,8 +76,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: test
-        # Keep this list free of MinIO/container-backed tests. Those run in
-        # containers.yml on Ubuntu, where Docker and an explicit MinIO endpoint
+        # Keep this list free of RustFS/container-backed tests. Those run in
+        # containers.yml on Ubuntu, where Docker and an explicit S3 endpoint
         # are available. In particular, integration_streams includes a live
         # multipart resume path and is intentionally excluded here.
         run: >-

@@ -1,3 +1,6 @@
+## 0.20.1 (2026-09-19)
+* Updated dependencies and switched integration tests from MinIO to RustFS.
+
 ## 0.20.0 🔒 (2026-08-16)
 * **Nonce hardening (code-scanning alert #9)**: the streaming-encryption nonce is now generated directly as a CSPRNG-random `[u8; 7]` (`rng().random()`) instead of zero-initializing a buffer and overwriting it with `fill_bytes`. Behavior is unchanged — the nonce was already random — but the refactor clears a `rust/hard-coded-cryptographic-value` false positive that CodeQL raised because it did not model the in-place `&mut` fill.
 * **Dependencies — upgraded to the latest set, including semver-incompatible majors** (`cargo upgrade --incompatible` + `cargo update`):

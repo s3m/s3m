@@ -32,7 +32,7 @@ use std::process::{Command, Output, Stdio};
 /// Far-future retain-until date so the test is not time-sensitive.
 const FUTURE_DATE: &str = "2099-01-01T00:00:00Z";
 
-/// Run `s3m` against the test `MinIO`, feeding `stdin` (for `--pipe` uploads).
+/// Run `s3m` against the test S3 service, feeding `stdin` (for `--pipe` uploads).
 fn run_with_stdin(minio: &MinioContext, args: &[&str], stdin: &[u8]) -> Output {
     let cfg = create_config_file(minio.endpoint(), minio.access_key(), minio.secret_key());
     let cfg_path = cfg.path().to_str().expect("config path");

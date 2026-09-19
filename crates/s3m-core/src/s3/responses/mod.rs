@@ -19,7 +19,7 @@ where
 }
 
 /// Owner information for the object
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 pub struct Owner {
     #[serde(rename = "DisplayName")]
     /// Object owner's name.
@@ -154,6 +154,7 @@ pub struct ErrorResponse {
     #[serde(rename = "Resource")]
     pub resource: Option<String>,
     #[serde(rename = "RequestId")]
+    #[serde(default)]
     pub request_id: String,
 }
 
@@ -334,6 +335,7 @@ pub struct Version {
     pub checksum_type: Option<String>,
 
     pub size: u64,
+    #[serde(default)]
     pub owner: Owner,
     pub storage_class: String,
 }
@@ -346,6 +348,7 @@ pub struct DeleteMarker {
     pub is_latest: bool,
     #[serde(rename = "LastModified")]
     pub last_modified: String,
+    #[serde(default)]
     pub owner: Owner,
 }
 
@@ -497,5 +500,26 @@ DeleteMarker: []
         assert!(!parsed.is_truncated);
         assert_eq!(parsed.versions.len(), 0);
         assert_eq!(parsed.delete_markers.len(), 0);
+    }
+
+    #[test]
+    fn test_error_response_without_request_id() {
+        let xml = r"<Error><Code>InvalidRequest</Code><Message>bad request</Message></Error>";
+        let parsed: ErrorResponse = quick_xml::de::from_str(xml).unwrap();
+
+        assert_eq!(parsed.code, "InvalidRequest");
+        assert_eq!(parsed.message, "bad request");
+        assert!(parsed.request_id.is_empty());
+    }
+
+    #[test]
+    fn test_list_versions_without_owner() {
+        let xml = r"<ListVersionsResult><Name>bucket</Name><Prefix></Prefix><KeyMarker></KeyMarker><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated><Version><Key>key</Key><VersionId>version</VersionId><IsLatest>true</IsLatest><LastModified>2026-09-19T00:00:00Z</LastModified><ETag>etag</ETag><Size>1</Size><StorageClass>STANDARD</StorageClass></Version><DeleteMarker><Key>deleted</Key><VersionId>marker</VersionId><IsLatest>false</IsLatest><LastModified>2026-09-19T00:00:00Z</LastModified></DeleteMarker></ListVersionsResult>";
+        let parsed: ListVersionsResult = quick_xml::de::from_str(xml).unwrap();
+
+        assert_eq!(parsed.versions.len(), 1);
+        assert!(parsed.versions[0].owner.id.is_empty());
+        assert_eq!(parsed.delete_markers.len(), 1);
+        assert!(parsed.delete_markers[0].owner.id.is_empty());
     }
 }
