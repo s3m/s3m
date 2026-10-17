@@ -403,7 +403,6 @@ pub struct ObjectLegalHold {
 )]
 mod tests {
     use super::*;
-    use serde_yaml_ng as serde_yaml;
 
     #[derive(Debug, Deserialize, PartialEq)]
     struct TestStruct {
@@ -414,21 +413,21 @@ mod tests {
     #[test]
     fn test_bool_deserializer_true() {
         let yaml = "value: \"true\"";
-        let result: TestStruct = serde_yaml::from_str(yaml).unwrap();
+        let result: TestStruct = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(result, TestStruct { value: true });
     }
 
     #[test]
     fn test_bool_deserializer_false() {
         let yaml = "value: \"false\"";
-        let result: TestStruct = serde_yaml::from_str(yaml).unwrap();
+        let result: TestStruct = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(result, TestStruct { value: false });
     }
 
     #[test]
     fn test_bool_deserializer_invalid() {
         let yaml = "value: \"yes\"";
-        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        let result: Result<TestStruct, _> = serde_saphyr::from_str(yaml);
         assert!(result.is_err());
         if let Err(e) = result {
             let msg = e.to_string();
@@ -453,7 +452,7 @@ Contents: []
 CommonPrefixes: []
 NextContinuationToken: null
 "#;
-        let parsed: ListBucketResult = serde_yaml::from_str(yaml).unwrap();
+        let parsed: ListBucketResult = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(parsed.name, "test-bucket");
         assert!(!parsed.is_truncated);
         assert_eq!(parsed.max_keys, 1000);
@@ -476,7 +475,7 @@ Upload: []
 CommonPrefixes: []
 EncodingType: null
 "#;
-        let parsed: ListMultipartUploadsResult = serde_yaml::from_str(yaml).unwrap();
+        let parsed: ListMultipartUploadsResult = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(parsed.bucket, "example-bucket");
         assert!(parsed.is_truncated);
         assert_eq!(parsed.max_uploads, 2);
@@ -494,7 +493,7 @@ IsTruncated: false
 Version: []
 DeleteMarker: []
 ";
-        let parsed: ListVersionsResult = serde_yaml::from_str(yaml).unwrap();
+        let parsed: ListVersionsResult = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(parsed.name, "versioned-bucket");
         assert_eq!(parsed.key_marker, "start");
         assert!(!parsed.is_truncated);
@@ -509,7 +508,7 @@ DeleteMarker: []
 
         assert_eq!(parsed.code, "InvalidRequest");
         assert_eq!(parsed.message, "bad request");
-        assert!(parsed.request_id.is_empty());
+        assert_eq!(parsed.request_id, "");
     }
 
     #[test]
@@ -518,8 +517,8 @@ DeleteMarker: []
         let parsed: ListVersionsResult = quick_xml::de::from_str(xml).unwrap();
 
         assert_eq!(parsed.versions.len(), 1);
-        assert!(parsed.versions[0].owner.id.is_empty());
+        assert_eq!(parsed.versions[0].owner.id, "");
         assert_eq!(parsed.delete_markers.len(), 1);
-        assert!(parsed.delete_markers[0].owner.id.is_empty());
+        assert_eq!(parsed.delete_markers[0].owner.id, "");
     }
 }

@@ -715,7 +715,7 @@ mod tests {
         .unwrap();
 
         let summary = clean_streams_state(dir.path()).unwrap();
-        assert!(summary.removed.is_empty());
+        assert_eq!(summary.removed, Vec::<String>::new());
         assert_eq!(summary.kept, vec!["good".to_string()]);
     }
 

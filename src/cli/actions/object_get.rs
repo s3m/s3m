@@ -646,12 +646,9 @@ mod tests {
         for test in tests {
             match get_dest(test.dest, test.file_name) {
                 Ok(res) => {
-                    if test.error_expected {
-                        // If an error was not expected but the test passed, fail the test
-                        panic!("Expected an error, but got: {res:?}");
-                    } else {
-                        assert_eq!(res, test.expected.unwrap());
-                    }
+                    // If an error was expected but the call succeeded, fail the test
+                    assert!(!test.error_expected, "Expected an error, but got: {res:?}");
+                    assert_eq!(res, test.expected.unwrap());
                 }
                 Err(_) => {
                     // If an error was not expected but the test failed, fail the test

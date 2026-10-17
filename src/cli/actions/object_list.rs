@@ -481,7 +481,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(keys.is_empty());
+        assert_eq!(keys, Vec::<String>::new());
     }
 
     #[tokio::test]

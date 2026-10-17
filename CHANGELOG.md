@@ -1,3 +1,13 @@
+## 0.20.2 (unreleased)
+* **Security audit**: updated `rustls` to 0.23.46 (RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, RUSTSEC-2026-0349) and replaced `serde_yaml_ng` with `serde-saphyr`, dropping the unmaintained `unsafe-libyaml` (RUSTSEC-2024-0449).
+* **Config parsing with `serde-saphyr`**:
+  * **BREAKING**: unquoted `~` and `null` (any case) in `access_key`, `secret_key`, `prefix` or `suffix` are now YAML nulls and parse as empty strings; before they were the literal text. Quote the value (`suffix: "null"`) to keep the literal.
+  * Duplicate keys in any mapping, such as a repeated host or bucket name, are now rejected instead of silently using the last entry.
+  * YAML 1.1 booleans (`yes`/`no`, `on`/`off`, `y`/`n`, any case) and quoted `"true"`/`"false"` are now accepted for `compress`, as are YAML merge keys (`<<`).
+  * Parse errors name the field and report the line and column (`hosts.s3.compress: invalid boolean at line 6, column 15`) without echoing the config line, so `secret_key` values never appear in error output.
+  * Empty values such as `prefix:` or `access_key:` still parse as empty strings.
+* Stream `state.yml` files written by older versions still load, so interrupted uploads can be resumed after upgrading.
+
 ## 0.20.1 (2026-09-19)
 * Updated dependencies and switched integration tests from MinIO to RustFS.
 

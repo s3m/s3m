@@ -570,12 +570,10 @@ fn test_streams_show_json_broken_state() {
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["id"], "broken-id");
     assert_eq!(stdout["status"], "broken");
-    assert!(
-        stdout["error"]
-            .as_str()
-            .unwrap()
-            .contains("did not find expected")
-    );
+    let error = stdout["error"].as_str().unwrap();
+    assert!(error.contains("unclosed bracket"), "{error}");
+    // single line, without a source snippet
+    assert!(!error.contains('\n'), "{error}");
 }
 
 #[test]

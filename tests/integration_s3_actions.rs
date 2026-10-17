@@ -21,6 +21,7 @@ use s3m::{
             ListMultipartUploads, ListObjectVersions, ListObjectsV2, ObjectIdentifier,
             PutObjectAcl,
         },
+        responses::DeleteError,
     },
 };
 use secrecy::SecretString;
@@ -236,11 +237,11 @@ async fn test_delete_actions_request_success_and_error() {
         .unwrap_err()
         .to_string();
 
-    assert!(abort.is_empty());
-    assert!(delete_bucket.is_empty());
+    assert_eq!(abort, "");
+    assert_eq!(delete_bucket, "");
     assert!(!delete_object.delete_marker && delete_object.version_id.is_none());
     assert_eq!(delete_objects.deleted.len(), 2);
-    assert!(delete_objects.errors.is_empty());
+    assert_eq!(delete_objects.errors, Vec::<DeleteError>::new());
     assert!(abort_error.contains("HTTP Status Code: 404 Not Found"));
     assert!(abort_error.contains("Code: NoSuchUpload"));
 }
@@ -1268,7 +1269,7 @@ async fn test_du_grouped_empty_result() {
     list_objects.assert_async().await;
     match report {
         object_du::UsageReport::ByDay { days, total } => {
-            assert!(days.is_empty());
+            assert_eq!(days, Vec::<object_du::DailyUsage>::new());
             assert_eq!(total.objects, 0);
             assert_eq!(total.bytes, 0);
         }

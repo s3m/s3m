@@ -2,7 +2,6 @@ use crate::s3::Region;
 use anyhow::{Context, Result};
 use secrecy::SecretString;
 use serde::{Deserialize, Deserializer, de::Error};
-use serde_yaml_ng as serde_yaml;
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
 
 const fn default_monitor_age() -> u64 {
@@ -50,6 +49,16 @@ fn parse_monitor_age_text(value: &str) -> std::result::Result<u64, String> {
         .ok_or_else(|| format!("Invalid monitor age '{value}'. Value is too large"))
 }
 
+// An empty value (`prefix:`), `~` or `null` is a YAML null; treat it like an
+// omitted field. Quote the value (`"null"`) to keep it as a literal string.
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 fn deserialize_monitor_age<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
 where
     D: Deserializer<'de>,
@@ -57,6 +66,26 @@ where
     match MonitorAgeValue::deserialize(deserializer)? {
         MonitorAgeValue::Integer(seconds) => Ok(seconds),
         MonitorAgeValue::Text(value) => parse_monitor_age_text(&value).map_err(D::Error::custom),
+    }
+}
+
+// Name the failing field (`hosts.s3.compress: ...`) and replace serde-saphyr's
+// duplicate-key hint, which points at an option the CLI does not expose.
+fn config_parse_error(err: &serde_saphyr::Error, path: &str) -> anyhow::Error {
+    match err {
+        serde_saphyr::Error::DuplicateMappingKey { key, location } => {
+            let key = key
+                .as_deref()
+                .map(|k| format!(" `{k}`"))
+                .unwrap_or_default();
+            anyhow::anyhow!(
+                "duplicate key{key} at line {}, column {}",
+                location.line(),
+                location.column()
+            )
+        }
+        _ if path.is_empty() || path == "." => anyhow::anyhow!("{err}"),
+        _ => anyhow::anyhow!("{path}: {err}"),
     }
 }
 
@@ -68,10 +97,10 @@ pub struct Config {
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct MonitorRule {
     // Optional: when omitted (or empty) the rule scans the whole bucket.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub prefix: String,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub suffix: String,
 
     #[serde(
@@ -89,10 +118,10 @@ pub struct Host {
     pub endpoint: Option<String>,
     pub region: Option<String>,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub access_key: String,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub secret_key: SecretString,
 
     pub bucket: Option<String>,
@@ -112,7 +141,18 @@ impl Config {
     pub fn new(config_path: PathBuf) -> Result<Self> {
         let file = File::open(config_path)?;
 
-        let config: Self = serde_yaml::from_reader(file).context("unable to parse config file")?;
+        // No source snippets: they would echo config lines, secret_key included.
+        let options = serde_saphyr::options! { with_snippet: false };
+        let mut path = String::new();
+        let config: Self =
+            serde_saphyr::with_deserializer_from_reader_with_options(file, options, |de| {
+                serde_path_to_error::deserialize(de).map_err(|err| {
+                    path = err.path().to_string();
+                    err.into_inner()
+                })
+            })
+            .map_err(|err| config_parse_error(&err, &path))
+            .context("unable to parse config file")?;
 
         Ok(config)
     }
@@ -266,6 +306,20 @@ hosts:
       bucket_A:
         - suffix: .sql
           age: 12h";
+
+    const CONF_MONITOR_EMPTY_VALUES: &str = r#"---
+hosts:
+  s3:
+    endpoint: https://s3.example.test
+    access_key:
+    secret_key: ~
+    buckets:
+      bucket_A:
+        - prefix:
+          suffix: null
+          age: 1h
+        - prefix: "~"
+          suffix: "null""#;
 
     #[test]
     fn test_config_get_host() {
@@ -461,6 +515,117 @@ hosts:
         assert_eq!(rule.prefix, "");
         assert_eq!(rule.suffix, ".sql");
         assert_eq!(rule.age, 43_200);
+    }
+
+    #[test]
+    fn test_config_empty_values_as_default() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file
+            .write_all(CONF_MONITOR_EMPTY_VALUES.as_bytes())
+            .unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap();
+        let host = c.get_host("s3").unwrap();
+        let rule = &host.buckets["bucket_A"][0];
+        let quoted = &host.buckets["bucket_A"][1];
+
+        // empty, `~` and `null` parse as null and fall back to the field defaults
+        assert_eq!(host.access_key, "");
+        assert_eq!(host.secret_key.expose_secret(), "");
+        assert_eq!(rule.prefix, "");
+        assert_eq!(rule.suffix, "");
+        assert_eq!(rule.age, 3_600);
+
+        // quoted values stay literal strings
+        assert_eq!(quoted.prefix, "~");
+        assert_eq!(quoted.suffix, "null");
+    }
+
+    #[test]
+    fn test_config_parse_error_hides_secret_key() {
+        let base =
+            "---\nhosts:\n  s3:\n    endpoint: https://s3.example.test\n    access_key: XXX\n";
+        let broken = [
+            // unclosed quote
+            "    secret_key: \"TOPSECRET\n",
+            // unclosed flow sequence
+            "    secret_key: [TOPSECRET\n",
+            // mapping where a string is expected
+            "    secret_key: {nested: TOPSECRET}\n",
+            // bad indentation right after the secret
+            "    secret_key: TOPSECRET\n      bucket: b\n",
+            // invalid value on the line after the secret
+            "    secret_key: TOPSECRET\n    compress: maybe\n",
+        ];
+
+        for tail in broken {
+            let mut tmp_file = NamedTempFile::new().unwrap();
+            tmp_file
+                .write_all(format!("{base}{tail}").as_bytes())
+                .unwrap();
+            let err = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap_err();
+
+            for rendered in [format!("{err:#}"), format!("{err:?}")] {
+                assert!(rendered.contains("unable to parse config file"));
+                assert!(
+                    !rendered.contains("TOPSECRET"),
+                    "secret leaked for {tail:?}: {rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_config_duplicate_keys_are_rejected() {
+        let duplicated = [
+            (
+                "---\nhosts:\n  s3:\n    endpoint: https://one.example.test\n  s3:\n    endpoint: https://two.example.test\n",
+                "duplicate key `s3` at line 5, column 3",
+            ),
+            (
+                "---\nhosts:\n  s3:\n    endpoint: https://s3.example.test\n    buckets:\n      bucket_A:\n        - prefix: a\n      bucket_A:\n        - prefix: b\n",
+                "duplicate key `bucket_A` at line 8, column 7",
+            ),
+            (
+                "---\nhosts:\n  s3:\n    access_key: a\n    secret_key: s\n    access_key: b\n",
+                "duplicate key `access_key` at line 6, column 5",
+            ),
+        ];
+
+        for (yaml, expected) in duplicated {
+            let mut tmp_file = NamedTempFile::new().unwrap();
+            tmp_file.write_all(yaml.as_bytes()).unwrap();
+            let err = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap_err();
+            let rendered = format!("{err:#}");
+
+            assert!(rendered.contains(expected), "{rendered}");
+            // serde-saphyr's hint names an option the CLI does not expose
+            assert!(!rendered.contains("DuplicateKeyPolicy"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn test_config_parse_error_names_field() {
+        let base = "---\nhosts:\n  s3:\n    endpoint: https://s3.example.test\n";
+        let invalid = [
+            (
+                "    compress: maybe\n",
+                "hosts.s3.compress: invalid boolean at line 5, column 15",
+            ),
+            (
+                "    buckets:\n      bucket_A:\n        - prefix: logs/\n          age: 30x\n",
+                "hosts.s3.buckets.bucket_A[0].age:",
+            ),
+        ];
+
+        for (tail, expected) in invalid {
+            let mut tmp_file = NamedTempFile::new().unwrap();
+            tmp_file
+                .write_all(format!("{base}{tail}").as_bytes())
+                .unwrap();
+            let err = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap_err();
+
+            assert!(format!("{err:#}").contains(expected), "{err:#}");
+        }
     }
 
     #[test]

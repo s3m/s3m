@@ -238,7 +238,7 @@ mod tests {
                 },
             ]
         );
-        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.errors, Vec::<DeleteError>::new());
     }
 
     #[test]

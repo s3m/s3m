@@ -5,7 +5,6 @@ use crate::stream::{
 use anyhow::{Context, Result};
 use rkyv::{from_bytes, rancor::Error as RkyvError};
 use serde::{Deserialize, Serialize};
-use serde_yaml_ng as serde_yaml;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -123,12 +122,11 @@ pub fn write_metadata(base_path: &Path, metadata: &StreamMetadata) -> Result<()>
     let state_dir = state_dir(base_path, &metadata.id);
     fs::create_dir_all(&state_dir)?;
     let path = state_dir.join(STATE_FILE);
-    let file = fs::File::create(path)?;
     let mut metadata = metadata.clone();
     if metadata.updated_at.is_none() {
         metadata.updated_at = Some(metadata.created_at);
     }
-    serde_yaml::to_writer(file, &metadata)?;
+    fs::write(path, serde_saphyr::to_string(&metadata)?)?;
     Ok(())
 }
 
@@ -142,8 +140,7 @@ pub fn touch_metadata(state_dir: &Path) -> Result<()> {
 
     let mut metadata = load_metadata(state_dir)?;
     metadata.updated_at = Some(now_secs());
-    let file = fs::File::create(path)?;
-    serde_yaml::to_writer(file, &metadata)?;
+    fs::write(path, serde_saphyr::to_string(&metadata)?)?;
     Ok(())
 }
 
@@ -316,7 +313,9 @@ fn infer_db_key(db: &sled::Db) -> Option<String> {
 
 fn load_metadata(state_dir: &Path) -> Result<StreamMetadata> {
     let file = fs::File::open(state_dir.join(STATE_FILE))?;
-    Ok(serde_yaml::from_reader(file)?)
+    // Keep errors single-line; they are shown in stream listings.
+    let options = serde_saphyr::options! { with_snippet: false };
+    Ok(serde_saphyr::from_reader_with_options(file, options)?)
 }
 
 fn directory_timestamp(state_dir: &Path) -> Option<u64> {
@@ -493,8 +492,133 @@ mod tests {
                 .error
                 .as_deref()
                 .unwrap()
-                .contains("did not find expected")
+                .contains("unclosed bracket")
         );
+        // stream listings show the error on one line, without a source snippet
+        assert!(!entries[0].error.as_deref().unwrap().contains('\n'));
+    }
+
+    #[test]
+    fn test_scan_empty_state_is_broken() {
+        let dir = tempdir().unwrap();
+        let state_dir = state_dir(dir.path(), "empty");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(state_dir.join(STATE_FILE), "").unwrap();
+
+        let entries = scan_streams(dir.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, StreamStatus::Broken);
+        assert!(entries[0].metadata.is_none());
+        assert!(entries[0].error.is_some());
+    }
+
+    #[test]
+    fn test_load_metadata_written_by_serde_yaml_ng() {
+        // state.yml exactly as written by s3m <= 0.20.1 (serde_yaml_ng), so
+        // streams saved by older versions can still be resumed
+        let dir = tempdir().unwrap();
+        let state_dir = state_dir(dir.path(), "stream-1");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(
+            state_dir.join(STATE_FILE),
+            "version: 1\nid: stream-1\nhost: s3\nbucket: bucket\nkey: 'logs/2026: Q1 #1.csv'\nsource_path: '/data/my files/ünï: yes.csv'\nchecksum: '0123'\nfile_size: 10485760\nfile_mtime: 1760000000123456789\npart_size: 5242880\ndb_key: yes\ncreated_at: 1760000000\nupdated_at: 1760000100\npipe: false\ncompress: true\nencrypt: true\nmode: FileMultipart\n",
+        )
+        .unwrap();
+
+        let metadata = load_metadata(&state_dir).unwrap();
+
+        assert_eq!(metadata.version, 1);
+        assert_eq!(metadata.id, "stream-1");
+        assert_eq!(metadata.host, "s3");
+        assert_eq!(metadata.bucket, "bucket");
+        assert_eq!(metadata.key, "logs/2026: Q1 #1.csv");
+        assert_eq!(
+            metadata.source_path,
+            PathBuf::from("/data/my files/ünï: yes.csv")
+        );
+        assert_eq!(metadata.checksum, "0123");
+        assert_eq!(metadata.file_size, 10_485_760);
+        assert_eq!(metadata.file_mtime, 1_760_000_000_123_456_789);
+        assert_eq!(metadata.part_size, 5_242_880);
+        assert_eq!(metadata.db_key, "yes");
+        assert_eq!(metadata.created_at, 1_760_000_000);
+        assert_eq!(metadata.updated_at, Some(1_760_000_100));
+        assert!(!metadata.pipe);
+        assert!(metadata.compress);
+        assert!(metadata.encrypt);
+        assert_eq!(metadata.mode, StreamMode::FileMultipart);
+    }
+
+    #[test]
+    fn test_write_metadata_round_trip() {
+        let dir = tempdir().unwrap();
+        let file_mtime = u128::from(u64::MAX) + 1;
+        let tricky = [
+            "yes",
+            "no",
+            "true",
+            "null",
+            "~",
+            "0123",
+            "1e3",
+            "",
+            " lead",
+            "trail ",
+            "a: b",
+            "#hash",
+            "- dash",
+            "multi\nline",
+            "tab\there",
+            "'q'",
+            "\"dq\"",
+            "[x]",
+            "{y}",
+            "*a",
+            "&b",
+            "!t",
+        ];
+
+        for value in tricky {
+            write_metadata(
+                dir.path(),
+                &StreamMetadata {
+                    version: 1,
+                    id: "stream-1".to_string(),
+                    host: value.to_string(),
+                    bucket: value.to_string(),
+                    key: value.to_string(),
+                    source_path: PathBuf::from(format!("/tmp/{value}")),
+                    checksum: value.to_string(),
+                    file_size: u64::MAX,
+                    file_mtime,
+                    part_size: 10,
+                    db_key: value.to_string(),
+                    created_at: 1,
+                    updated_at: None,
+                    pipe: true,
+                    compress: false,
+                    encrypt: true,
+                    mode: StreamMode::FileMultipart,
+                },
+            )
+            .unwrap();
+
+            let metadata = load_metadata(&state_dir(dir.path(), "stream-1")).unwrap();
+
+            assert_eq!(metadata.host, value);
+            assert_eq!(metadata.bucket, value);
+            assert_eq!(metadata.key, value);
+            assert_eq!(metadata.source_path, PathBuf::from(format!("/tmp/{value}")));
+            assert_eq!(metadata.checksum, value);
+            assert_eq!(metadata.db_key, value);
+            assert_eq!(metadata.file_size, u64::MAX);
+            assert_eq!(metadata.file_mtime, file_mtime);
+            // write_metadata fills a missing updated_at from created_at
+            assert_eq!(metadata.updated_at, Some(1));
+            assert!(metadata.pipe);
+            assert!(!metadata.compress);
+            assert!(metadata.encrypt);
+        }
     }
 
     #[test]
