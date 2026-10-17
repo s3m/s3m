@@ -1,4 +1,4 @@
-## 0.20.2 (unreleased)
+## 0.21.0 💎 (2026-10-17)
 * **Security audit**: updated `rustls` to 0.23.46 (RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, RUSTSEC-2026-0349) and replaced `serde_yaml_ng` with `serde-saphyr`, dropping the unmaintained `unsafe-libyaml` (RUSTSEC-2024-0449).
 * **Config parsing with `serde-saphyr`**:
   * **BREAKING**: unquoted `~` and `null` (any case) in `access_key`, `secret_key`, `prefix` or `suffix` are now YAML nulls and parse as empty strings; before they were the literal text. Quote the value (`suffix: "null"`) to keep the literal.
