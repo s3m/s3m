@@ -1,3 +1,6 @@
+## 0.21.1 (2026-10-24)
+* Updated dependencies to fix security advisories in `ctutils`, `rustls-webpki`, and `webpki-root-certs`.
+
 ## 0.21.0 💎 (2026-10-17)
 * **Security audit**: updated `rustls` to 0.23.46 (RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, RUSTSEC-2026-0349) and replaced `serde_yaml_ng` with `serde-saphyr`, dropping the unmaintained `unsafe-libyaml` (RUSTSEC-2024-0449).
 * **Config parsing with `serde-saphyr`**:
