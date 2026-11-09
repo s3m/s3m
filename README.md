@@ -144,6 +144,23 @@ s3m rm s3/my-bucket/a.txt s3/my-bucket/b.txt
 s3m rm s3/bucket-a/a.txt s3/bucket-b/b.txt
 ```
 
+### Delete all objects under a prefix
+
+```bash
+# Delete one exact object (a key ending in "/" is deleted as that exact key)
+s3m rm s3/my-bucket/path/file.txt
+
+# Delete every object whose key starts with the literal prefix
+s3m rm s3/my-bucket/integration/18/ --recursive
+```
+
+* The key is a **literal S3 key prefix**, not a directory: `integration/18/` matches `integration/18/a`, `integration/18/x/b` and a key equal to `integration/18/`, but not `integration/18`, `integration/180/a` or `integration/18-other/a`. Keep the trailing slash; without it `integration/18` would also match `integration/180/...`, and s3m prints a warning on stderr (the delete still runs). No globbing or path normalization is applied.
+* Without `--recursive`, the target is deleted as one exact key (unchanged). With `--recursive` and no `--bucket`, the bucket is never deleted.
+* The prefix must not be empty (`s3/my-bucket --recursive` is rejected; use `-b --recursive` to delete a bucket). `--bucket` cannot be combined with an object key or prefix. `--recursive` takes exactly one target and cannot be combined with `--older-than`, `--version-id` or `--abort`.
+* A prefix with no matching objects is a successful no-op.
+* Objects are listed and deleted page by page (`DeleteObjects`, at most 1,000 keys per request). Any listing error, request error or per-object error (for example Object Lock) stops the run with a non-zero exit status and reports how many objects were already removed; those stay deleted.
+* **Versioned buckets**: only current objects are listed and deleted without a version id, so S3 adds delete markers and keeps every earlier version (the command reports the number of delete markers created). Permanently purging versions is not done in prefix mode. Object Lock retention is enforced by S3; `--bypass-governance` applies to GOVERNANCE retention as for other deletes.
+
 ### Recursive bucket delete
 
 ```bash
@@ -181,6 +198,9 @@ s3m rm s3/my-bucket/file.dat
 
 # Delete multiple objects
 s3m rm s3/my-bucket/a.txt s3/my-bucket/b.txt
+
+# Delete all objects under a literal key prefix (bucket is kept)
+s3m rm s3/my-bucket/integration/18/ --recursive
 
 # Delete bucket
 s3m rm -b s3/empty-bucket

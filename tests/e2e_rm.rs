@@ -54,3 +54,88 @@ async fn test_e2e_delete_object() {
         "Delete operation should succeed"
     );
 }
+
+fn listed_keys(minio: &MinioContext, bucket: &str) -> Vec<String> {
+    let out = run_s3m_with_minio(minio, &["ls", &format!("s3/{bucket}")]);
+    assert!(out.status.success(), "ls should succeed");
+    let mut keys: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_once("] "))
+        .filter_map(|(_, rest)| rest.split_whitespace().last().map(str::to_string))
+        .collect();
+    keys.sort();
+    keys
+}
+
+#[tokio::test]
+async fn test_e2e_delete_prefix_recursive_is_literal_and_keeps_bucket() {
+    let minio = MinioContext::get_or_start().await;
+
+    let bucket = "e2e-rm-prefix-bucket";
+    minio.create_bucket(bucket).await.expect("Bucket creation");
+
+    let mut file = NamedTempFile::new().expect("temp file");
+    file.write_all(b"x").expect("write");
+    file.flush().expect("flush");
+    let path = file.path().to_str().expect("path");
+
+    let all = [
+        "integration/18/",
+        "integration/18/file1.rpm",
+        "integration/18/el9/file2.rpm",
+        "integration/18/el10/file3.rpm",
+        "integration/19/file4.rpm",
+        "integration/180/file5.rpm",
+        "integration/18-other/file6.rpm",
+        "integration/18",
+    ];
+    for key in all {
+        let out = run_s3m_with_minio(&minio, &[path, &format!("s3/{bucket}/{key}")]);
+        assert!(out.status.success(), "upload {key}: {:?}", out);
+    }
+
+    let out = run_s3m_with_minio(
+        &minio,
+        &["rm", &format!("s3/{bucket}/integration/18/"), "--recursive"],
+    );
+    assert!(out.status.success(), "{:?}", out);
+
+    let remaining = listed_keys(&minio, bucket);
+    assert_eq!(
+        remaining,
+        vec![
+            "integration/18",
+            "integration/18-other/file6.rpm",
+            "integration/180/file5.rpm",
+            "integration/19/file4.rpm",
+        ]
+    );
+    // The bucket must still exist: uploading into it (without recreating it) works.
+    let out = run_s3m_with_minio(&minio, &[path, &format!("s3/{bucket}/after-delete.txt")]);
+    assert!(out.status.success(), "bucket must still exist: {:?}", out);
+    let out = run_s3m_with_minio(&minio, &["rm", &format!("s3/{bucket}/after-delete.txt")]);
+    assert!(out.status.success(), "{:?}", out);
+
+    // Nonexistent prefix is a successful no-op.
+    let out = run_s3m_with_minio(
+        &minio,
+        &["rm", &format!("s3/{bucket}/nothing/here/"), "--recursive"],
+    );
+    assert!(out.status.success(), "{:?}", out);
+    assert_eq!(listed_keys(&minio, bucket).len(), 4);
+
+    // Empty prefix and prefix + --bucket are rejected without deleting anything.
+    for args in [
+        vec!["rm", &format!("s3/{bucket}"), "--recursive"],
+        vec![
+            "rm",
+            "-b",
+            "--recursive",
+            &format!("s3/{bucket}/integration/19/"),
+        ],
+    ] {
+        let out = run_s3m_with_minio(&minio, &args);
+        assert!(!out.status.success());
+    }
+    assert_eq!(listed_keys(&minio, bucket).len(), 4);
+}
