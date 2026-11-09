@@ -3,9 +3,9 @@ use clap::{Arg, ArgAction, Command};
 
 pub fn command() -> Command {
     Command::new("rm")
-        .about("Delete an object, a bucket, or abort a multipart upload")
+        .about("Delete objects, an object prefix, a bucket, or abort a multipart upload")
         .after_long_help(
-            "Examples:\n  s3m rm s3/my-bucket/file.dat\n  s3m rm -b s3/empty-bucket\n  s3m rm -b --recursive s3/my-bucket\n  s3m rm s3/my-bucket/file.dat --abort <upload-id>",
+            "Examples:\n  s3m rm s3/my-bucket/file.dat\n  s3m rm s3/my-bucket/integration/18/ --recursive\n  s3m rm -b s3/empty-bucket\n  s3m rm -b --recursive s3/my-bucket\n  s3m rm s3/my-bucket/file.dat --abort <upload-id>\n\nPrefix deletion (--recursive without --bucket):\n  The key is a literal S3 key prefix, not a directory: 'integration/18/' matches\n  'integration/18/a' and 'integration/18/x/b' (and a key equal to the prefix) but\n  not 'integration/180/a' or 'integration/18'. The trailing slash matters.\n  The prefix must not be empty and the bucket is never deleted.\n  Without --recursive the target is deleted as one exact key.\n  In versioned buckets a delete marker is added and earlier versions are\n  retained; Object Lock protections apply (see --bypass-governance).\n  If any listing or deletion fails the command exits non-zero, and objects\n  already deleted stay deleted.",
         )
         .arg(
             Arg::new("arguments")
@@ -32,12 +32,13 @@ pub fn command() -> Command {
         )
         .arg(
             Arg::new("recursive")
-                .help("Delete all objects in the bucket before deleting it")
-                .long_help("Recursively delete objects from the bucket in batches before deleting the bucket itself.")
+                .help("Delete every object under the key prefix, or with --bucket all objects then the bucket")
+                .long_help("Without --bucket: delete every object whose key starts with the literal prefix in the target (for example s3/my-bucket/integration/18/), including a key equal to the prefix. The bucket and all other objects are kept. The prefix must not be empty. In versioned buckets this adds delete markers and retains earlier versions.\n\nWith --bucket: delete all objects and versions in the bucket in batches, then the bucket itself.")
                 .long("recursive")
                 .short('r')
-                .requires("bucket")
                 .conflicts_with("UploadId")
+                .conflicts_with("version-id")
+                .conflicts_with("older-than")
                 .num_args(0),
         )
         .arg(
@@ -134,6 +135,28 @@ mod tests {
         let m = m.unwrap();
         assert_eq!(m.get_one::<bool>("recursive").copied(), Some(true));
         Ok(())
+    }
+
+    #[test]
+    fn test_check_recursive_prefix() {
+        let m = command()
+            .try_get_matches_from(vec!["s3m", "s3/bucket/integration/18/", "--recursive"])
+            .unwrap();
+        assert_eq!(m.get_one::<bool>("recursive").copied(), Some(true));
+        assert_eq!(m.get_one::<bool>("bucket").copied(), Some(false));
+    }
+
+    #[test]
+    fn test_reject_recursive_with_conflicting_modes() {
+        for extra in [
+            vec!["--abort", "id"],
+            vec!["--version-id", "v1"],
+            vec!["--older-than", "30d"],
+        ] {
+            let mut args = vec!["s3m", "s3/bucket/p/", "--recursive"];
+            args.extend(extra);
+            assert!(command().try_get_matches_from(args).is_err());
+        }
     }
 
     #[test]

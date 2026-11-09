@@ -203,6 +203,10 @@ pub struct DeletedObject {
     pub key: String,
     #[serde(default)]
     pub version_id: Option<String>,
+    /// `true` when S3 created a delete marker instead of removing data
+    /// (key delete without a version id in a versioned bucket).
+    #[serde(default)]
+    pub delete_marker: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]

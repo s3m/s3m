@@ -277,7 +277,29 @@ fn dispatch_delete(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Actio
     let bypass_governance = sub_m.get_flag("bypass-governance");
 
     let key = if bucket {
+        if hbk.key.is_some() {
+            return Err(anyhow!(
+                "--bucket deletes a whole bucket and cannot be combined with an object key or prefix; use `s3m rm <host>/<bucket>/<prefix> --recursive` to delete a prefix"
+            ));
+        }
         String::new()
+    } else if recursive {
+        if sub_m
+            .get_many::<String>("arguments")
+            .unwrap_or_default()
+            .count()
+            != 1
+        {
+            return Err(anyhow!("--recursive expects exactly one prefix target"));
+        }
+        match hbk.key.as_deref() {
+            Some(prefix) if !prefix.is_empty() => prefix.to_string(),
+            _ => {
+                return Err(anyhow!(
+                    "--recursive without --bucket requires a non-empty object prefix, for example s3/my-bucket/path/; use `-b --recursive` to delete a whole bucket"
+                ));
+            }
+        }
     } else if older_than.is_some() {
         if sub_m
             .get_many::<String>("arguments")
@@ -698,10 +720,10 @@ fn finalize_delete_action(
         ));
     }
 
-    if older_than.is_some() {
+    if older_than.is_some() || recursive {
         if args.len() != 1 {
             return Err(anyhow!(
-                "--older-than expects exactly one bucket or prefix target"
+                "--older-than and --recursive expect exactly one bucket or prefix target"
             ));
         }
 
@@ -1438,7 +1460,7 @@ hosts:
     #[test]
     fn test_dispatch_rm_bucket() {
         let cmd = Command::new("test").subcommand(cmd_rm::command());
-        let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "h/bucket/file"]);
+        let matches = cmd.try_get_matches_from(vec!["test", "rm", "-b", "h/bucket"]);
         assert!(matches.is_ok());
 
         let matches = matches.unwrap();
@@ -1521,6 +1543,98 @@ hosts:
             }
             _ => panic!("wrong action"),
         }
+    }
+
+    fn dispatch_rm(args: &[&str]) -> Result<Action> {
+        let (tmp_dir, config_path, config) = write_config_file();
+        let filepath = config_path.as_os_str().to_str().unwrap();
+        let mut full_args = vec!["test", "--config", filepath, "rm"];
+        full_args.extend_from_slice(args);
+        let matches = new(&tmp_dir.keep())
+            .try_get_matches_from(full_args)
+            .unwrap();
+        let mut globals = GlobalArgs::new();
+        let s3_location = host_bucket_key(&matches).unwrap();
+        let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals)?;
+        finalize_action(action, &matches, &config, &config_path)
+    }
+
+    #[test]
+    fn test_dispatch_rm_prefix_recursive_preserves_trailing_slash() {
+        let action = dispatch_rm(&["s3/bucket/integration/18/", "--recursive"]).unwrap();
+        match action {
+            Action::DeleteObject {
+                key,
+                bucket,
+                recursive,
+                targets,
+                older_than,
+                ..
+            } => {
+                assert_eq!(key, "integration/18/");
+                assert!(!bucket);
+                assert!(recursive);
+                assert!(targets.is_empty());
+                assert_eq!(older_than, None);
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_rm_prefix_without_recursive_is_exact_key() {
+        let action = dispatch_rm(&["s3/bucket/integration/18/"]).unwrap();
+        match action {
+            Action::DeleteObject {
+                key,
+                bucket,
+                recursive,
+                targets,
+                ..
+            } => {
+                assert_eq!(key, "integration/18/");
+                assert!(!bucket);
+                assert!(!recursive);
+                assert_eq!(targets.len(), 1);
+                assert_eq!(
+                    targets.first().unwrap().objects.first().unwrap().key,
+                    "integration/18/"
+                );
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_rm_recursive_rejects_empty_prefix() {
+        for target in ["s3/bucket", "s3/bucket/"] {
+            let err = dispatch_rm(&[target, "--recursive"])
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("non-empty object prefix"), "{target}: {err}");
+        }
+    }
+
+    #[test]
+    fn test_dispatch_rm_bucket_rejects_prefix_target() {
+        for args in [
+            ["-b", "--recursive", "s3/bucket/integration/18/"],
+            ["-b", "s3/bucket/integration/18/", "--bypass-governance"],
+        ] {
+            let err = dispatch_rm(&args).unwrap_err().to_string();
+            assert!(
+                err.contains("cannot be combined with an object key"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dispatch_rm_recursive_rejects_multiple_targets() {
+        let err = dispatch_rm(&["s3/bucket/a/", "s3/bucket/b/", "--recursive"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exactly one prefix target"), "{err}");
     }
 
     #[test]

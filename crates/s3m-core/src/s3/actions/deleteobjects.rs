@@ -220,6 +220,11 @@ mod tests {
     <Key>two</Key>
     <VersionId>version-2</VersionId>
   </Deleted>
+  <Deleted>
+    <Key>three</Key>
+    <DeleteMarker>true</DeleteMarker>
+    <DeleteMarkerVersionId>marker-3</DeleteMarkerVersionId>
+  </Deleted>
 </DeleteResult>
 "#;
 
@@ -231,10 +236,17 @@ mod tests {
                 DeletedObject {
                     key: "one".to_string(),
                     version_id: None,
+                    delete_marker: false,
                 },
                 DeletedObject {
                     key: "two".to_string(),
                     version_id: Some("version-2".to_string()),
+                    delete_marker: false,
+                },
+                DeletedObject {
+                    key: "three".to_string(),
+                    version_id: None,
+                    delete_marker: true,
                 },
             ]
         );
