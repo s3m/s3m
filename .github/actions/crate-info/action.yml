@@ -1,0 +1,32 @@
+name: Crate info
+description: >-
+  Read the name and version of the root package from cargo metadata. A workspace root
+  package may inherit its version (`version.workspace = true`), so Cargo.toml is not parsed
+  by hand. Needs cargo and jq (both preinstalled on GitHub-hosted runners).
+outputs:
+  name:
+    description: Package name.
+    value: ${{ steps.read.outputs.name }}
+  version:
+    description: Package version.
+    value: ${{ steps.read.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: read
+      shell: bash
+      run: |
+        set -euo pipefail
+        info="$(cargo metadata --no-deps --format-version 1 |
+          jq -r '. as $m | $m.packages[] | select(.id == $m.workspace_default_members[0]) | "\(.name) \(.version)"' |
+          tr -d '\r')"
+        read -r name version <<<"${info}"
+        if [[ -z "${name:-}" || -z "${version:-}" ]]; then
+          echo "::error::Cargo.toml has no root package name or version."
+          exit 1
+        fi
+        {
+          echo "name=${name}"
+          echo "version=${version}"
+        } >> "$GITHUB_OUTPUT"
+        echo "Package ${name} ${version}"

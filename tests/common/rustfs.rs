@@ -34,11 +34,15 @@ use testcontainers::{
 };
 
 /// Default `RustFS` credentials for testing
-pub const MINIO_ROOT_USER: &str = "minioadmin";
-pub const MINIO_ROOT_PASSWORD: &str = "minioadmin";
+pub const RUSTFS_ROOT_USER: &str = "minioadmin";
+pub const RUSTFS_ROOT_PASSWORD: &str = "minioadmin";
+
+// Backward-compatibility aliases
+pub const MINIO_ROOT_USER: &str = RUSTFS_ROOT_USER;
+pub const MINIO_ROOT_PASSWORD: &str = RUSTFS_ROOT_PASSWORD;
 
 /// `RustFS` test fixture that manages container lifecycle
-pub struct MinioContainer {
+pub struct RustFSContainer {
     #[allow(dead_code)]
     container: ContainerAsync<GenericImage>,
     pub endpoint: String,
@@ -46,7 +50,10 @@ pub struct MinioContainer {
     pub secret_key: String,
 }
 
-impl MinioContainer {
+// Backward-compatibility alias
+pub type MinioContainer = RustFSContainer;
+
+impl RustFSContainer {
     /// Start a new `RustFS` container
     ///
     /// This will:
@@ -56,17 +63,17 @@ impl MinioContainer {
     ///
     /// # Returns
     ///
-    /// A `MinioContainer` instance with connection details
+    /// A `RustFSContainer` instance with connection details
     pub async fn start() -> Self {
         let image = GenericImage::new("ghcr.io/rustfs/rustfs", "1.0.0")
             .with_wait_for(WaitFor::seconds(1))
-            .with_env_var("RUSTFS_ACCESS_KEY", MINIO_ROOT_USER)
-            .with_env_var("RUSTFS_SECRET_KEY", MINIO_ROOT_PASSWORD);
+            .with_env_var("RUSTFS_ACCESS_KEY", RUSTFS_ROOT_USER)
+            .with_env_var("RUSTFS_SECRET_KEY", RUSTFS_ROOT_PASSWORD);
 
         let container = image
             .start()
             .await
-            .expect(crate::minio_runtime::STARTUP_HINT);
+            .expect(crate::common::minio_runtime::STARTUP_HINT);
 
         let port = container
             .get_host_port_ipv4(ContainerPort::Tcp(9000))
@@ -81,8 +88,8 @@ impl MinioContainer {
         Self {
             container,
             endpoint,
-            access_key: MINIO_ROOT_USER.to_string(),
-            secret_key: MINIO_ROOT_PASSWORD.to_string(),
+            access_key: RUSTFS_ROOT_USER.to_string(),
+            secret_key: RUSTFS_ROOT_PASSWORD.to_string(),
         }
     }
 

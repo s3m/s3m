@@ -6,14 +6,17 @@
 //! - S3m binary helpers: Run s3m commands with proper setup
 //! - Test file helpers: Create test files and calculate hashes
 
-#![allow(dead_code, clippy::indexing_slicing)]
+#![allow(dead_code, unused_imports, clippy::indexing_slicing)]
 
-mod helpers;
 #[path = "../support/minio_runtime.rs"]
 mod minio_runtime;
+mod rustfs;
 
-pub use helpers::minio::{MINIO_ROOT_PASSWORD, MINIO_ROOT_USER, MinioContainer};
 use minio_runtime::MinioRuntime;
+pub use rustfs::{
+    MINIO_ROOT_PASSWORD, MINIO_ROOT_USER, MinioContainer, RUSTFS_ROOT_PASSWORD, RUSTFS_ROOT_USER,
+    RustFSContainer,
+};
 
 use std::env;
 use std::io::Write;
@@ -71,6 +74,9 @@ pub enum MinioContext {
     },
     Container(Box<MinioContainer>),
 }
+
+/// Type alias for `MinioContext` using `RustFS` terminology
+pub type RustFSContext = MinioContext;
 
 impl MinioContext {
     /// Use the configured endpoint or start a `RustFS` container.
@@ -189,6 +195,9 @@ pub fn run_s3m_with_minio(minio: &MinioContext, args: &[&str]) -> std::process::
 
     output
 }
+
+/// Alias for `run_s3m_with_minio` with `RustFS` naming
+pub use run_s3m_with_minio as run_s3m_with_rustfs;
 
 /// Run s3m command without config (for --version, --help, etc.)
 pub fn run_s3m(args: &[&str]) -> std::process::Output {

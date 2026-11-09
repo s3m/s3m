@@ -147,6 +147,25 @@ mod tests {
     }
 
     #[test]
+    fn test_check_bucket_flag_combinations() {
+        let m = command()
+            .try_get_matches_from(vec!["s3m", "-b", "s3/bucket/key"])
+            .unwrap();
+        assert_eq!(m.get_one::<bool>("bucket").copied(), Some(true));
+
+        let m = command()
+            .try_get_matches_from(vec!["s3m", "s3/bucket/key", "-b"])
+            .unwrap();
+        assert_eq!(m.get_one::<bool>("bucket").copied(), Some(true));
+
+        let m = command()
+            .try_get_matches_from(vec!["s3m", "-br", "s3/bucket/key"])
+            .unwrap();
+        assert_eq!(m.get_one::<bool>("bucket").copied(), Some(true));
+        assert_eq!(m.get_one::<bool>("recursive").copied(), Some(true));
+    }
+
+    #[test]
     fn test_reject_recursive_with_conflicting_modes() {
         for extra in [
             vec!["--abort", "id"],

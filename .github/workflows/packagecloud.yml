@@ -3,6 +3,12 @@ name: PackageCloud
 
 on:
   workflow_call:
+    inputs:
+      toolchain:
+        description: stable, or an exact Rust version (a release passes the one its guard resolved).
+        type: string
+        required: false
+        default: stable
     secrets:
       PACKAGECLOUD_TOKEN:
         required: true
@@ -22,8 +28,9 @@ jobs:
         run: sudo apt -y install musl-dev musl-tools
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: ./.github/actions/rust-toolchain
         with:
+          toolchain: ${{ inputs.toolchain }}
           targets: x86_64-unknown-linux-musl
 
       - name: Build
@@ -42,7 +49,11 @@ jobs:
         run: gem install --quiet --no-document package_cloud
 
       - name: Get Version
-        run: echo "VERSION=$(grep -oP -m 1 'version = "\K[^"]+' Cargo.toml)" >> $GITHUB_ENV
+        id: crate
+        uses: ./.github/actions/crate-info
+
+      - name: Export version
+        run: echo "VERSION=${{ steps.crate.outputs.version }}" >> "$GITHUB_ENV"
 
       - name: Get description
         run: echo "DESCRIPTION=$(grep -oP -m 1 'description = "\K[^"]+' Cargo.toml)"

@@ -1,0 +1,70 @@
+name: Build binary
+description: >-
+  Install Rust and the target's prerequisites, then build the locked release binary.
+  Expects the repository to be checked out.
+inputs:
+  target:
+    description: Rust target triple.
+    required: true
+  toolchain:
+    description: stable, or an exact version such as 1.99.1 (a release passes its resolved one).
+    required: false
+    default: stable
+outputs:
+  name:
+    description: Package (binary) name.
+    value: ${{ steps.info.outputs.name }}
+  version:
+    description: Package version.
+    value: ${{ steps.info.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/rust-toolchain
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        targets: ${{ inputs.target }}
+
+    - id: info
+      uses: ./.github/actions/crate-info
+
+    - name: Install musl tools
+      if: contains(inputs.target, 'musl')
+      shell: bash
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y musl-dev musl-tools
+
+    # Downloaded crate sources only, never build output, so a build is always from scratch.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: cargo-registry-${{ runner.os }}-
+
+    - name: Build
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: cargo build --release --locked --target "${TARGET}"
+
+    # A binary that builds but does not run, or reports another version, fails here. Only
+    # a Linux target runs on the Linux runner; the macOS binary is built for another CPU.
+    - name: Smoke test
+      if: contains(inputs.target, 'linux')
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        NAME: ${{ steps.info.outputs.name }}
+        VERSION: ${{ steps.info.outputs.version }}
+      run: |
+        set -euo pipefail
+        out="$("target/${TARGET}/release/${NAME}" --version)"
+        echo "${out}"
+        if [[ "${out}" != *"${VERSION}"* ]]; then
+          echo "::error::The binary does not report version ${VERSION}."
+          exit 1
+        fi

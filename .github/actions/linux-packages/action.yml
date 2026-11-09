@@ -1,0 +1,90 @@
+name: Linux packages
+description: >-
+  Build the RPM and DEB of an already built release binary. The tools are pinned so a
+  package made later is made the same way; update them deliberately.
+inputs:
+  target:
+    description: Rust target the binary was built for.
+    required: true
+  package:
+    description: Package (binary) name.
+    required: true
+  out:
+    description: Directory that receives the .rpm and .deb files.
+    required: false
+    default: dist
+runs:
+  using: composite
+  steps:
+    # Compiling both tools dominates the job, so the installed binaries are cached; the
+    # key holds the pinned versions, so bumping a version below installs it afresh, and the
+    # compiler version, so a binary built by another compiler is never restored.
+    - id: rustc
+      shell: bash
+      run: echo "version=$(rustc --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+    - id: tools
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          ~/.cargo/bin/cargo-generate-rpm
+          ~/.cargo/bin/cargo-deb
+        key: linux-packages-${{ runner.os }}-${{ runner.arch }}-rustc-${{ steps.rustc.outputs.version }}-rpm-0.21.0-deb-3.8.0
+
+    - if: steps.tools.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo install cargo-generate-rpm --version 0.21.0 --locked
+        cargo install cargo-deb --version 3.8.0 --locked
+
+    - shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        PACKAGE: ${{ inputs.package }}
+        OUT: ${{ inputs.out }}
+      run: |
+        set -euo pipefail
+        strip -s "target/${TARGET}/release/${PACKAGE}" || true
+        # The packagers read the binary from target/release.
+        mkdir -p target/release "${OUT}"
+        ln -sf "../${TARGET}/release/${PACKAGE}" "target/release/${PACKAGE}"
+        cargo generate-rpm
+        cargo deb --no-build
+        cp target/generate-rpm/*.rpm target/debian/*.deb "${OUT}/"
+        ls -al "${OUT}"
+
+    - id: info
+      uses: ./.github/actions/crate-info
+
+    # The packages must exist, carry this version and be well-formed.
+    - name: Check the packages
+      shell: bash
+      env:
+        OUT: ${{ inputs.out }}
+        VERSION: ${{ steps.info.outputs.version }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        debs=("${OUT}"/*.deb)
+        rpms=("${OUT}"/*.rpm)
+        [[ ${#debs[@]} -eq 1 && ${#rpms[@]} -eq 1 ]] || { echo "::error::Expected exactly one .deb and one .rpm in ${OUT}."; exit 1; }
+        deb_version="$(dpkg-deb --field "${debs[0]}" Version)"
+        if [[ "${deb_version}" != "${VERSION}"* ]]; then
+          echo "::error::The .deb has version ${deb_version}, expected ${VERSION}."
+          exit 1
+        fi
+        dpkg-deb --contents "${debs[0]}" | grep -q '/usr/bin/' || { echo "::error::The .deb installs no binary."; exit 1; }
+        [[ "${rpms[0]}" == *"${VERSION}"* ]] || { echo "::error::The .rpm name lacks version ${VERSION}."; exit 1; }
+        # The runner is native for the target, so the packages must carry its architecture.
+        deb_arch="$(dpkg-deb --field "${debs[0]}" Architecture)"
+        if [[ "${deb_arch}" != "$(dpkg --print-architecture)" ]]; then
+          echo "::error::The .deb is for ${deb_arch}, this runner is $(dpkg --print-architecture)."
+          exit 1
+        fi
+        case "$(uname -m)" in
+          x86_64) rpm_arch=x86_64 ;;
+          aarch64) rpm_arch=aarch64 ;;
+          *) echo "::error::Unsupported runner architecture $(uname -m)."; exit 1 ;;
+        esac
+        [[ "${rpms[0]}" == *".${rpm_arch}.rpm" ]] || { echo "::error::The .rpm is not for ${rpm_arch}."; exit 1; }

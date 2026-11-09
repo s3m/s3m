@@ -1618,13 +1618,58 @@ hosts:
     #[test]
     fn test_dispatch_rm_bucket_rejects_prefix_target() {
         for args in [
-            ["-b", "--recursive", "s3/bucket/integration/18/"],
-            ["-b", "s3/bucket/integration/18/", "--bypass-governance"],
+            // Literal key with trailing slash
+            vec!["-b", "--recursive", "s3/bucket/integration/18/"],
+            vec!["-b", "s3/bucket/integration/18/", "--bypass-governance"],
+            vec!["-b", "s3/bucket/integration/18/"],
+            // Single object file key (no trailing slash)
+            vec!["-b", "s3/bucket/file.txt"],
+            vec!["--bucket", "s3/bucket/file.txt"],
+            vec!["-b", "--recursive", "s3/bucket/file.txt"],
+            vec!["-b", "-r", "s3/bucket/file.txt"],
+            // Deeply nested key
+            vec!["-b", "s3/bucket/deep/nested/path/to/object.dat"],
+            vec![
+                "-b",
+                "--recursive",
+                "s3/bucket/deep/nested/path/to/object.dat",
+            ],
+            // Flag positioned after target
+            vec!["s3/bucket/file.txt", "-b"],
+            vec!["s3/bucket/file.txt", "--bucket"],
+            vec!["s3/bucket/integration/18/", "-r", "-b"],
+            vec!["s3/bucket/integration/18/", "--recursive", "--bucket"],
         ] {
             let err = dispatch_rm(&args).unwrap_err().to_string();
             assert!(
                 err.contains("cannot be combined with an object key"),
-                "{err}"
+                "{args:?}: expected rejection message, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dispatch_rm_bucket_multi_target_safety() {
+        for args in [
+            vec!["-b", "s3/bucket", "s3/bucket/key"],
+            vec!["-b", "-r", "s3/bucket", "s3/bucket/key"],
+            vec!["-b", "s3/bucket", "s3/bucket-other"],
+        ] {
+            let err = dispatch_rm(&args).unwrap_err().to_string();
+            assert!(
+                err.contains("Bucket deletion expects exactly one bucket target"),
+                "{args:?}: expected one bucket target rejection, got: {err}"
+            );
+        }
+
+        for args in [
+            vec!["-b", "s3/bucket/key", "s3/bucket"],
+            vec!["-b", "-r", "s3/bucket/key", "s3/bucket"],
+        ] {
+            let err = dispatch_rm(&args).unwrap_err().to_string();
+            assert!(
+                err.contains("cannot be combined with an object key"),
+                "{args:?}: expected cannot be combined rejection, got: {err}"
             );
         }
     }

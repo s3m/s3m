@@ -8,11 +8,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
     uses: ./.github/workflows/test.yml
+
+  security:
+    uses: ./.github/workflows/security-audit.yml
 
   containers:
     uses: ./.github/workflows/containers.yml
@@ -45,22 +48,72 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Branch name
-        run: echo "${GITHUB_REF##*/}"
-
-      - name: Get the release version from the tag
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          targets: ${{ matrix.target }}
-
-      - run: sudo apt -y install musl-dev musl-tools
-        if: matrix.build == 'linux'
+          persist-credentials: false
 
       - name: Build
+        id: build
+        uses: ./.github/actions/build-binary
+        with:
+          target: ${{ matrix.target }}
+
+      # Packaging is checked here too, so a broken RPM/DEB definition fails CI on
+      # develop instead of the release.
+      - name: Package RPM and DEB
+        if: matrix.build == 'linux'
+        uses: ./.github/actions/linux-packages
+        with:
+          target: ${{ matrix.target }}
+          package: ${{ steps.build.outputs.name }}
+
+  # The same crate checks the release runs, so a package crates.io would refuse (missing
+  # metadata, unpublishable files, a stale s3m-core pin) fails here on develop, not after
+  # the release tag exists.
+  crate:
+    name: Crates
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Package and verify the crates
+        run: cargo package --workspace --locked
+
+      - name: Check crates.io would accept them
+        run: cargo publish --workspace --dry-run --locked
+
+  # One aggregate check for the release flow and branch protection: it passes only when
+  # every gating job succeeded, so the required check never depends on job or matrix
+  # names. Coverage is reported, not a gate: an upload to a coverage service failing must
+  # not block a release.
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs:
+      - test
+      - security
+      - containers
+      - build
+      - crate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have succeeded
+        shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          cargo build --release --locked --target ${{ matrix.target }}
+          echo "Job results: ${RESULTS}"
+          for result in ${RESULTS}; do
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::A required job finished with '${result}'."
+              exit 1
+            fi
+          done

@@ -1,0 +1,50 @@
+name: Rust toolchain
+description: >-
+  Install a Rust toolchain with rustup and make it the default, with optional extra
+  targets and components. rustup is preinstalled on GitHub-hosted runners and installed
+  here when a runner lacks it, so no third-party action code runs in the workflows. An
+  exact version (the one the release guard resolved) pins every job of a run to one compiler.
+inputs:
+  toolchain:
+    description: stable, beta, nightly, or an exact version such as 1.98.1.
+    required: false
+    default: stable
+  targets:
+    description: Extra targets, separated by spaces or commas.
+    required: false
+    default: ''
+  components:
+    description: Extra components (rustfmt, clippy, llvm-tools-preview), separated by spaces or commas.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        TARGETS: ${{ inputs.targets }}
+        COMPONENTS: ${{ inputs.components }}
+      run: |
+        set -euo pipefail
+        if [[ ! "${TOOLCHAIN}" =~ ^(stable|beta|nightly|[0-9]+\.[0-9]+(\.[0-9]+)?)$ ]]; then
+          echo "::error::Unsupported toolchain '${TOOLCHAIN}'."
+          exit 1
+        fi
+        if ! command -v rustup >/dev/null 2>&1; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --profile minimal --default-toolchain none
+          echo "${CARGO_HOME:-${HOME}/.cargo}/bin" >> "${GITHUB_PATH}"
+          export PATH="${CARGO_HOME:-${HOME}/.cargo}/bin:${PATH}"
+        fi
+        args=(--profile minimal)
+        for target in ${TARGETS//,/ }; do args+=(--target "${target}"); done
+        for component in ${COMPONENTS//,/ }; do args+=(--component "${component}"); done
+        rustup toolchain install "${TOOLCHAIN}" "${args[@]}"
+        rustup default "${TOOLCHAIN}"
+        # An environment choice beats a repository's rust-toolchain.toml, so the version a
+        # release resolved is the one every later step uses, even if the file says `stable`.
+        export RUSTUP_TOOLCHAIN="${TOOLCHAIN}"
+        echo "RUSTUP_TOOLCHAIN=${TOOLCHAIN}" >> "${GITHUB_ENV}"
+        rustc --version
+        cargo --version

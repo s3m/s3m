@@ -90,3 +90,37 @@ coverage:
   grcov . --binary-path ./target/debug/deps/ -s . -t html --branch --ignore-not-existing --ignore '../*' --ignore "/*" -o target/coverage/html
   firefox target/coverage/html/index.html
   rm -rf *.profraw
+
+# Releases (see .github/RELEASING.md): the operator bumps the version as the last commit of the
+# work, and the Release workflow builds and publishes that exact commit once CI passed.
+# `main` is moved here, after the run, because a protected branch refuses an update while
+# a `CI OK` check of the same commit is still pending (develop's own Test & Build).
+
+# Release develop: start the release workflow, follow it, then fast-forward main
+release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git fetch --quiet origin develop
+    sha="$(git rev-parse origin/develop)"
+    last="$(gh run list --workflow release.yml --branch develop --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')"
+    gh workflow run release.yml --ref develop
+    # The dispatched run is the first new one for this commit; never just "the latest".
+    run=""
+    for _ in $(seq 30); do
+        run="$(gh run list --workflow release.yml --branch develop --event workflow_dispatch --limit 10 --json databaseId,headSha --jq "[.[] | select(.databaseId > ${last} and .headSha == \"${sha}\")][0].databaseId // empty")"
+        [[ -z "${run}" ]] || break
+        sleep 2
+    done
+    [[ -n "${run}" ]] || { echo "The dispatched release run did not appear." >&2; exit 1; }
+    gh run watch "${run}" --exit-status
+    # develop's own Test & Build must have finished, and passed, before main can move.
+    ci=""
+    for _ in $(seq 30); do
+        ci="$(gh run list --workflow build.yml --branch develop --commit "${sha}" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+        [[ -z "${ci}" ]] || break
+        sleep 2
+    done
+    [[ -n "${ci}" ]] || { echo "No Test & Build run of develop for ${sha}; push it to main yourself when CI OK passed." >&2; exit 1; }
+    echo "Waiting for develop's Test & Build (run ${ci}) before moving main..."
+    gh run watch "${ci}" --exit-status > /dev/null || { echo "Test & Build failed on ${sha}; re-run its failed jobs, then: git push origin ${sha}:refs/heads/main" >&2; exit 1; }
+    git push origin "${sha}:refs/heads/main"

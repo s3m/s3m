@@ -1,8 +1,9 @@
-## Unreleased
+## 0.22.0 🧹 (2026-11-09)
 * **`rm --recursive` on an object prefix (issue #68)**: `s3m rm s3/bucket/integration/18/ --recursive` deletes every object whose key starts with the literal prefix (including a key equal to the prefix), page by page in `DeleteObjects` batches of at most 1,000, and never deletes the bucket. Empty/nonexistent prefixes are successful no-ops; listing, request and per-object errors give a non-zero exit with the number of objects already removed. In versioned buckets only delete markers are added and earlier versions are retained. A prefix without a trailing `/` prints a warning on stderr, since it also matches sibling keys such as `integration/180/...`.
 * **BREAKING (safety)**: `--bucket` combined with an object key or prefix (for example `rm -b s3/bucket/key`) is now rejected; previously the key was silently ignored. `--recursive` without `--bucket` requires a non-empty prefix and conflicts with `--older-than`, `--version-id` and `--abort`.
 * `s3m-core`: `DeletedObject` gained a `delete_marker: bool` field.
 * Updated `serde-saphyr` to 2.1.
+* Test harness: removed legacy duplicate MinIO test helpers and consolidated on `RustFSContainer` in `tests/common/rustfs.rs`.
 
 ## 0.21.1 (2026-10-24)
 * Updated dependencies to fix security advisories in `ctutils`, `rustls-webpki`, and `webpki-root-certs`.

@@ -1,6 +1,6 @@
 # s3m
 
-[![Deploy](https://github.com/s3m/s3m/actions/workflows/deploy.yml/badge.svg)](https://github.com/s3m/s3m/actions/workflows/deploy.yml)
+[![Release](https://github.com/s3m/s3m/actions/workflows/release.yml/badge.svg)](https://github.com/s3m/s3m/actions/workflows/release.yml)
 [![Test & Build](https://github.com/s3m/s3m/actions/workflows/build.yml/badge.svg)](https://github.com/s3m/s3m/actions/workflows/build.yml)
 [![codecov](https://codecov.io/gh/s3m/s3m/graph/badge.svg?token=Y2BQJUGPJ5)](https://codecov.io/gh/s3m/s3m)
 [![crates.io](https://img.shields.io/crates/v/s3m.svg)](https://crates.io/crates/s3m)

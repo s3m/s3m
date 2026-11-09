@@ -1,0 +1,438 @@
+---
+name: Release
+
+# Run manually on `develop` (`just release`). The commit is the one Test & Build already
+# passed on develop; nothing is bumped or committed here. The run builds that commit and
+# publishes the GitHub release (which creates the tag), the crates and PackageCloud. `main` is moved by
+# `just release` once this run has succeeded and develop's own Test & Build has finished
+# (a still-pending `CI OK` blocks protected-branch updates, even for the workflow's token).
+# A failed job is fixed by "Re-run failed jobs"; nothing is published before every build
+# job has succeeded.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Release guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      package: ${{ steps.check.outputs.package }}
+      rust: ${{ steps.rust.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # `stable` moves every few weeks and "Re-run failed jobs" can run a leg hours later, so
+      # it is resolved once here: every job of this run installs exactly this version, and a
+      # re-run keeps this job's output. Nothing in the repository has to be bumped.
+      - name: Resolve the Rust toolchain for this run
+        id: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          version="$(rustc +stable --version | awk '{print $2}')"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not resolve stable to an exact version (got '${version}')."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "This release is built with Rust ${version}."
+
+      - name: Read the package name and version
+        id: info
+        uses: ./.github/actions/crate-info
+
+      - name: Check the commit can be released
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INFO_NAME: ${{ steps.info.outputs.name }}
+          INFO_VERSION: ${{ steps.info.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/heads/develop ]]; then
+            echo "::error::Run the release on develop (got ${GITHUB_REF})."
+            exit 1
+          fi
+          version="${INFO_VERSION}"
+          package="${INFO_NAME}"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Cargo.toml has no X.Y.Z version (found '${version}')."
+            exit 1
+          fi
+          # Both crates share one version, and s3m pins s3m-core to it: a stale pin passes
+          # every build and then fails publishing s3m after the tag exists.
+          meta="$(cargo metadata --no-deps --format-version 1)"
+          core="$(jq -r --arg p "${package}-core" '.packages[] | select(.name == $p) | .version' <<<"${meta}" | tr -d '\r')"
+          pin="$(jq -r --arg p "${package}" --arg c "${package}-core" '.packages[] | select(.name == $p) | .dependencies[] | select(.name == $c) | .req' <<<"${meta}" | tr -d '\r')"
+          if [[ "${core}" != "${version}" || "${pin}" != "^${version}" ]]; then
+            echo "::error::${package}-core is ${core} and ${package} requires ${pin}; both must be ${version}."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+            echo "::error::${version} is already tagged; bump the version on develop first."
+            exit 1
+          fi
+          latest="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)"
+          if [[ -n "${latest}" && "$(printf '%s\n%s\n' "${latest}" "${version}" | sort -V | tail -n 1)" != "${version}" ]]; then
+            echo "::error::${version} is below the latest release ${latest}; bump to a higher version."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor origin/main "${GITHUB_SHA}"; then
+            echo "::error::main has commits that develop does not; merge main into develop first."
+            exit 1
+          fi
+          # `CI OK` is Test & Build's aggregate of every gating job; it must have
+          # succeeded on exactly this commit (a non-gating job, such as coverage, failing
+          # does not block the release).
+          passed="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?check_name=CI%20OK&status=completed" \
+            --jq '[.check_runs[] | select(.conclusion == "success")] | length')"
+          if [[ "${passed}" -lt 1 ]]; then
+            echo "::error::${GITHUB_SHA} has no successful CI OK check; wait for Test & Build to pass on develop."
+            exit 1
+          fi
+          {
+            echo "version=${version}"
+            echo "package=${package}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing ${package} ${version} from ${GITHUB_SHA} (CI OK passed)."
+
+  build:
+    name: Build and package (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    needs: guard
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    strategy:
+      matrix:
+        include:
+          - build: linux
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - build: linux
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - build: macos
+            os: macos-latest
+            target: x86_64-apple-darwin
+          - build: windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build
+        id: build
+        uses: ./.github/actions/build-binary
+        with:
+          target: ${{ matrix.target }}
+          toolchain: ${{ needs.guard.outputs.rust }}
+
+      # Strips the binary too, so the archive holds the same binary as the packages.
+      - name: Package RPM and DEB
+        if: matrix.build == 'linux'
+        uses: ./.github/actions/linux-packages
+        with:
+          target: ${{ matrix.target }}
+          package: ${{ steps.build.outputs.name }}
+
+      - name: Package the archive
+        shell: bash
+        env:
+          PACKAGE: ${{ steps.build.outputs.name }}
+          TARGET: ${{ matrix.target }}
+          BUILD: ${{ matrix.build }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          dirname="${PACKAGE}-${VERSION}-${TARGET}"
+          mkdir "${dirname}"
+          if [[ "${BUILD}" == windows ]]; then
+            cp "target/${TARGET}/release/${PACKAGE}.exe" "${dirname}/"
+            7z a "dist/${dirname}.zip" "${dirname}"
+          else
+            cp "target/${TARGET}/release/${PACKAGE}" "${dirname}/"
+            tar -czf "dist/${dirname}.tar.gz" "${dirname}"
+          fi
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  crate:
+    name: Package the crate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: guard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: ./.github/actions/rust-toolchain
+        with:
+          toolchain: ${{ needs.guard.outputs.rust }}
+
+      # `--workspace` packages s3m-core and s3m together, so s3m is verified against the
+      # s3m-core of this checkout even though that version is not on crates.io yet.
+      - name: Package and verify the crates
+        run: cargo package --workspace --locked
+
+      - name: Check crates.io would accept them
+        run: cargo publish --workspace --dry-run --locked
+
+      - name: Upload the crates
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: dist-crate
+          path: target/package/*.crate
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - guard
+      - build
+      - crate
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      PACKAGE: ${{ needs.guard.outputs.package }}
+      RUST: ${{ needs.guard.outputs.rust }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      # An immutable release cannot be completed later, so the file set is checked first.
+      # Keep this list in step with the build matrix: a missing or extra file stops the release.
+      - name: Check the release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(
+            {
+              for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin; do
+                echo "${PACKAGE}-${VERSION}-${target}.tar.gz"
+              done
+              echo "${PACKAGE}-${VERSION}-x86_64-pc-windows-msvc.zip"
+              echo "${PACKAGE}-${VERSION}.crate"
+              echo "${PACKAGE}-core-${VERSION}.crate"
+              echo "${PACKAGE}_${VERSION}-1_amd64.deb"
+              echo "${PACKAGE}_${VERSION}-1_arm64.deb"
+              echo "${PACKAGE}-${VERSION}-1.x86_64.rpm"
+              echo "${PACKAGE}-${VERSION}-1.aarch64.rpm"
+            } | sort
+          )"
+          actual="$(ls dist | sort)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::The built files differ from the expected set."
+            diff <(echo "${expected}") <(echo "${actual}") || true
+            exit 1
+          fi
+
+      - name: Write the checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: dist/*
+
+      # The notes are the commit subjects since the previous release (version bumps left
+      # out), so no changelog is kept by hand and every re-run writes the same text.
+      - name: Write the release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous="$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' "${GITHUB_SHA}" 2>/dev/null || true)"
+          range="${GITHUB_SHA}"
+          [[ -z "${previous}" ]] || range="${previous}..${GITHUB_SHA}"
+          changes="$(git log --no-merges --format='- %s (%h)' "${range}" | grep -vE '^- (bump version to|Release) [0-9]+\.[0-9]+\.[0-9]+ \([0-9a-f]+\)$' || true)"
+          {
+            echo "## Changes"
+            echo
+            echo "${changes:-- Only the version bump.}"
+            if [[ -n "${previous}" ]]; then
+              echo
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${VERSION}"
+            fi
+            echo
+            echo "## Verify a download"
+            echo
+            echo '```sh'
+            echo 'sha256sum --check --ignore-missing SHA256SUMS'
+            echo "gh attestation verify <file> --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml"
+            echo '```'
+            echo
+            echo "Built with Rust ${RUST}."
+          } > "${RUNNER_TEMP}/notes.md"
+          cat "${RUNNER_TEMP}/notes.md"
+
+      # Assets go on a draft first: publishing creates the tag at the tested commit, and
+      # an immutable release accepts no uploads afterwards. A draft left by a failed run
+      # is replaced; a published release is left alone.
+      - name: Create the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if state="$(gh release view "${VERSION}" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "${state}" == false ]]; then
+              echo "Release ${VERSION} is already published."
+              exit 0
+            fi
+            gh release delete "${VERSION}" --yes
+          fi
+          gh release create "${VERSION}" dist/* \
+            --draft \
+            --target "${GITHUB_SHA}" \
+            --title "${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/notes.md"
+          gh release edit "${VERSION}" --draft=false --latest
+
+      # What a user can download must be exactly what was built, and the tag must sit on the
+      # tested commit. This also runs when a re-run finds the release already published.
+      - name: Check the published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" --jq '.object.sha')"
+          if [[ "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::Tag ${VERSION} points at ${tag_sha}, not at the tested commit ${GITHUB_SHA}."
+            exit 1
+          fi
+          expected="$(ls dist | sort)"
+          actual="$(gh release view "${VERSION}" --json assets --jq '.assets[].name' | sort)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::Release ${VERSION} holds: $(tr '\n' ' ' <<<"${actual}"); expected: $(tr '\n' ' ' <<<"${expected}")."
+            exit 1
+          fi
+          # The bytes too: download what a user would get and compare it with what was built.
+          published="${RUNNER_TEMP}/published"
+          rm -rf "${published}"
+          gh release download "${VERSION}" --dir "${published}"
+          if ! diff <(cd dist && sha256sum -- * | sort -k2) <(cd "${published}" && sha256sum -- * | sort -k2); then
+            echo "::error::The published files differ from the files that were built."
+            exit 1
+          fi
+          echo "Release ${VERSION} is on ${GITHUB_SHA} with $(wc -l <<<"${actual}") files."
+
+  # s3m-core first: the binary crate depends on it, and cargo publish waits until the
+  # index has it. A crate version crates.io already has is skipped, so a re-run after a
+  # partial publish finishes the rest.
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+      - guard
+      - release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      PACKAGE: ${{ needs.guard.outputs.package }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: ./.github/actions/rust-toolchain
+        with:
+          toolchain: ${{ needs.guard.outputs.rust }}
+
+      # The token reaches cargo only through the environment, never the command line.
+      - name: Publish
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
+        run: |
+          set -euo pipefail
+          publish() {
+            crate="$1"
+            code="$(curl -s -A "${PACKAGE}-release" -o /dev/null -w '%{http_code}' \
+              "https://crates.io/api/v1/crates/${crate}/${VERSION}" || echo 000)"
+            if [[ "${code}" == 200 ]]; then
+              echo "${crate} ${VERSION} is already on crates.io."
+              return 0
+            fi
+            echo "Publishing ${crate} ${VERSION} (crates.io lookup answered ${code})."
+            # The crate job already built and verified this exact checkout.
+            if out="$(cargo publish -p "${crate}" --locked --no-verify 2>&1)"; then
+              printf '%s\n' "${out}"
+            else
+              printf '%s\n' "${out}"
+              # The lookup can fail while the upload already happened: tolerate only that.
+              if printf '%s' "${out}" | grep -qiE 'already (uploaded|exists)'; then
+                echo "${crate} ${VERSION} was already uploaded."
+              else
+                echo "::error::Publishing ${crate} ${VERSION} failed."
+                return 1
+              fi
+            fi
+          }
+          publish "${PACKAGE}-core"
+          publish "${PACKAGE}"
+
+  # Debian, Ubuntu and RPM repositories on PackageCloud, from the same commit and
+  # compiler. The job keeps its continue-on-error: a PackageCloud outage does not fail the
+  # run, so check its log, and re-run it if it did not push.
+  packagecloud:
+    name: PackageCloud
+    needs:
+      - guard
+      - release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/packagecloud.yml
+    with:
+      toolchain: ${{ needs.guard.outputs.rust }}
+    secrets: inherit
