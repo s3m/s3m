@@ -34,16 +34,40 @@ use tempfile::{NamedTempFile, TempDir};
 
 #[tokio::test]
 async fn test_binary_version() {
-    // Simple test to verify binary works
-    let output = run_s3m(&["--version"]);
+    let version = env!("CARGO_PKG_VERSION");
 
-    assert!(output.status.success(), "s3m --version should succeed");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("s3m"),
-        "Version output should contain 's3m'"
+    let short = run_s3m(&["-V"]);
+    assert!(short.status.success(), "s3m -V should succeed");
+    assert_eq!(
+        String::from_utf8_lossy(&short.stdout),
+        format!("s3m {version}\n")
     );
+
+    let long = run_s3m(&["--version"]);
+    assert!(long.status.success(), "s3m --version should succeed");
+    let long = String::from_utf8_lossy(&long.stdout).into_owned();
+
+    // Built from this checkout: rustc's format with the checked-out commit.
+    let head = Command::new("git")
+        .args([
+            "-C",
+            env!("CARGO_MANIFEST_DIR"),
+            "log",
+            "-1",
+            "--no-show-signature",
+            "--date=short",
+            "--format=%H %cd",
+        ])
+        .output();
+    if let Ok(head) = head
+        && head.status.success()
+    {
+        let head = String::from_utf8_lossy(&head.stdout);
+        let (sha, date) = head.trim().split_once(' ').expect("hash and date");
+        assert_eq!(long, format!("s3m {version} ({} {date})\n", &sha[..9]));
+    } else {
+        assert!(long.starts_with(&format!("s3m {version}")), "{long:?}");
+    }
 }
 
 #[tokio::test]

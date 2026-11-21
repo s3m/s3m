@@ -58,11 +58,16 @@ fn listed_subcommands(help: &str) -> Vec<String> {
 
 #[test]
 fn test_binary_version() {
-    let expected = format!("s3m {}\n", env!("CARGO_PKG_VERSION"));
+    let short = format!("s3m {}", env!("CARGO_PKG_VERSION"));
+    assert_eq!(run_without_config(&["-V"]), format!("{short}\n"));
 
-    for flag in ["--version", "-V"] {
-        assert_eq!(run_without_config(&[flag]), expected, "{flag}");
-    }
+    // rustc's format, `s3m X.Y.Z (hash date)`; e2e_binary checks the exact
+    // commit against git.
+    let long = run_without_config(&["--version"]);
+    assert!(
+        long == format!("{short}\n") || long.starts_with(&format!("{short} (")),
+        "{long:?}"
+    );
 }
 
 #[test]

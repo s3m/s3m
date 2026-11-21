@@ -109,9 +109,15 @@ fn default_num_threads() -> String {
         .to_string()
 }
 
+/// `s3m --version`, in rustc's format: `0.23.0 (7464e3d15 2026-11-21)`, the
+/// short commit hash and commit date `build.rs` found. `s3m -V` stays the bare
+/// version for scripts.
+const LONG_VERSION: &str = env!("S3M_LONG_VERSION");
+
 fn base_command() -> Command {
     Command::new("s3m")
         .version(env!("CARGO_PKG_VERSION"))
+        .long_version(LONG_VERSION)
         .about("Store files and streams in S3-compatible object storage")
         .long_about(LONG_ABOUT)
         .after_long_help(LONG_AFTER_HELP)
@@ -381,6 +387,36 @@ hosts:
         let mut config = File::create(&config_path)?;
         config.write_all(CONF.as_bytes())?;
         Ok(tmp_dir.keep())
+    }
+
+    #[test]
+    fn test_short_version_is_bare_and_long_version_adds_commit_and_date() -> Result<()> {
+        let cmd = new(&get_config()?);
+        let short = format!("s3m {}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(cmd.render_version(), format!("{short}\n"));
+
+        // `s3m X.Y.Z`, `s3m X.Y.Z (hash)` or `s3m X.Y.Z (hash YYYY-MM-DD)`.
+        let long = cmd.render_long_version();
+        let details = long
+            .strip_suffix('\n')
+            .and_then(|line| line.strip_prefix(short.as_str()))
+            .unwrap_or_else(|| panic!("unexpected --version {long:?}"));
+        if !details.is_empty() {
+            let inner = details
+                .strip_prefix(" (")
+                .and_then(|rest| rest.strip_suffix(')'))
+                .unwrap_or_else(|| panic!("unexpected --version {long:?}"));
+            let (hash, date) = inner.split_once(' ').unwrap_or((inner, ""));
+            assert!(
+                hash.len() == 9 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "{long:?}"
+            );
+            assert!(
+                date.is_empty() || jiff::civil::Date::strptime("%Y-%m-%d", date).is_ok(),
+                "{long:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
