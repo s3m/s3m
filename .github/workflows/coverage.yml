@@ -48,7 +48,10 @@ jobs:
         env:
           RUST_BACKTRACE: full
           CARGO_INCREMENTAL: 0
-          LLVM_PROFILE_FILE: coverage-%p-%m.profraw
+          # Absolute: tests run s3m in temp directories, and a relative path would
+          # drop profiles there, out of grcov's reach and into the files those
+          # tests expect to find empty.
+          LLVM_PROFILE_FILE: ${{ github.workspace }}/coverage-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
           RUSTDOCFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
 
@@ -57,7 +60,7 @@ jobs:
         env:
           RUST_BACKTRACE: full
           CARGO_INCREMENTAL: 0
-          LLVM_PROFILE_FILE: coverage-int-%p-%m.profraw
+          LLVM_PROFILE_FILE: ${{ github.workspace }}/coverage-int-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
           RUSTDOCFLAGS: -Cinstrument-coverage -Ccodegen-units=1 -Clink-dead-code -Coverflow-checks=off
           MINIO_ENDPOINT: http://127.0.0.1:9000
