@@ -7,7 +7,7 @@ use crate::{
     s3::tools::{sha256_digest, sha256_hmac, write_hex_bytes},
 };
 use base64ct::{Base64, Encoding};
-use chrono::prelude::{DateTime, Utc};
+use jiff::Timestamp;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode, utf8_percent_encode};
 use reqwest::Method;
 use ring::hmac;
@@ -27,7 +27,7 @@ pub struct Signature<'a> {
     // The HTTP request headers
     pub headers: BTreeMap<String, String>,
     // current date & time
-    datetime: DateTime<Utc>,
+    datetime: Timestamp,
 }
 
 impl<'a> Signature<'a> {
@@ -39,7 +39,7 @@ impl<'a> Signature<'a> {
             auth: s3,
             aws_service,
             http_method,
-            datetime: Utc::now(),
+            datetime: Timestamp::now(),
             headers: BTreeMap::new(),
         })
     }
@@ -56,8 +56,8 @@ impl<'a> Signature<'a> {
         length: Option<usize>,
         custom_headers: Option<BTreeMap<&str, &str>>,
     ) -> Result<BTreeMap<String, String>> {
-        let current_date = self.datetime.format("%Y%m%d").to_string();
-        let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ").to_string();
+        let current_date = self.datetime.strftime("%Y%m%d").to_string();
+        let current_datetime = self.datetime.strftime("%Y%m%dT%H%M%SZ").to_string();
 
         self.add_header("host", &self.auth.region.host());
         self.add_header("x-amz-date", &current_datetime);
@@ -147,8 +147,8 @@ impl<'a> Signature<'a> {
     /// # Errors
     /// Will return `Err` if can not make the URL
     pub fn presigned_url(&mut self, key: &'a str, expire: usize) -> Result<String> {
-        let current_date = self.datetime.format("%Y%m%d").to_string();
-        let current_datetime = self.datetime.format("%Y%m%dT%H%M%SZ").to_string();
+        let current_date = self.datetime.strftime("%Y%m%d").to_string();
+        let current_datetime = self.datetime.strftime("%Y%m%dT%H%M%SZ").to_string();
 
         let mut url = self.auth.endpoint()?;
 
@@ -355,8 +355,9 @@ mod tests {
             name: "us-east-1".to_string(),
             endpoint: "examplebucket.s3.amazonaws.com".to_string(),
         };
-        let date = DateTime::parse_from_rfc2822("Fri, 24 May 2013 00:00:00 GMT").unwrap();
-        let date_utc: DateTime<Utc> = date.with_timezone(&Utc);
+        let date_utc = jiff::fmt::rfc2822::DateTimeParser::new()
+            .parse_timestamp("Fri, 24 May 2013 00:00:00 GMT")
+            .unwrap();
 
         let s3 = S3::new(&credentials, &region, None, false);
         let mut sign = Signature::new(&s3, "s3", Method::from_bytes(b"GET").unwrap()).unwrap();

@@ -9,11 +9,11 @@ use crate::{
         globals::GlobalArgs,
         s3_location::{S3Location, parse_location},
         start::get_host,
+        time,
     },
     s3::{Credentials, ObjectLock, ObjectLockMode, S3, actions::ObjectIdentifier},
 };
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, SecondsFormat, Utc};
 use colored::Colorize;
 use std::{
     borrow::ToOwned,
@@ -367,12 +367,10 @@ fn dispatch_share(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action
 /// Parse an RFC 3339 date and normalize it to an explicit UTC instant ("…Z")
 /// that S3 accepts.
 fn parse_retain_until(date: &str) -> Result<String> {
-    Ok(DateTime::parse_from_rfc3339(date)
-        .with_context(|| {
-            format!("invalid date {date:?}, expected RFC 3339 (e.g. 2027-01-01T00:00:00Z)")
-        })?
-        .with_timezone(&Utc)
-        .to_rfc3339_opts(SecondsFormat::Secs, true))
+    let timestamp = time::parse_rfc3339(date).with_context(|| {
+        format!("invalid date {date:?}, expected RFC 3339 (e.g. 2027-01-01T00:00:00Z)")
+    })?;
+    Ok(time::rfc3339_seconds(timestamp))
 }
 
 /// Build the [`ObjectLock`] settings from the upload-time flags, validating
@@ -1823,7 +1821,7 @@ hosts:
                 assert_eq!(prefix.as_deref(), Some("logs/"));
                 assert_eq!(
                     older_than.map(crate::cli::age_filter::AgeFilter::duration),
-                    Some(chrono::Duration::days(30))
+                    Some(jiff::SignedDuration::from_hours(30 * 24))
                 );
             }
             _ => panic!("wrong action"),
@@ -1884,7 +1882,7 @@ hosts:
                 assert!(!bucket);
                 assert_eq!(
                     older_than.map(crate::cli::age_filter::AgeFilter::duration),
-                    Some(chrono::Duration::days(90))
+                    Some(jiff::SignedDuration::from_hours(90 * 24))
                 );
             }
             _ => panic!("wrong action"),
@@ -1913,7 +1911,7 @@ hosts:
                 assert!(!bucket);
                 assert_eq!(
                     older_than.map(crate::cli::age_filter::AgeFilter::duration),
-                    Some(chrono::Duration::hours(12))
+                    Some(jiff::SignedDuration::from_hours(12))
                 );
             }
             _ => panic!("wrong action"),
@@ -1953,7 +1951,7 @@ hosts:
                 assert!(targets.is_empty());
                 assert_eq!(
                     older_than.map(crate::cli::age_filter::AgeFilter::duration),
-                    Some(chrono::Duration::days(30))
+                    Some(jiff::SignedDuration::from_hours(30 * 24))
                 );
             }
             _ => panic!("wrong action"),

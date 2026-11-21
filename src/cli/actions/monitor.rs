@@ -3,8 +3,8 @@ use crate::{
     s3::{S3, actions},
 };
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Duration, Utc};
 use futures::stream::{self, StreamExt};
+use jiff::{SignedDuration, Timestamp};
 use std::fmt::Write as _;
 
 mod scheduler;
@@ -56,7 +56,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
     {
         let base_s3 = s3.clone();
         // Every check judges age against the same instant.
-        let now = Utc::now();
+        let now = Timestamp::now();
         let checks = stream::iter(checks).map(move |check| {
             let base_s3 = base_s3.clone();
             async move { run_check(base_s3, check, now).await }
@@ -107,7 +107,7 @@ pub fn prepare_checks(host: &str, host_config: &Host) -> Result<Vec<MonitorCheck
     Ok(checks)
 }
 
-async fn run_check(base_s3: S3, check: MonitorCheck, now: DateTime<Utc>) -> CheckResult {
+async fn run_check(base_s3: S3, check: MonitorCheck, now: Timestamp) -> CheckResult {
     let MonitorCheck { host, bucket, rule } = check;
     let s3 = base_s3.with_bucket(Some(bucket.clone()));
 
@@ -142,11 +142,10 @@ async fn run_check(base_s3: S3, check: MonitorCheck, now: DateTime<Utc>) -> Chec
     }
 }
 
-async fn evaluate_rule(s3: &S3, rule: &MonitorRule, now: DateTime<Utc>) -> Result<RuleStats> {
+async fn evaluate_rule(s3: &S3, rule: &MonitorRule, now: Timestamp) -> Result<RuleStats> {
     let oldest_allowed = i64::try_from(rule.age)
         .ok()
-        .and_then(Duration::try_seconds)
-        .and_then(|age| now.checked_sub_signed(age))
+        .and_then(|age| now.checked_sub(SignedDuration::from_secs(age)).ok())
         .context("monitor rule age exceeds the supported range")?;
     let mut continuation_token: Option<String> = None;
     let mut exists = false;
@@ -333,7 +332,6 @@ fn format_influxdb(results: &[CheckResult]) -> String {
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region};
-    use chrono::TimeZone;
     use mockito::{Matcher, Server};
     use secrecy::SecretString;
 
@@ -341,8 +339,8 @@ mod tests {
     const FRESH: &str = "2026-03-16T11:00:00.000Z";
 
     /// The injected evaluation instant; no test reads the wall clock.
-    fn at() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 3, 16, 12, 0, 0).unwrap()
+    fn at() -> Timestamp {
+        "2026-03-16T12:00:00Z".parse().unwrap()
     }
 
     fn test_s3(endpoint: String, bucket: Option<&str>) -> S3 {

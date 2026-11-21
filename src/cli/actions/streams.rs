@@ -4,6 +4,7 @@ use crate::{
         actions::{Action, StreamCommand},
         globals::GlobalArgs,
         start::get_host,
+        time,
     },
     s3::{Credentials, S3},
     stream::{
@@ -16,7 +17,6 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow};
 use bytesize::ByteSize;
-use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::Serialize;
 use std::{
@@ -252,20 +252,14 @@ fn format_source(metadata: &StreamMetadata) -> String {
 fn format_timestamp(timestamp: Option<u64>) -> String {
     timestamp.map_or_else(
         || "-".to_string(),
-        |ts| {
-            let dt = DateTime::<Utc>::from(UNIX_EPOCH + std::time::Duration::from_secs(ts));
-            dt.format("%F %T UTC").to_string()
-        },
+        |ts| time::from_unix_seconds(ts).map_or_else(|| ts.to_string(), time::display),
     )
 }
 
 fn format_timestamp_rfc3339(timestamp: Option<u64>) -> String {
     timestamp.map_or_else(
         || "-".to_string(),
-        |ts| {
-            let dt = DateTime::<Utc>::from(UNIX_EPOCH + std::time::Duration::from_secs(ts));
-            dt.to_rfc3339()
-        },
+        |ts| time::from_unix_seconds(ts).map_or_else(|| ts.to_string(), time::rfc3339),
     )
 }
 

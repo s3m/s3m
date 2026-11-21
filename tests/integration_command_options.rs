@@ -547,7 +547,7 @@ fn du_listing_failures_exit_nonzero_without_a_report() -> Result<()> {
             200,
             list_page(&[("a", 1, "yesterday")], None),
             vec!["du", "s3/bucket", "--group-by", "day", "--json"],
-            "premature end of input",
+            "Failed to parse LastModified for object 'a': yesterday",
         ),
     ];
 
@@ -1066,7 +1066,7 @@ fn verify_presigned(printed: &str, endpoint: &str, key: &str, expires: &str) -> 
             .context("missing query value")
     };
     let datetime = value("X-Amz-Date")?;
-    chrono::NaiveDateTime::parse_from_str(&datetime, "%Y%m%dT%H%M%SZ")?;
+    jiff::civil::DateTime::strptime("%Y%m%dT%H%M%SZ", &datetime)?;
     let date = datetime.get(..8).context("date")?;
     let scope = format!("{date}/{REGION}/s3/aws4_request");
     ensure!(value("X-Amz-Algorithm")? == "AWS4-HMAC-SHA256");

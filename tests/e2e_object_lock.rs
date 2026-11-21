@@ -273,17 +273,16 @@ fn field<'v>(value: &'v Value, pointer: &str) -> &'v Value {
 }
 
 /// The retain-until instant of a JSON readback, compared as an instant.
-fn retain_until(lock: &Value) -> chrono::DateTime<chrono::FixedOffset> {
-    chrono::DateTime::parse_from_rfc3339(
-        field(lock, "/retention/retain_until_date")
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap()
+fn retain_until(lock: &Value) -> jiff::Timestamp {
+    field(lock, "/retention/retain_until_date")
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap()
 }
 
-fn instant(date: &str) -> chrono::DateTime<chrono::FixedOffset> {
-    chrono::DateTime::parse_from_rfc3339(date).unwrap()
+fn instant(date: &str) -> jiff::Timestamp {
+    date.parse().unwrap()
 }
 
 #[tokio::test]
@@ -1634,7 +1633,7 @@ fn assert_retention(lock: &ObjectLockReadback, mode: &str) {
     assert_eq!(lock.retention.mode, mode);
     let actual = &lock.retention.retain_until_date;
     assert_eq!(
-        chrono::DateTime::parse_from_rfc3339(actual).unwrap(),
-        chrono::DateTime::parse_from_rfc3339(FUTURE_DATE).unwrap()
+        actual.parse::<jiff::Timestamp>().unwrap(),
+        FUTURE_DATE.parse::<jiff::Timestamp>().unwrap()
     );
 }

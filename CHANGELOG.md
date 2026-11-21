@@ -1,6 +1,7 @@
 ## 0.23.0 🔢 (2026-11-21)
 * **`ls` limits and pagination (issue #70)**: listing now follows every page for objects, buckets and multipart uploads instead of returning one page. `--number/-n N` is a client-enforced **total** limit on printed results, counted after `--older-than` filtering, and no longer a per-request page size. `--number 0` lists nothing and sends no list request. Age-based deletion (`rm --older-than`) stays unlimited. The `--json` output schema is unchanged: no keys were added or removed.
 * `ls --multipart` honours `--prefix`, and `--start-after` maps to the key marker only.
+* **`chrono` replaced by `jiff`**: both crates now use [`jiff`](https://crates.io/crates/jiff) 1.0 to parse and format timestamps. `chrono`, flagged as unmaintained (RUSTSEC-2026-0543), is no longer a dependency of `s3m` or `s3m-core`. Output is unchanged: listings still show `2026-03-14 12:00:00 UTC`, `--json` timestamps keep the `+00:00` offset, and Object Lock dates are still sent as `2027-01-01T00:00:00Z`.
 * **Fixes**:
   * `get --force` no longer empties an existing file when the response has no `Content-Length`. The response is checked before the destination is touched.
   * `-vv` no longer prints the host `enc_key` in the debug log.
@@ -19,10 +20,11 @@
   * `--retries 0` no longer reports success after making no attempts. On a multipart upload where the initiate request succeeds but the part uploads fail, it used to send no part requests, complete the upload anyway and exit 0. It now makes a single attempt, so that failure exits 1. An unreachable endpoint always failed, because the initiate request itself can't connect. `--retries N` means N attempts, not N retries, and applies to multipart parts and streaming requests only. A plain upload smaller than the buffer is one `PutObject` request and is never retried.
   * `--clean` surfaces cleanup errors with a nonzero exit instead of exiting 0.
   * A missing default config file exits 1 with an error naming the file, instead of a clap usage error with exit 2.
-* **`s3m-core` compatibility (source-breaking only for struct-literal construction, E0063)**:
-  * `ListBuckets` gained `continuation_token`. `ListMultipartUploads` gained `prefix`, `key_marker` and `upload_id_marker`. `ListAllMyBucketsResult` gained `continuation_token`. Every `new(max)` constructor keeps its signature, and the max-* fields are still per-request page limits. Code that uses `::new()` or `..Default::default()` is unaffected.
+* **Library compatibility (`s3m-core` and `s3m`)**:
+  * `s3m-core` is source-breaking only for struct-literal construction (E0063): `ListBuckets` gained `continuation_token`. `ListMultipartUploads` gained `prefix`, `key_marker` and `upload_id_marker`. `ListAllMyBucketsResult` gained `continuation_token`. Every `new(max)` constructor keeps its signature, and the max-* fields are still per-request page limits. Code that uses `::new()` or `..Default::default()` is unaffected.
   * `s3m::cli::Host::enc_key` changed from `Option<String>` to `Option<SecretString>`, because `-vv` was printing it in verbose logs.
   * `RequestOptions::set_retries` now keeps at least one attempt and caps values above `u32::MAX` instead of silently falling back to 3.
+  * `s3m` time types moved from `chrono` to `jiff`: `cli::age_filter::AgeFilter::new` and `duration` use `jiff::SignedDuration` (was `chrono::Duration`), `AgeFilter::matches` and `parse_last_modified` use `jiff::Timestamp` (was `DateTime<Utc>`), and `cli::actions::object_du::DailyUsage::day` is a `jiff::civil::Date` (was `chrono::NaiveDate`). The public `s3m-core` API has no time types and is unaffected.
 * **Compression**: the dependency update moved the Zstandard encoder (`zstd-safe` 8.2 to 8.3). Newly compressed objects are no longer byte-identical to output from older releases. Frames from either build still decode with the other, so this isn't data loss.
 * Docs: the README no longer shows a `--throttle` flag (the flag is `--kilobytes/-k`) and now describes `--buffer` in bytes, with values below 5 MiB raised to 10 MiB.
 

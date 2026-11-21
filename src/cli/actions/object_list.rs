@@ -2,6 +2,7 @@ use crate::{
     cli::{
         actions::Action,
         age_filter::{AgeFilter, parse_last_modified},
+        time,
     },
     s3::{
         S3, actions,
@@ -10,8 +11,8 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use bytesize::ByteSize;
-use chrono::{DateTime, Utc};
 use colored::Colorize;
+use jiff::Timestamp;
 use serde::Serialize;
 use std::collections::HashSet;
 
@@ -126,7 +127,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
         let limit = ListLimit::parse(max_kub.as_deref())?;
         match (bucket, list_multipart_uploads) {
             (Some(_), false) => {
-                let now = Utc::now();
+                let now = Timestamp::now();
                 if json {
                     let bucket_name = s3.bucket().unwrap_or_default().to_string();
                     let objects = collect_filtered_objects(
@@ -219,7 +220,7 @@ async fn collect_filtered_objects(
     start_after: Option<String>,
     limit: ListLimit,
     older_than: Option<AgeFilter>,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Vec<ObjectJsonEntry>> {
     let mut objects = Vec::new();
     visit_filtered_objects(s3, prefix, start_after, limit, older_than, now, |object| {
@@ -255,7 +256,7 @@ pub(crate) async fn visit_filtered_objects<F>(
     start_after: Option<String>,
     limit: ListLimit,
     older_than: Option<AgeFilter>,
-    now: DateTime<Utc>,
+    now: Timestamp,
     mut visit: F,
 ) -> Result<()>
 where
@@ -411,7 +412,7 @@ fn print_object_info(object: &Object) -> Result<()> {
     let last_modified = parse_last_modified(object)?;
     println!(
         "{} {:>10} {:<}",
-        format!("[{}]", last_modified.format("%F %T %Z")).green(),
+        format!("[{}]", time::display(last_modified)).green(),
         ByteSize(object.size).to_string().yellow(),
         object.key
     );
@@ -419,11 +420,10 @@ fn print_object_info(object: &Object) -> Result<()> {
 }
 
 fn print_upload_info(upload: &Upload) -> Result<()> {
-    let dt = DateTime::parse_from_rfc3339(&upload.initiated)?;
-    let initiated: DateTime<Utc> = DateTime::from(dt);
+    let initiated = time::parse_rfc3339(&upload.initiated)?;
     println!(
         "{} {} {}",
-        format!("[{}]", initiated.format("%F %T %Z")).green(),
+        format!("[{}]", time::display(initiated)).green(),
         upload.upload_id.yellow(),
         upload.key
     );
@@ -431,11 +431,10 @@ fn print_upload_info(upload: &Upload) -> Result<()> {
 }
 
 fn print_bucket_info(bucket: &Bucket) -> Result<()> {
-    let dt = DateTime::parse_from_rfc3339(&bucket.creation_date)?;
-    let creation_date: DateTime<Utc> = DateTime::from(dt);
+    let creation_date = time::parse_rfc3339(&bucket.creation_date)?;
     println!(
         "{} {}",
-        format!("[{}]", creation_date.format("%F %T %Z")).green(),
+        format!("[{}]", time::display(creation_date)).green(),
         bucket.name.yellow()
     );
     Ok(())
@@ -460,7 +459,6 @@ where
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region};
-    use chrono::TimeZone;
     use mockito::{Matcher, Server};
     use secrecy::SecretString;
     use std::fmt::Write as _;
@@ -532,7 +530,7 @@ mod tests {
             None,
             ListLimit::Unlimited,
             Some(crate::cli::age_filter::parse_age_filter("30d").unwrap()),
-            Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap(),
+            "2026-03-14T12:00:00Z".parse().unwrap(),
             |object| {
                 keys.push(object.key);
                 Ok(())
@@ -593,7 +591,7 @@ mod tests {
             None,
             ListLimit::Unlimited,
             Some(crate::cli::age_filter::parse_age_filter("30d").unwrap()),
-            Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap(),
+            "2026-03-14T12:00:00Z".parse().unwrap(),
             |object| {
                 keys.push(object.key);
                 Ok(())
@@ -629,7 +627,7 @@ mod tests {
             None,
             ListLimit::Unlimited,
             Some(crate::cli::age_filter::parse_age_filter("30d").unwrap()),
-            Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap(),
+            "2026-03-14T12:00:00Z".parse().unwrap(),
             |object| {
                 keys.push(object.key);
                 Ok(())
@@ -668,7 +666,7 @@ mod tests {
             None,
             ListLimit::Unlimited,
             Some(crate::cli::age_filter::parse_age_filter("30d").unwrap()),
-            Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap(),
+            "2026-03-14T12:00:00Z".parse().unwrap(),
             |_object| Ok(()),
         )
         .await
@@ -684,8 +682,8 @@ mod tests {
     // Exactly `now - 30d`: not strictly older, so never selected.
     const CUTOFF: &str = "2026-02-12T12:00:00.000Z";
 
-    fn now() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap()
+    fn now() -> Timestamp {
+        "2026-03-14T12:00:00Z".parse().unwrap()
     }
 
     fn host_s3(endpoint: String) -> S3 {

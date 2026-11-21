@@ -6,7 +6,6 @@
     clippy::unnecessary_wraps
 )]
 
-use chrono::Utc;
 use mockito::{Matcher, Server};
 use s3m::{
     cli::{
@@ -477,7 +476,7 @@ async fn test_multi_rm_surfaces_partial_delete_errors() {
 #[tokio::test]
 async fn test_rm_older_than_deletes_only_matching_single_object() {
     let mut server = Server::new_async().await;
-    let now = Utc::now().to_rfc3339();
+    let now = jiff::Timestamp::now().to_string();
     let list = server
         .mock("GET", "/bucket")
         .match_query(Matcher::AllOf(vec![
@@ -532,7 +531,7 @@ async fn test_rm_older_than_deletes_only_matching_single_object() {
 #[tokio::test]
 async fn test_rm_older_than_uses_delete_objects_for_multiple_matches_across_pages() {
     let mut server = Server::new_async().await;
-    let now = Utc::now().to_rfc3339();
+    let now = jiff::Timestamp::now().to_string();
     let matched = vec!["logs/old-a.txt".to_string(), "logs/old-b.txt".to_string()];
     let list_1 = server
         .mock("GET", "/bucket")
@@ -611,7 +610,7 @@ async fn test_rm_older_than_uses_delete_objects_for_multiple_matches_across_page
 #[tokio::test]
 async fn test_rm_older_than_no_matches_is_ok() {
     let mut server = Server::new_async().await;
-    let now = Utc::now().to_rfc3339();
+    let now = jiff::Timestamp::now().to_string();
     let list = server
         .mock("GET", "/bucket")
         .match_query(Matcher::AllOf(vec![

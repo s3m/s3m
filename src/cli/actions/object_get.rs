@@ -1,5 +1,5 @@
 use crate::{
-    cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
+    cli::{actions::Action, globals::GlobalArgs, progressbar::Bar, time},
     s3::{S3, actions},
     stream::{cipher_from_key, decrypt_chunk, parse_nonce_header},
 };
@@ -8,7 +8,6 @@ use anyhow::{Context, Result, anyhow};
 use bytes::{Buf, BytesMut};
 use bytesize::ByteSize;
 use chacha20poly1305::ChaCha20Poly1305;
-use chrono::{DateTime, Utc};
 use colored::Colorize;
 use http::{HeaderMap, header::CONTENT_TYPE};
 use serde::Serialize;
@@ -407,11 +406,10 @@ async fn handle_versions(s3: &S3, key: &str, json: bool) -> Result<()> {
     }
 
     for version in result.versions {
-        let dt = DateTime::parse_from_rfc3339(&version.last_modified)?;
-        let last_modified: DateTime<Utc> = DateTime::from(dt);
+        let last_modified = time::parse_rfc3339(&version.last_modified)?;
         println!(
             "{} {:>10} {:<} ID: {}",
-            format!("[{}]", last_modified.format("%F %T %Z")).green(),
+            format!("[{}]", time::display(last_modified)).green(),
             ByteSize(version.size).to_string().yellow(),
             if version.is_latest {
                 format!("{} (latest)", version.key)
@@ -543,9 +541,8 @@ fn json_metadata_output(
 }
 
 fn normalize_json_timestamp(value: &str) -> Result<String> {
-    DateTime::parse_from_rfc2822(value)
-        .or_else(|_| DateTime::parse_from_rfc3339(value))
-        .map(|timestamp| timestamp.with_timezone(&Utc).to_rfc3339())
+    time::parse_http_date(value)
+        .map(time::rfc3339)
         .map_err(|error| anyhow!("Failed to parse Last-Modified header '{value}': {error}"))
 }
 

@@ -163,7 +163,7 @@ mod tests {
             m.get_one::<crate::cli::age_filter::AgeFilter>("older-than")
                 .copied()
                 .map(crate::cli::age_filter::AgeFilter::duration),
-            Some(chrono::Duration::days(30))
+            Some(jiff::SignedDuration::from_hours(30 * 24))
         );
         Ok(())
     }

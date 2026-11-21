@@ -6,7 +6,7 @@ use crate::{
     s3::{S3, actions},
 };
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::fmt::Write as _;
 
 /// # Errors
@@ -46,7 +46,7 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
                         Some(key.clone())
                     },
                     older_than,
-                    Utc::now(),
+                    Timestamp::now(),
                 )
                 .await?;
 
@@ -226,7 +226,7 @@ async fn collect_matched_delete_objects(
     s3: &S3,
     prefix: Option<String>,
     older_than: AgeFilter,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Vec<actions::ObjectIdentifier>> {
     let mut objects = Vec::new();
     // Age deletion must select every match: no total, full 1000-key pages.
@@ -687,7 +687,7 @@ mod tests {
             &mock_s3(server.url()),
             Some("integration/18/".to_string()),
             crate::cli::age_filter::parse_age_filter("1d").unwrap(),
-            chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 4, 1, 0, 0, 0).unwrap(),
+            "2026-04-01T00:00:00Z".parse().unwrap(),
         )
         .await
         .unwrap();
@@ -733,7 +733,7 @@ mod tests {
             &mock_s3(server.url()),
             Some("logs/".to_string()),
             crate::cli::age_filter::parse_age_filter("30d").unwrap(),
-            chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 3, 14, 12, 0, 0).unwrap(),
+            "2026-03-14T12:00:00Z".parse().unwrap(),
         )
         .await
         .unwrap();

@@ -205,7 +205,7 @@ mod tests {
             m.get_one::<crate::cli::age_filter::AgeFilter>("older-than")
                 .copied()
                 .map(crate::cli::age_filter::AgeFilter::duration),
-            Some(chrono::Duration::hours(12))
+            Some(jiff::SignedDuration::from_hours(12))
         );
         Ok(())
     }

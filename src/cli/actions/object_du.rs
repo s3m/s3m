@@ -1,11 +1,18 @@
 use crate::{
-    cli::actions::{Action, DuGroupBy},
-    s3::{S3, actions, responses::ListBucketResult},
+    cli::{
+        actions::{Action, DuGroupBy},
+        age_filter::parse_last_modified,
+        time,
+    },
+    s3::{
+        S3, actions,
+        responses::{ListBucketResult, Object},
+    },
 };
 use anyhow::{Result, anyhow};
 use bytesize::ByteSize;
-use chrono::{DateTime, NaiveDate, Utc};
 use colored::Colorize;
+use jiff::civil::Date;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -17,7 +24,7 @@ pub struct UsageSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyUsage {
-    pub day: NaiveDate,
+    pub day: Date,
     pub summary: UsageSummary,
 }
 
@@ -106,7 +113,7 @@ pub async fn summarize_report(
         objects: 0,
         bytes: 0,
     };
-    let mut per_day: BTreeMap<NaiveDate, UsageSummary> = BTreeMap::new();
+    let mut per_day: BTreeMap<Date, UsageSummary> = BTreeMap::new();
 
     loop {
         let page = request_page(s3, prefix.clone(), continuation_token.clone()).await?;
@@ -160,11 +167,11 @@ fn update_summary(summary: &mut UsageSummary, page: &ListBucketResult) {
 
 /// Grouping is based on each object's `LastModified` converted to a UTC calendar date.
 fn update_daily_summary(
-    per_day: &mut BTreeMap<NaiveDate, UsageSummary>,
+    per_day: &mut BTreeMap<Date, UsageSummary>,
     page: &ListBucketResult,
 ) -> Result<()> {
     for object in &page.contents {
-        let day = parse_last_modified_day(&object.last_modified)?;
+        let day = last_modified_day(object)?;
         let summary = per_day.entry(day).or_insert(UsageSummary {
             objects: 0,
             bytes: 0,
@@ -176,9 +183,9 @@ fn update_daily_summary(
     Ok(())
 }
 
-fn parse_last_modified_day(last_modified: &str) -> Result<NaiveDate> {
-    let timestamp = DateTime::parse_from_rfc3339(last_modified)?;
-    Ok(timestamp.with_timezone(&Utc).date_naive())
+/// The UTC day of the object's `LastModified`; the error names the object.
+fn last_modified_day(object: &Object) -> Result<Date> {
+    Ok(time::utc_date(parse_last_modified(object)?))
 }
 
 fn format_report(target: &str, report: &UsageReport) -> String {
@@ -317,14 +324,14 @@ mod tests {
             "s3/my-bucket",
             &[
                 DailyUsage {
-                    day: NaiveDate::from_ymd_opt(2026, 3, 13).unwrap(),
+                    day: jiff::civil::date(2026, 3, 13),
                     summary: UsageSummary {
                         objects: 2,
                         bytes: 20,
                     },
                 },
                 DailyUsage {
-                    day: NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
+                    day: jiff::civil::date(2026, 3, 14),
                     summary: UsageSummary {
                         objects: 1,
                         bytes: 5,
@@ -345,9 +352,25 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_last_modified_day_uses_utc() {
-        let day = parse_last_modified_day("2026-03-14T01:30:00+02:00").unwrap();
-        assert_eq!(day, NaiveDate::from_ymd_opt(2026, 3, 13).unwrap());
+    fn test_last_modified_day_uses_utc_and_names_bad_objects() {
+        let object = |last_modified: &str| Object {
+            key: "logs/a.txt".to_string(),
+            last_modified: last_modified.to_string(),
+            e_tag: "\"etag\"".to_string(),
+            storage_class: "STANDARD".to_string(),
+            owner: None,
+            size: 1,
+        };
+        let day = last_modified_day(&object("2026-03-14T01:30:00+02:00")).unwrap();
+        assert_eq!(day, jiff::civil::date(2026, 3, 13));
+
+        let err = last_modified_day(&object("yesterday"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("Failed to parse LastModified for object 'logs/a.txt': yesterday"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -372,7 +395,7 @@ mod tests {
             "s3/my-bucket",
             &UsageReport::ByDay {
                 days: vec![DailyUsage {
-                    day: NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
+                    day: jiff::civil::date(2026, 3, 14),
                     summary: UsageSummary {
                         objects: 1,
                         bytes: 5,
