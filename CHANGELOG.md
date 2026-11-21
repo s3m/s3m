@@ -1,7 +1,8 @@
-## 0.23.0 🔢 (2026-11-21)
+## 0.23.0 ⏰ (2026-11-21)
 * **`ls` limits and pagination (issue #70)**: listing now follows every page for objects, buckets and multipart uploads instead of returning one page. `--number/-n N` is a client-enforced **total** limit on printed results, counted after `--older-than` filtering, and no longer a per-request page size. `--number 0` lists nothing and sends no list request. Age-based deletion (`rm --older-than`) stays unlimited. The `--json` output schema is unchanged: no keys were added or removed.
 * `ls --multipart` honours `--prefix`, and `--start-after` maps to the key marker only.
 * **`chrono` replaced by `jiff`**: both crates now use [`jiff`](https://crates.io/crates/jiff) 1.0 to parse and format timestamps. `chrono`, flagged as unmaintained (RUSTSEC-2026-0543), is no longer a dependency of `s3m` or `s3m-core`. Output is unchanged: listings still show `2026-03-14 12:00:00 UTC`, `--json` timestamps keep the `+00:00` offset, and Object Lock dates are still sent as `2027-01-01T00:00:00Z`.
+* **`--version` shows the build commit**: `s3m -V` still prints only the version (`s3m 0.23.0`). `s3m --version` now follows rustc's format, `s3m 0.23.0 (<commit> <date>)`, with a 9-character commit hash and the commit date. A crates.io build (`cargo install s3m`) shows the hash without a date.
 * **Fixes**:
   * `get --force` no longer empties an existing file when the response has no `Content-Length`. The response is checked before the destination is touched.
   * `-vv` no longer prints the host `enc_key` in the debug log.
@@ -26,6 +27,7 @@
   * `RequestOptions::set_retries` now keeps at least one attempt and caps values above `u32::MAX` instead of silently falling back to 3.
   * `s3m` time types moved from `chrono` to `jiff`: `cli::age_filter::AgeFilter::new` and `duration` use `jiff::SignedDuration` (was `chrono::Duration`), `AgeFilter::matches` and `parse_last_modified` use `jiff::Timestamp` (was `DateTime<Utc>`), and `cli::actions::object_du::DailyUsage::day` is a `jiff::civil::Date` (was `chrono::NaiveDate`). The public `s3m-core` API has no time types and is unaffected.
 * **Compression**: the dependency update moved the Zstandard encoder (`zstd-safe` 8.2 to 8.3). Newly compressed objects are no longer byte-identical to output from older releases. Frames from either build still decode with the other, so this isn't data loss.
+* CI: pull requests fail when GitHub cannot verify a commit's signature. Sign every commit you submit.
 * Docs: the README no longer shows a `--throttle` flag (the flag is `--kilobytes/-k`) and now describes `--buffer` in bytes, with values below 5 MiB raised to 10 MiB.
 
 ## 0.22.0 🧹 (2026-11-09)
