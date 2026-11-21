@@ -116,7 +116,26 @@ For version `X.Y.Z`, the GitHub release carries:
   and `CODECOV_TOKEN`.
 - **`main`**: protected, requires the **`CI OK`** check, signed commits and linear history,
   no force pushes or deletions.
-- **`develop`**: keep fast-forward only.
+- **`develop`**: keep fast-forward only. Pull requests need one approving review and the
+  `Format`, `Clippy`, `Check` (which also rejects commits GitHub cannot verify as signed),
+  `Test (Linux)` and `Test (Portable) (macOS-latest, stable)` checks, with the branch up to
+  date. Admins fast-forward it directly, so those PR-time checks do not block the release
+  flow:
+
+  ```sh
+  gh api -X PATCH repos/s3m/s3m/branches/develop/protection/required_status_checks --input - <<'JSON'
+  {
+    "strict": true,
+    "checks": [
+      { "context": "Test (Linux)", "app_id": 15368 },
+      { "context": "Test (Portable) (macOS-latest, stable)", "app_id": 15368 },
+      { "context": "Format", "app_id": 15368 },
+      { "context": "Clippy", "app_id": 15368 },
+      { "context": "Check", "app_id": 15368 }
+    ]
+  }
+  JSON
+  ```
 - **A tag ruleset** letting `X.Y.Z` tags be created but never moved or deleted:
 
   ```sh
