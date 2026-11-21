@@ -1,6 +1,6 @@
 use crate::{
     cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
-    s3::{S3, actions, tools::throttle_download},
+    s3::{S3, actions},
     stream::{cipher_from_key, decrypt_chunk, parse_nonce_header},
 };
 use aead_stream::DecryptorBE32;
@@ -19,6 +19,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use tokio::{fs::OpenOptions, io::AsyncWriteExt};
+
+mod download;
+use download::download_response;
 
 // Encrypted streams are framed as `[len(4)][ciphertext]`; a single frame is one
 // upload read-chunk, far below the 512 MiB multipart part buffer. Reject absurd
@@ -176,6 +179,11 @@ async fn download_object(
         .with_context(|| format!("Failed to get file name from: {key}"))?;
     let action = actions::GetObject::new(&key, version);
     let mut res = action.request(s3, &globals).await?;
+    // Validate the response before touching the destination, so a rejected
+    // download never creates or truncates a local file.
+    let file_size = res
+        .content_length()
+        .context("could not get content_length")?;
     let is_encrypted = is_s3m_encrypted(res.headers());
     let can_decrypt = is_encrypted && globals.enc_key.is_some();
 
@@ -193,9 +201,6 @@ async fn download_object(
     }
 
     let file = create_output_file(&path, force).await?;
-    let file_size = res
-        .content_length()
-        .context("could not get content_length")?;
     let mut state = DownloadState::new(
         file,
         if quiet {
@@ -211,23 +216,6 @@ async fn download_object(
 
     download_response(&mut res, &mut state, &globals).await?;
     state.finish();
-    Ok(())
-}
-
-async fn download_response(
-    res: &mut reqwest::Response,
-    state: &mut DownloadState,
-    globals: &GlobalArgs,
-) -> Result<()> {
-    while let Some(chunk) = res.chunk().await? {
-        let chunk_len = chunk.len();
-        state.process_chunk(chunk).await?;
-
-        if let Some(bandwidth_kb) = globals.throttle {
-            throttle_download(bandwidth_kb, chunk_len).await?;
-        }
-    }
-
     Ok(())
 }
 

@@ -82,7 +82,7 @@ pub enum Action {
         bucket: Option<String>,
         json: bool,
         list_multipart_uploads: bool,
-        // max keys,uploads,buckets
+        // total keys, uploads or buckets to list (`ls --number`), a non-negative integer
         max_kub: Option<String>,
         older_than: Option<AgeFilter>,
         prefix: Option<String>,

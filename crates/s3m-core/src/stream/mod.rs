@@ -1,6 +1,8 @@
 pub mod db;
+mod final_part;
 pub mod iterator;
 pub mod part;
+mod retry;
 pub mod state;
 pub mod upload_compressed;
 pub mod upload_compressed_encrypted;
@@ -22,8 +24,10 @@ use anyhow::{Context as _, Result, anyhow};
 use bytes::BytesMut;
 use bytesize::ByteSize;
 use chacha20poly1305::{ChaCha20Poly1305, Key, aead::KeyInit};
+use final_part::upload_final_part;
 use indicatif::ProgressBar;
 use rand::{RngExt, rng};
+use retry::try_stream_part;
 use ring::digest::{Context, SHA256};
 use secrecy::ExposeSecret;
 use std::{
@@ -34,7 +38,6 @@ use std::{
     sync::Arc,
 };
 use tempfile::{Builder, NamedTempFile};
-use tokio::time::{Duration, sleep};
 use tokio::{
     io::Error,
     sync::mpsc::{UnboundedSender, unbounded_channel},
@@ -137,98 +140,6 @@ fn get_key(key: &str, compress: bool, encrypt: bool) -> String {
 
         (false, false) => key.to_string(),
     }
-}
-
-async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
-    let mut etag = String::new();
-
-    let digest_sha = part.sha.clone().finish();
-    let digest_md5 = part.md5.clone().finalize();
-
-    // Create globals only to pass the throttle
-    let globals = RequestOptions {
-        throttle: part.throttle,
-        retries: part.retries,
-        compress: false,
-        encrypt: false,
-        enc_key: None,
-        object_lock: None,
-    };
-
-    for attempt in 1..=part.retries {
-        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
-        const MAX_BACKOFF_SECS: u64 = 30;
-        let backoff_time = std::cmp::min(2u64.pow(attempt - 1), MAX_BACKOFF_SECS);
-
-        if attempt > 1 {
-            // Add jitter (0-1000ms) to prevent thundering herd
-            let jitter_ms = rng().random_range(0_u64..1000);
-            let total_backoff =
-                Duration::from_secs(backoff_time) + Duration::from_millis(jitter_ms);
-
-            log::warn!(
-                "Error streaming part number {}, retrying in {:.1} seconds",
-                part.part_number,
-                total_backoff.as_secs_f64()
-            );
-
-            sleep(total_backoff).await;
-        }
-
-        emit_stream_progress(
-            part.channel.as_ref(),
-            StreamProgressEvent::SendingStarted {
-                part_number: part.part_number,
-                total_bytes: part.count as u64,
-            },
-        );
-
-        let action = actions::StreamPart::new(
-            part.key,
-            part.tmp_file.path(),
-            part.part_number,
-            part.upload_id,
-            part.count,
-            (digest_sha.as_ref(), digest_md5.as_ref()),
-            stream_sending_progress_callback(part.channel.as_ref()),
-        );
-
-        match action.request(part.s3, &globals).await {
-            Ok(e) => {
-                etag = e;
-                emit_stream_progress(
-                    part.channel.as_ref(),
-                    StreamProgressEvent::Confirmed(part.count as u64),
-                );
-
-                log::info!("Uploaded part: {}, etag: {}", part.part_number, etag);
-
-                break;
-            }
-
-            Err(e) => {
-                emit_stream_progress(part.channel.as_ref(), StreamProgressEvent::SendingStopped);
-
-                log::error!(
-                    "Error uploading part number {}, attempt {}/{} failed: {}",
-                    part.part_number,
-                    attempt,
-                    part.retries,
-                    e
-                );
-
-                if attempt == part.retries {
-                    return Err(anyhow::anyhow!(
-                        "Error uploading part number {}, {}",
-                        part.part_number,
-                        e
-                    ));
-                }
-            }
-        }
-    }
-
-    Ok(etag)
 }
 
 /// Compresses a chunk of bytes using Zstandard (zstd), offloading the work to a blocking thread.
@@ -698,48 +609,6 @@ async fn complete_multipart_upload(
     Ok(response.e_tag)
 }
 
-/// Upload the final part
-async fn upload_final_part(
-    stream: &mut Stream<'_>,
-    key: &str,
-    upload_id: &str,
-    s3: &S3,
-    globals: &RequestOptions,
-) -> Result<String> {
-    let digest_sha = stream.sha.clone().finish();
-    let digest_md5 = stream.md5.clone().finalize();
-
-    emit_stream_progress(
-        stream.channel.as_ref(),
-        StreamProgressEvent::SendingStarted {
-            part_number: stream.part_number,
-            total_bytes: stream.count as u64,
-        },
-    );
-
-    let action = actions::StreamPart::new(
-        key,
-        stream.tmp_file.path(),
-        stream.part_number,
-        upload_id,
-        stream.count,
-        (digest_sha.as_ref(), digest_md5.as_ref()),
-        stream_sending_progress_callback(stream.channel.as_ref()),
-    );
-
-    let etag = action.request(s3, globals).await.map_err(|e| {
-        emit_stream_progress(stream.channel.as_ref(), StreamProgressEvent::SendingStopped);
-        anyhow!("Failed to upload final part: {e}")
-    })?;
-
-    emit_stream_progress(
-        stream.channel.as_ref(),
-        StreamProgressEvent::Confirmed(stream.count as u64),
-    );
-
-    Ok(etag)
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -755,7 +624,10 @@ mod tests {
     use indicatif::ProgressBar;
     use mockito::{Matcher, Server};
     use secrecy::SecretString;
-    use tokio::{sync::mpsc::unbounded_channel, time::timeout};
+    use tokio::{
+        sync::mpsc::unbounded_channel,
+        time::{Duration, timeout},
+    };
 
     #[tokio::test]
     async fn test_compress_decompress_roundtrip() {

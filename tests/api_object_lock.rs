@@ -18,8 +18,9 @@ use common::{MinioContext, create_test_file_with_content};
 use s3m_core::{
     Credentials, ObjectLock, ObjectLockMode, Region, RequestOptions, S3,
     s3::actions::{
-        CreateBucket, GetObjectLegalHold, GetObjectLockConfiguration, GetObjectRetention,
-        PutObject, PutObjectLegalHold, PutObjectLockConfiguration, PutObjectRetention,
+        CreateBucket, DeleteBucket, DeleteObjects, GetObjectLegalHold, GetObjectLockConfiguration,
+        GetObjectRetention, ListObjectVersions, ObjectIdentifier, PutObject, PutObjectLegalHold,
+        PutObjectLockConfiguration, PutObjectRetention,
     },
 };
 use secrecy::SecretString;
@@ -135,4 +136,49 @@ async fn test_object_lock_via_public_api() {
         .request(&s3)
         .await
         .expect("legal hold off");
+    let released = GetObjectLegalHold::new("locked.dat", None)
+        .request(&s3)
+        .await
+        .expect("get released legal hold");
+    assert_eq!(released.status.as_deref(), Some("OFF"));
+
+    // 6. Retained versions refuse deletion until the GOVERNANCE bypass is sent;
+    //    then the bucket can be removed.
+    remove_retained_versions(&s3).await;
+}
+
+async fn remove_retained_versions(s3: &S3) {
+    let mut retained: Vec<ObjectIdentifier> = ListObjectVersions::new("")
+        .request(s3)
+        .await
+        .expect("list object versions")
+        .versions
+        .into_iter()
+        .map(|version| ObjectIdentifier {
+            key: version.key,
+            version_id: Some(version.version_id),
+        })
+        .collect();
+    retained.sort_by(|a, b| a.key.cmp(&b.key));
+    let keys: Vec<&str> = retained.iter().map(|object| object.key.as_str()).collect();
+    assert_eq!(keys, ["explicit.dat", "locked.dat"]);
+
+    let refused = DeleteObjects::new(retained.clone(), false)
+        .request(s3)
+        .await
+        .expect("delete without bypass returns per-key results");
+    assert_eq!(refused.errors.len(), 2, "{refused:?}");
+    assert!(refused.deleted.is_empty(), "{refused:?}");
+
+    let removed = DeleteObjects::new(retained, false)
+        .bypass_governance(true)
+        .request(s3)
+        .await
+        .expect("delete with governance bypass");
+    assert!(removed.errors.is_empty(), "{removed:?}");
+    assert_eq!(removed.deleted.len(), 2, "{removed:?}");
+    DeleteBucket::new()
+        .request(s3)
+        .await
+        .expect("delete emptied bucket");
 }

@@ -11,7 +11,7 @@ use crate::s3::{Credentials, Region, S3};
 use anyhow::{Context, Result, anyhow};
 use clap::ArgMatches;
 use colored::Colorize;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -47,7 +47,7 @@ fn init_logger(matches: &ArgMatches) {
 
 fn handle_early_exit_commands(matches: &ArgMatches, config_path: &Path) -> Result<()> {
     if matches.get_one::<bool>("clean").copied().unwrap_or(false) {
-        legacy_clean(config_path).unwrap_or_default();
+        legacy_clean(config_path)?;
         exit(0);
     }
 
@@ -83,20 +83,19 @@ fn build_global_args(matches: &ArgMatches) -> GlobalArgs {
         log::info!("throttle bandwidth: {throttle}KB/s");
     }
 
-    let retries: usize = matches.get_one::<usize>("retries").map_or(3, |size| *size);
-    global_args.set_retries(retries);
+    // clap bounds --retries to u32; set_retries keeps at least one attempt.
+    if let Some(&retries) = matches.get_one::<u32>("retries") {
+        global_args.set_retries(usize::try_from(retries).unwrap_or(usize::MAX));
+    }
 
     global_args
 }
 
-fn resolve_config_file(matches: &ArgMatches) -> PathBuf {
-    matches.get_one::<PathBuf>("config").map_or_else(
-        || {
-            eprintln!("no config file found");
-            exit(1);
-        },
-        Into::into,
-    )
+fn resolve_config_file(matches: &ArgMatches, config_path: &Path) -> PathBuf {
+    matches
+        .get_one::<PathBuf>("config")
+        .cloned()
+        .unwrap_or_else(|| config_path.join("config.yml"))
 }
 
 fn handle_config_only_subcommands(
@@ -131,12 +130,12 @@ fn apply_host_defaults(host: &Host, global_args: &mut GlobalArgs) -> Result<()> 
     }
 
     if let Some(enc_key) = &host.enc_key {
-        if enc_key.len() != 32 {
+        if enc_key.expose_secret().len() != 32 {
             return Err(anyhow!("Encryption key must be 32 characters long."));
         }
 
         global_args.encrypt = true;
-        global_args.enc_key = Some(SecretString::new(enc_key.clone().into()));
+        global_args.enc_key = Some(enc_key.clone());
     }
 
     Ok(())
@@ -176,10 +175,14 @@ fn resolve_s3_and_action(
     Ok((s3, action))
 }
 
-pub fn get_config_path() -> Result<PathBuf> {
+fn config_dir() -> PathBuf {
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
 
-    let config_path = Path::new(&home_dir).join(".config").join("s3m");
+    home_dir.join(".config").join("s3m")
+}
+
+pub fn get_config_path() -> Result<PathBuf> {
+    let config_path = config_dir();
     fs::create_dir_all(&config_path)
         .context(format!("unable to create: {}", config_path.display()))?;
 
@@ -189,8 +192,9 @@ pub fn get_config_path() -> Result<PathBuf> {
 /// # Errors
 /// Will return an error if the config file is not found
 pub fn start() -> Result<(S3, Action, GlobalArgs)> {
+    // --help and --version exit inside get_matches, before anything is written.
+    let matches = commands::new(&config_dir()).get_matches();
     let config_path = get_config_path()?;
-    let matches = commands::new(&config_path).get_matches();
 
     init_logger(&matches);
 
@@ -201,7 +205,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     log::info!("buffer size: {buf_size}");
 
     let mut global_args = build_global_args(&matches);
-    let config_file = resolve_config_file(&matches);
+    let config_file = resolve_config_file(&matches, &config_path);
     let config = Config::new(config_file.clone())?;
 
     log::debug!("config: {config:#?}");

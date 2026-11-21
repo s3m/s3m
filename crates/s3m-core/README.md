@@ -92,6 +92,31 @@ To manage Object Lock after upload, the crate exposes `Get`/`PutObjectLockConfig
 under `s3m_core::s3::actions`, returning `ObjectLockConfiguration` / `ObjectRetention`
 / `ObjectLegalHold` from `s3m_core::s3::responses`.
 
+## Compatibility notes
+
+These changes are source-breaking only for code that builds the affected structs
+with a struct literal (compiler error E0063, missing fields):
+
+- `ListBuckets` gained `continuation_token`.
+- `ListMultipartUploads` gained `prefix`, `key_marker` and `upload_id_marker`.
+- `ListAllMyBucketsResult` gained `continuation_token`.
+
+Every `new(max)` constructor keeps its signature, and the max-* fields remain
+per-request page limits. Each action still sends exactly one request, so
+following pages is up to the caller. Code that uses `::new()` or
+`..Default::default()` is unaffected.
+
+`RequestOptions::set_retries` now keeps at least one attempt and caps values
+above `u32::MAX`, instead of silently falling back to 3. The retry count is a
+number of attempts.
+
+The `s3m` crate also changed `s3m::cli::Host::enc_key` from `Option<String>` to
+`Option<SecretString>`.
+
+The Zstandard encoder moved with the dependency update (`zstd-safe` 8.2 to
+8.3). Newly compressed streams aren't byte-identical to older output, but
+frames from either build decode with the other.
+
 ## License
 
 BSD-3-Clause. See the [main repository](https://github.com/s3m/s3m) for the full

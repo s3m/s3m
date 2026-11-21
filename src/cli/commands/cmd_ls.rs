@@ -40,8 +40,8 @@ pub fn command() -> Command {
         )
         .arg(
             Arg::new("max-kub")
-                .help("Limits the number of keys, uploads or buckets returned in the response")
-                .long_help("Maximum number of buckets, objects or uploads to return.")
+                .help("Limits the total number of keys, uploads or buckets listed")
+                .long_help("Maximum total number of buckets, objects or uploads to list across all pages.\n\nWith --older-than, only matching objects count toward the total. 0 lists nothing.")
                 .long("number")
                 .short('n')
                 .value_name("NUMBER")

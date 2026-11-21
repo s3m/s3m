@@ -82,9 +82,18 @@ jobs:
         # multipart resume path and is intentionally excluded here.
         run: >-
           cargo test --workspace --lib --bins
+          --test integration_age_delete_pagination
+          --test integration_cli_options
+          --test integration_command_options
           --test integration_encryption
+          --test integration_filtered_listing
+          --test integration_get_version_precedence
           --test integration_json_output
+          --test integration_listing_progress
+          --test integration_listing_public_api
           --test integration_minio_runtime
           --test integration_multipart
           --test integration_s3_actions
           --test integration_stdin
+          --test integration_streaming_retries
+          --test integration_upload_options

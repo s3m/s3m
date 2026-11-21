@@ -79,7 +79,7 @@ pub async fn stream_stdin_encrypted(
         .await
         .map(|(final_stream_state, _)| final_stream_state)?;
 
-    let final_etag = upload_final_part(&mut stream, &key, &upload_id, s3, &globals).await?;
+    let final_etag = upload_final_part(&stream).await?;
     stream.etags.push(final_etag);
 
     if let Some(sender) = stream.channel.take() {

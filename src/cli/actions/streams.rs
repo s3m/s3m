@@ -345,6 +345,10 @@ fn calculate_max_requests(number: u8) -> u8 {
     number.max(1)
 }
 
+#[cfg(test)]
+#[path = "streams_concurrency_tests.rs"]
+mod concurrency_tests;
+
 fn validate_resume_entry(entry: &StreamEntry, id: &str) -> Result<StreamMetadata> {
     if matches!(entry.status, StreamStatus::Broken | StreamStatus::Complete) {
         return Err(anyhow!(

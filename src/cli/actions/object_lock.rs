@@ -15,13 +15,13 @@ use serde_json::json;
 /// `true` when the error means "no Object Lock setting is present" rather than a
 /// real failure. The S3 API signals this with a 404; `MinIO` returns HTTP 400
 /// carrying `NoSuchObjectLockConfiguration` for a missing object or bucket
-/// retention / legal hold.
+/// retention / legal hold. A missing bucket, key or version is a failure.
 fn is_unset(e: &Error) -> bool {
-    e.is_not_found()
-        || matches!(
-            e.code(),
-            Some("NoSuchObjectLockConfiguration" | "ObjectLockConfigurationNotFoundError")
-        )
+    match e.code() {
+        Some("NoSuchBucket" | "NoSuchKey" | "NoSuchVersion") => false,
+        Some("NoSuchObjectLockConfiguration" | "ObjectLockConfigurationNotFoundError") => true,
+        _ => e.is_not_found(),
+    }
 }
 
 /// # Errors

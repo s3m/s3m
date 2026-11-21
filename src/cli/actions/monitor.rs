@@ -3,9 +3,14 @@ use crate::{
     s3::{S3, actions},
 };
 use anyhow::{Context, Result, anyhow};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use futures::stream::{self, StreamExt};
 use std::fmt::Write as _;
+
+mod scheduler;
+
+#[cfg(test)]
+mod admission_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MonitorOutputFormat {
@@ -50,14 +55,13 @@ pub async fn handle(s3: &S3, action: Action) -> Result<()> {
     } = action
     {
         let base_s3 = s3.clone();
-        let results = stream::iter(checks)
-            .map(move |check| {
-                let base_s3 = base_s3.clone();
-                async move { run_check(base_s3, check).await }
-            })
-            .buffer_unordered(usize::from(number.max(1)))
-            .collect::<Vec<_>>()
-            .await;
+        // Every check judges age against the same instant.
+        let now = Utc::now();
+        let checks = stream::iter(checks).map(move |check| {
+            let base_s3 = base_s3.clone();
+            async move { run_check(base_s3, check, now).await }
+        });
+        let results = scheduler::collect(checks, number).await;
 
         let output = match format {
             MonitorOutputFormat::Prometheus => format_prometheus(&results),
@@ -103,7 +107,7 @@ pub fn prepare_checks(host: &str, host_config: &Host) -> Result<Vec<MonitorCheck
     Ok(checks)
 }
 
-async fn run_check(base_s3: S3, check: MonitorCheck) -> CheckResult {
+async fn run_check(base_s3: S3, check: MonitorCheck, now: DateTime<Utc>) -> CheckResult {
     let MonitorCheck { host, bucket, rule } = check;
     let s3 = base_s3.with_bucket(Some(bucket.clone()));
 
@@ -111,7 +115,7 @@ async fn run_check(base_s3: S3, check: MonitorCheck) -> CheckResult {
     let mut size_mismatch = false;
     let mut error = false;
 
-    match evaluate_rule(&s3, &rule).await {
+    match evaluate_rule(&s3, &rule, now).await {
         Ok(stats) => {
             exist = stats.exists;
             if exist && rule.size > 0 {
@@ -138,11 +142,12 @@ async fn run_check(base_s3: S3, check: MonitorCheck) -> CheckResult {
     }
 }
 
-async fn evaluate_rule(s3: &S3, rule: &MonitorRule) -> Result<RuleStats> {
-    let now = Utc::now();
-    let age_seconds =
-        i64::try_from(rule.age).context("monitor rule age exceeds the supported range")?;
-    let oldest_allowed = now - Duration::seconds(age_seconds);
+async fn evaluate_rule(s3: &S3, rule: &MonitorRule, now: DateTime<Utc>) -> Result<RuleStats> {
+    let oldest_allowed = i64::try_from(rule.age)
+        .ok()
+        .and_then(Duration::try_seconds)
+        .and_then(|age| now.checked_sub_signed(age))
+        .context("monitor rule age exceeds the supported range")?;
     let mut continuation_token: Option<String> = None;
     let mut exists = false;
     let mut any_large_enough = false;
@@ -328,9 +333,17 @@ fn format_influxdb(results: &[CheckResult]) -> String {
 mod tests {
     use super::*;
     use crate::s3::{Credentials, Region};
-    use chrono::SecondsFormat;
+    use chrono::TimeZone;
     use mockito::{Matcher, Server};
     use secrecy::SecretString;
+
+    /// One hour before [`at`]: inside every age window used below.
+    const FRESH: &str = "2026-03-16T11:00:00.000Z";
+
+    /// The injected evaluation instant; no test reads the wall clock.
+    fn at() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 3, 16, 12, 0, 0).unwrap()
+    }
 
     fn test_s3(endpoint: String, bucket: Option<&str>) -> S3 {
         S3::new(
@@ -381,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn test_evaluate_rule_fresh_object_matches_size() {
         let mut server = Server::new_async().await;
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = FRESH.to_string();
         let _list = server
             .mock("GET", "/bucket")
             .match_query(Matcher::AllOf(vec![
@@ -406,6 +419,7 @@ mod tests {
                 age: 86_400,
                 size: 1_024,
             },
+            at(),
         )
         .await
         .unwrap();
@@ -417,7 +431,7 @@ mod tests {
     #[tokio::test]
     async fn test_evaluate_rule_detects_size_mismatch() {
         let mut server = Server::new_async().await;
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = FRESH.to_string();
         let _list = server
             .mock("GET", "/bucket")
             .match_query(Matcher::AllOf(vec![
@@ -442,6 +456,7 @@ mod tests {
                 age: 86_400,
                 size: 1_024,
             },
+            at(),
         )
         .await
         .unwrap();
@@ -477,6 +492,7 @@ mod tests {
                 age: 60,
                 size: 1_024,
             },
+            at(),
         )
         .await
         .unwrap();
@@ -488,7 +504,7 @@ mod tests {
     #[tokio::test]
     async fn test_evaluate_rule_ignores_non_matching_suffix() {
         let mut server = Server::new_async().await;
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = FRESH.to_string();
         let _list = server
             .mock("GET", "/bucket")
             .match_query(Matcher::AllOf(vec![
@@ -513,6 +529,7 @@ mod tests {
                 age: 86_400,
                 size: 1_024,
             },
+            at(),
         )
         .await
         .unwrap();
@@ -524,7 +541,7 @@ mod tests {
     #[tokio::test]
     async fn test_evaluate_rule_mixed_sizes_one_large_enough() {
         let mut server = Server::new_async().await;
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = FRESH.to_string();
         let _list = server
             .mock("GET", "/bucket")
             .match_query(Matcher::AllOf(vec![
@@ -552,6 +569,7 @@ mod tests {
                 age: 86_400,
                 size: 1_024,
             },
+            at(),
         )
         .await
         .unwrap();
@@ -563,7 +581,7 @@ mod tests {
     #[tokio::test]
     async fn test_evaluate_rule_stops_after_first_sufficient_match() {
         let mut server = Server::new_async().await;
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = FRESH.to_string();
         let _page1 = server
             .mock("GET", "/bucket")
             .match_query(Matcher::AllOf(vec![
@@ -591,6 +609,7 @@ mod tests {
                 age: 86_400,
                 size: 1_024,
             },
+            at(),
         )
         .await
         .unwrap();
@@ -602,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn test_evaluate_rule_continues_across_pages_until_size_match() {
         let mut server = Server::new_async().await;
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = FRESH.to_string();
         let _page1 = server
             .mock("GET", "/bucket")
             .match_query(Matcher::AllOf(vec![
@@ -647,12 +666,53 @@ mod tests {
                 age: 86_400,
                 size: 1_024,
             },
+            at(),
         )
         .await
         .unwrap();
 
         assert!(stats.exists);
         assert!(stats.any_large_enough);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_rule_age_window_includes_its_exact_start() {
+        // at() - 3600s = 2026-03-16T11:00:00Z starts the window.
+        for (last_modified, exists) in [
+            ("2026-03-16T11:00:00.000Z", true),
+            ("2026-03-16T13:00:00+02:00", true),
+            ("2026-03-16T10:59:59.999Z", false),
+        ] {
+            let mut server = Server::new_async().await;
+            let _list = server
+                .mock("GET", "/bucket")
+                .match_query(Matcher::UrlEncoded("prefix".into(), "logs/".into()))
+                .with_status(200)
+                .with_header("content-type", "application/xml")
+                .with_body(list_objects_xml(
+                    "bucket",
+                    "logs/",
+                    &[("logs/app.log", 4_096, last_modified)],
+                ))
+                .create_async()
+                .await;
+
+            let stats = evaluate_rule(
+                &test_s3(server.url(), Some("bucket")),
+                &MonitorRule {
+                    prefix: "logs/".to_string(),
+                    suffix: String::new(),
+                    age: 3_600,
+                    size: 0,
+                },
+                at(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(stats.exists, exists, "{last_modified}");
+            assert_eq!(stats.any_large_enough, exists, "{last_modified}");
+        }
     }
 
     #[tokio::test]
@@ -685,6 +745,7 @@ mod tests {
                     size: 512,
                 },
             },
+            at(),
         )
         .await;
 

@@ -93,7 +93,7 @@ pub async fn stream_stdin_compressed_encrypted(
         .map(|(final_stream_state, _)| final_stream_state)?; // Extract only UploadStream from Ok variant
 
     // Upload final part and complete multipart upload
-    let final_etag = upload_final_part(&mut stream, &key, &upload_id, s3, &globals).await?;
+    let final_etag = upload_final_part(&stream).await?;
 
     stream.etags.push(final_etag);
 

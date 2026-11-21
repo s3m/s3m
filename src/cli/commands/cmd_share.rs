@@ -1,5 +1,8 @@
-use crate::cli::commands::validator_is_num;
-use clap::{Arg, Command};
+use clap::{Arg, Command, builder::RangedU64ValueParser};
+
+/// `SigV4` presigned URLs accept `X-Amz-Expires` from 1 second to 7 days.
+/// <https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html>
+const MAX_EXPIRE_SECONDS: u64 = 604_800;
 
 pub fn command() -> Command {
     Command::new("share")
@@ -17,12 +20,12 @@ pub fn command() -> Command {
         .arg(
             Arg::new("expire")
                 .help("Time period in seconds, max value 604800 (seven days)")
-                .long_help("Presigned URL expiration in seconds.\n\nMaximum: 604800 (7 days). Default: 43200 (12 hours).")
+                .long_help("Presigned URL expiration in seconds.\n\nMinimum: 1. Maximum: 604800 (7 days). Default: 43200 (12 hours).")
                 .long("expire")
                 .short('e')
                 .default_value("43200")
                 .num_args(1)
-                .value_parser(validator_is_num()),
+                .value_parser(RangedU64ValueParser::<usize>::new().range(1..=MAX_EXPIRE_SECONDS)),
         )
 }
 

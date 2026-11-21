@@ -120,11 +120,7 @@ fn base_command() -> Command {
         .styles(command_styles())
 }
 
-fn add_transfer_args(
-    cmd: Command,
-    config_file_path: PathBuf,
-    config_streams_path: &Path,
-) -> Command {
+fn add_transfer_args(cmd: Command, config_streams_path: &Path) -> Command {
     let cmd = cmd
         .arg(
             Arg::new("clean")
@@ -205,7 +201,6 @@ fn add_transfer_args(
         )
         .arg(
             Arg::new("config")
-            .default_value(config_file_path.into_os_string())
             .long("config")
             .long_help("Path to config.yml.\n\nDefault:\n  ~/.config/s3m/config.yml")
             .num_args(1)
@@ -306,12 +301,12 @@ fn add_runtime_args(cmd: Command, num_threads: String) -> Command {
         )
         .arg(
             Arg::new("retries")
-            .help("Number of retries")
-            .long_help("Number of retry attempts for failed upload parts or streaming requests.")
+            .help("Number of attempts (0 means one attempt)")
+            .long_help("Number of attempts for each upload part or streaming request.\n\n0 makes a single attempt without retrying.")
             .long("retries")
             .short('r')
             .default_value("3")
-            .value_parser(validator_is_num())
+            .value_parser(clap::value_parser!(u32))
             .num_args(1)
         )
         .arg(
@@ -349,11 +344,10 @@ fn add_subcommands(cmd: Command) -> Command {
 }
 
 pub fn new(config_path: &Path) -> Command {
-    let config_file_path = config_path.join("config.yml");
     let config_streams_path = config_path.join("streams");
 
     let cmd = base_command();
-    let cmd = add_transfer_args(cmd, config_file_path, &config_streams_path);
+    let cmd = add_transfer_args(cmd, &config_streams_path);
     let cmd = add_runtime_args(cmd, default_num_threads());
     add_subcommands(cmd)
 }
@@ -404,13 +398,10 @@ hosts:
         );
         assert_eq!(m.get_one::<usize>("buffer").copied(), Some(10_485_760));
         assert_eq!(m.get_one::<bool>("clean").copied(), Some(false));
-        assert_eq!(
-            m.get_one::<PathBuf>("config")
-                .map(|s| s.display().to_string()),
-            Some(config.join("config.yml").display().to_string())
-        );
+        // Resolved to ~/.config/s3m/config.yml after early exits, see start.rs
+        assert_eq!(m.get_one::<PathBuf>("config"), None);
         assert_eq!(m.get_one::<usize>("throttle").copied(), Some(0));
-        assert_eq!(m.get_one::<usize>("retries").copied(), Some(3));
+        assert_eq!(m.get_one::<u32>("retries").copied(), Some(3));
 
         Ok(())
     }
@@ -734,7 +725,7 @@ hosts:
 
             // get matches
             let m = m.unwrap();
-            assert_eq!(m.get_one::<usize>("retries").copied(), Some(n.parse()?));
+            assert_eq!(m.get_one::<u32>("retries").copied(), Some(n.parse()?));
         }
         Ok(())
     }

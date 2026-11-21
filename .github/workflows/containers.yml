@@ -55,13 +55,15 @@ jobs:
         run: docker info
 
       - name: Start RustFS container
+        id: rustfs
         run: |
           CONTAINER_NAME="s3m-test-rustfs"
-          docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
           docker run -d \
             --name "$CONTAINER_NAME" \
             -p 9000:9000 \
             -p 9001:9001 \
+            --tmpfs /data:rw,mode=1777 \
+            --tmpfs /logs:rw,mode=1777 \
             -e RUSTFS_ACCESS_KEY=minioadmin \
             -e RUSTFS_SECRET_KEY=minioadmin \
             ghcr.io/rustfs/rustfs:1.0.0
@@ -74,6 +76,10 @@ jobs:
               echo "MINIO_ENDPOINT=http://127.0.0.1:9000" >> "$GITHUB_ENV"
               echo "MINIO_ACCESS_KEY=minioadmin" >> "$GITHUB_ENV"
               echo "MINIO_SECRET_KEY=minioadmin" >> "$GITHUB_ENV"
+              # COMPLIANCE retention cannot be deleted through S3, even by an
+              # administrator. This job owns the service and removes it below.
+              echo "S3M_DISPOSABLE_OBJECT_LOCK_ENDPOINT=http://127.0.0.1:9000" >> "$GITHUB_ENV"
+              echo "S3M_DISPOSABLE_OBJECT_LOCK_CONTAINER_ID=$(docker inspect --format '{{.Id}}' s3m-test-rustfs)" >> "$GITHUB_ENV"
               exit 0
             fi
             sleep 1
@@ -93,8 +99,8 @@ jobs:
           RUST_LOG: debug
 
       - name: Clean up containers
-        if: always()
-        run: docker rm -f s3m-test-rustfs 2>/dev/null || true
+        if: always() && steps.rustfs.outcome == 'success'
+        run: docker rm -f s3m-test-rustfs
 
   test-summary:
     name: Integration Tests Summary

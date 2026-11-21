@@ -330,8 +330,7 @@ fn directory_timestamp(state_dir: &Path) -> Option<u64> {
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
+        .map_or_default(|duration| duration.as_secs())
 }
 
 fn is_db_lock_error(error: &str) -> bool {

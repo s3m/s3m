@@ -29,7 +29,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    thread::sleep,
     time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -100,7 +99,9 @@ fn minio_s3(minio: &MinioContext, bucket: &str) -> S3 {
     )
 }
 
-fn create_resumable_state(home: &Path, id: &str) {
+/// Write a file-multipart stream state with one pending part; `upload_id` is
+/// `None` for a state whose upload was never created.
+fn create_state(home: &Path, id: &str, upload_id: Option<&str>) -> (StreamMetadata, Db) {
     let s3m_dir = home.join(".config").join("s3m");
     let source = home.join("source.bin");
     fs::write(&source, b"hello world").unwrap();
@@ -113,36 +114,40 @@ fn create_resumable_state(home: &Path, id: &str) {
         .unwrap()
         .as_millis();
     let db = Db::new(&test_s3(), "key", id, file_mtime, &s3m_dir).unwrap();
-    db.save_upload_id("upload-1").unwrap();
+    if let Some(upload_id) = upload_id {
+        db.save_upload_id(upload_id).unwrap();
+    }
     db.create_part(1, 0, 11, None).unwrap();
     db.db_parts().unwrap().flush().unwrap();
     let created_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    write_metadata(
-        &s3m_dir,
-        &StreamMetadata {
-            version: 1,
-            id: id.to_string(),
-            host: "s3".to_string(),
-            bucket: "bucket".to_string(),
-            key: "key".to_string(),
-            source_path: source,
-            checksum: id.to_string(),
-            file_size: 11,
-            file_mtime,
-            part_size: 11,
-            db_key: db.state_key().to_string(),
-            created_at,
-            updated_at: Some(created_at),
-            pipe: false,
-            compress: false,
-            encrypt: false,
-            mode: StreamMode::FileMultipart,
-        },
-    )
-    .unwrap();
+    let metadata = StreamMetadata {
+        version: 1,
+        id: id.to_string(),
+        host: "s3".to_string(),
+        bucket: "bucket".to_string(),
+        key: "key".to_string(),
+        source_path: source,
+        checksum: id.to_string(),
+        file_size: 11,
+        file_mtime,
+        part_size: 11,
+        db_key: db.state_key().to_string(),
+        created_at,
+        updated_at: Some(created_at),
+        pipe: false,
+        compress: false,
+        encrypt: false,
+        mode: StreamMode::FileMultipart,
+    };
+    write_metadata(&s3m_dir, &metadata).unwrap();
+    (metadata, db)
+}
+
+fn create_resumable_state(home: &Path, id: &str) {
+    create_state(home, id, Some("upload-1"));
 }
 
 fn create_valid_resumable_state(home: &Path, id: &str) -> PathBuf {
@@ -430,6 +435,27 @@ fn test_legacy_clean_removes_broken_and_keeps_resumable() {
 }
 
 #[test]
+fn test_legacy_clean_reports_cleanup_failure() {
+    let home = tempdir().unwrap();
+    write_config(home.path());
+    // A file where the streams directory belongs makes the state scan fail.
+    let streams_path = home.path().join(".config").join("s3m").join("streams");
+    fs::write(&streams_path, "not a directory").unwrap();
+
+    for args in [&["--clean"][..], &["streams", "clean"]] {
+        let output = run_streams(home.path(), args);
+
+        assert!(!output.status.success(), "{args:?} reported success");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Error:"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(streams_path.is_file());
+}
+
+#[test]
 fn test_streams_resume_unknown_id_fails_clearly() {
     let home = tempdir().unwrap();
     write_config(home.path());
@@ -441,19 +467,225 @@ fn test_streams_resume_unknown_id_fails_clearly() {
     assert!(stderr.contains("Unknown stream state id: missing"));
 }
 
+fn s3m_dir(home: &Path) -> PathBuf {
+    home.join(".config").join("s3m")
+}
+
+fn show_json(home: &Path, id: &str) -> Value {
+    let output = run_streams(home, &["streams", "show", id, "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+/// `show` output without `updated_at`: an entry lacking metadata reports its
+/// directory mtime, which moves whenever a scan opens the state database.
+fn stable_show_json(home: &Path, id: &str) -> Value {
+    let mut shown = show_json(home, id);
+    shown.as_object_mut().unwrap().remove("updated_at");
+    shown
+}
+
+/// Run a resume that must fail with `message`, and prove the saved state is
+/// reported identically afterwards (nothing was removed or rewritten).
+fn assert_resume_fails_and_state_survives(home: &Path, args: &[&str], id: &str, message: &str) {
+    let state_file = state_dir(&s3m_dir(home), id).join("state.yml");
+    let state_before = fs::read(&state_file).unwrap();
+    let shown_before = stable_show_json(home, id);
+
+    let output = run_streams(home, args);
+
+    assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+    assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(message), "{args:?}: {stderr}");
+    assert_eq!(fs::read(&state_file).unwrap(), state_before);
+    assert_eq!(stable_show_json(home, id), shown_before);
+}
+
+fn set_mtime(path: &Path, mtime: SystemTime) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
 #[test]
 fn test_streams_resume_fails_when_source_file_changed() {
     let home = tempdir().unwrap();
     write_config(home.path());
     let source = create_valid_resumable_state(home.path(), "changed-id");
-    sleep(Duration::from_millis(20));
-    fs::write(&source, b"hello world changed").unwrap();
+    let saved_mtime = fs::metadata(&source).unwrap().modified().unwrap();
+    let resume = ["streams", "resume", "changed-id"];
 
-    let output = run_streams(home.path(), &["streams", "resume", "changed-id"]);
+    // Same bytes, different modification time.
+    set_mtime(&source, saved_mtime + Duration::from_secs(1));
+    assert_resume_fails_and_state_survives(
+        home.path(),
+        &resume,
+        "changed-id",
+        "Source file changed since the multipart state was created",
+    );
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Source file changed since the multipart state was created"));
+    // Same length and modification time, different bytes.
+    fs::write(&source, b"HELLO WORLD").unwrap();
+    set_mtime(&source, saved_mtime);
+    assert_resume_fails_and_state_survives(
+        home.path(),
+        &resume,
+        "changed-id",
+        "Source file checksum no longer matches saved stream state",
+    );
+
+    // Source removed.
+    fs::remove_file(&source).unwrap();
+    assert_resume_fails_and_state_survives(
+        home.path(),
+        &resume,
+        "changed-id",
+        "Source file missing or unreadable",
+    );
+}
+
+#[test]
+fn test_streams_resume_refuses_unusable_state_and_keeps_it() {
+    let home = tempdir().unwrap();
+    write_config(home.path());
+    create_broken_state(home.path(), "broken-id");
+    create_state(home.path(), "no-upload-id", None);
+    create_valid_resumable_state(home.path(), "good-id");
+
+    assert_resume_fails_and_state_survives(
+        home.path(),
+        &["streams", "resume", "broken-id"],
+        "broken-id",
+        "Stream state broken-id is not resumable (status: broken)",
+    );
+    assert_eq!(
+        show_json(home.path(), "no-upload-id")["upload_id"],
+        Value::Null
+    );
+    assert_resume_fails_and_state_survives(
+        home.path(),
+        &["streams", "resume", "no-upload-id"],
+        "no-upload-id",
+        "Stream state no-upload-id is not resumable (status: broken)",
+    );
+    for args in [
+        &["streams", "resume", "good-id", "--json"][..],
+        &["streams", "--json", "resume", "good-id"],
+    ] {
+        assert_resume_fails_and_state_survives(
+            home.path(),
+            args,
+            "good-id",
+            "--json is not supported with `s3m streams resume`",
+        );
+    }
+}
+
+#[test]
+fn test_streams_rejects_incomplete_invocations() {
+    let home = tempdir().unwrap();
+    write_config(home.path());
+
+    let cases: &[(&[&str], i32, &str)] = &[
+        (&["streams", "show"], 2, "required arguments"),
+        (&["streams", "resume"], 2, "required arguments"),
+        (&["streams", "frob"], 2, "unrecognized subcommand 'frob'"),
+        (
+            &["streams", "show", "missing"],
+            1,
+            "Unknown stream state id: missing",
+        ),
+    ];
+    for (args, code, message) in cases {
+        let output = run_streams(home.path(), args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(*code), "{args:?}: {stderr}");
+        assert!(stderr.contains(message), "{args:?}: {stderr}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+    }
+}
+
+#[test]
+fn test_streams_default_verb_matches_ls() {
+    let home = tempdir().unwrap();
+    write_config(home.path());
+    // Both entries carry metadata timestamps, so listing order and rendered
+    // times do not depend on when the directories were last touched.
+    create_state(home.path(), "no-upload-id", None);
+    create_resumable_state(home.path(), "good-id");
+
+    let default = run_streams(home.path(), &["streams"]);
+    let ls = run_streams(home.path(), &["streams", "ls"]);
+
+    assert!(default.status.success(), "{default:?}");
+    assert!(ls.status.success(), "{ls:?}");
+    assert_eq!(default.stdout, ls.stdout);
+    let stdout = String::from_utf8_lossy(&ls.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "{stdout}");
+    assert!(
+        lines[0].contains("ID") && lines[0].contains("UPLOAD_ID"),
+        "{stdout}"
+    );
+    let good = lines
+        .iter()
+        .find(|line| line.starts_with("good-id "))
+        .unwrap();
+    assert!(
+        good.contains("upload-1") && good.contains("bucket/key"),
+        "{good}"
+    );
+    let unusable = lines
+        .iter()
+        .find(|line| line.starts_with("no-upload-id "))
+        .unwrap();
+    assert!(unusable.contains("broken"), "{unusable}");
+}
+
+#[test]
+fn test_streams_json_flag_placement_is_equivalent() {
+    let home = tempdir().unwrap();
+    write_config(home.path());
+    // Both entries carry metadata timestamps, so listing order and rendered
+    // times do not depend on when the directories were last touched.
+    create_state(home.path(), "no-upload-id", None);
+    create_resumable_state(home.path(), "good-id");
+
+    let reference = run_streams(home.path(), &["streams", "ls", "--json"]);
+    assert!(reference.status.success(), "{reference:?}");
+    for args in [&["streams", "--json"][..], &["streams", "--json", "ls"]] {
+        let output = run_streams(home.path(), args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert_eq!(output.stdout, reference.stdout, "{args:?}");
+    }
+    let listing: Value = serde_json::from_slice(&reference.stdout).unwrap();
+    let mut ids: Vec<&str> = listing["streams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["good-id", "no-upload-id"]);
+
+    let before = run_streams(home.path(), &["streams", "--json", "show", "good-id"]);
+    assert!(before.status.success(), "{before:?}");
+    assert_eq!(
+        before.stdout,
+        run_streams(home.path(), &["streams", "show", "good-id", "--json"]).stdout
+    );
+    let shown: Value = serde_json::from_slice(&before.stdout).unwrap();
+    assert_eq!(shown["id"], "good-id");
+    assert_eq!(shown["upload_id"], "upload-1");
+    assert_eq!(shown["destination"], "bucket/key");
+    assert_eq!(shown["file_size_bytes"], 11);
+    assert_eq!(shown["parts_total"], 1);
+    assert_eq!(shown["parts_pending"], 1);
+    assert_eq!(shown["parts_uploaded"], 0);
 }
 
 #[tokio::test]
@@ -544,6 +776,9 @@ async fn test_streams_resume_completes_partially_uploaded_live_multipart_upload(
     );
 }
 
+#[path = "support/streams_resume.rs"]
+mod streams_resume;
+
 #[test]
 fn test_streams_ls_json_lists_broken_state() {
     let home = tempdir().unwrap();
@@ -578,15 +813,79 @@ fn test_streams_show_json_broken_state() {
 
 #[test]
 fn test_streams_clean_json_output() {
+    for args in [
+        &["streams", "clean", "--json"][..],
+        &["streams", "--json", "clean"],
+    ] {
+        let home = tempdir().unwrap();
+        write_config(home.path());
+        create_broken_state(home.path(), "broken-id");
+        create_resumable_state(home.path(), "good-id");
+
+        let output = run_streams(home.path(), args);
+
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            stdout,
+            serde_json::json!({"removed": ["broken-id"], "kept": ["good-id"]})
+        );
+    }
+}
+
+#[test]
+fn test_streams_clean_keeps_unfinished_states_byte_for_byte() {
     let home = tempdir().unwrap();
     write_config(home.path());
+    let base = s3m_dir(home.path());
     create_broken_state(home.path(), "broken-id");
-    create_resumable_state(home.path(), "good-id");
+    create_resumable_state(home.path(), "active-id");
+    let day = 24 * 60 * 60;
+    // Old and very old updates (resumable and stale) are still unfinished.
+    for (id, upload_id, age) in [
+        ("resumable-id", "upload-2", 2 * day),
+        ("stale-id", "upload-3", 30 * day),
+    ] {
+        let (mut metadata, _db) = create_state(home.path(), id, Some(upload_id));
+        metadata.updated_at = Some(metadata.created_at - age);
+        write_metadata(&base, &metadata).unwrap();
+    }
+    // A finished upload (etag recorded) is removable.
+    // Reuse the creating handle: reopening races sled's file lock release.
+    let (_, db) = create_state(home.path(), "complete-id", Some("upload-4"));
+    db.save_etag("\"etag-done\"").unwrap();
+    db.flush().unwrap();
+    drop(db);
+
+    let kept = ["active-id", "resumable-id", "stale-id"];
+    let state_bytes: Vec<Vec<u8>> = kept
+        .iter()
+        .map(|id| fs::read(state_dir(&base, id).join("state.yml")).unwrap())
+        .collect();
 
     let output = run_streams(home.path(), &["streams", "clean", "--json"]);
 
-    assert!(output.status.success());
-    let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["removed"][0], "broken-id");
-    assert_eq!(stdout["kept"][0], "good-id");
+    assert!(output.status.success(), "{output:?}");
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let sorted = |field: &str| {
+        let mut ids: Vec<String> = summary[field]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().to_string())
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(sorted("removed"), ["broken-id", "complete-id"]);
+    assert_eq!(sorted("kept"), kept);
+    assert!(!state_dir(&base, "broken-id").exists());
+    assert!(!state_dir(&base, "complete-id").exists());
+    for (id, bytes) in kept.iter().zip(state_bytes) {
+        assert_eq!(
+            fs::read(state_dir(&base, id).join("state.yml")).unwrap(),
+            bytes,
+            "{id}"
+        );
+    }
 }

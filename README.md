@@ -108,7 +108,29 @@ s3m ls s3/my-bucket
 
 # List with prefix
 s3m ls s3/my-bucket/path/
+
+# List only the first 100 objects
+s3m ls s3/my-bucket --number 100
+
+# List in-progress multipart uploads under a key prefix
+s3m ls s3/my-bucket --multipart --prefix backups/
 ```
+
+Listing follows every page of results for objects, buckets and multipart
+uploads, so a single `ls` returns the complete set unless you limit it.
+
+* `--number/-n N` is a **total** limit enforced by s3m, not a page size. It
+  counts what is printed, and with `--older-than` only the objects that pass the
+  age filter count toward `N`. `--number 0` lists nothing and sends no list
+  request.
+* `--multipart` honours `--prefix`. `--start-after` maps to the key marker only,
+  so it skips keys up to that key but never selects an upload id.
+* A host without a bucket (for example `s3m ls s3`) lists buckets and rejects
+  `--multipart`, `--prefix`, `--start-after` and `--older-than` before sending
+  any request.
+* The `--json` output schema is unchanged: no keys were added or removed.
+* `rm --older-than` is not subject to this limit and still considers every
+  matching object.
 
 ### Usage summary
 
@@ -218,6 +240,13 @@ s3m rm -b --recursive s3/my-bucket
 s3m --compress mysqldump.sql s3/backups/db.sql.zst
 ```
 
+> **Compatibility note:** the dependency update moved the Zstandard encoder
+> (`zstd-safe` 8.2 to 8.3), so newly compressed objects are no longer
+> byte-for-byte identical to output from older releases. Frames written by
+> either build still decompress with the other, so nothing stored is lost, but
+> don't rely on identical bytes (or identical checksums) for the same input
+> across versions.
+
 ### Encryption
 
 ```bash
@@ -317,30 +346,54 @@ s3m object-lock set s3/vault/file.dat --legal-hold on
 s3m object-lock set s3/vault/file.dat --legal-hold off
 ```
 
-A specific version can be targeted with `--version-id <id>`.
+A specific version can be targeted with `--version-id <id>`, for objects only.
+`object-lock get --version-id` on a bucket target is rejected.
+
+`--bypass-governance` only applies when setting object retention (`--mode` with
+`--retain-until`). It is rejected on a bucket target and on a legal-hold-only
+change. A bucket that doesn't exist is an error (exit 1), not "not enabled".
 
 ## Advanced Options
 
 ### Buffer size
 
 ```bash
-# Adjust part size for multipart uploads (in MB)
-s3m --buffer 50 big-file.dat s3/large/huge-file.dat
+# Adjust part size for multipart uploads (in bytes): 50 MiB
+s3m --buffer 52428800 big-file.dat s3/large/huge-file.dat
 ```
+
+`--buffer` takes bytes, not megabytes. Values below 5 MiB (5242880) are raised
+to the 10 MiB default.
 
 ### Bandwidth throttling
 
 ```bash
-# Limit upload speed (in KB/s)
-s3m --throttle 10240 file.dat s3/backups/file.dat  # 10MB/s
+# Limit upload speed (in KB/s, 0 means no limit)
+s3m -k 10240 file.dat s3/backups/file.dat  # about 10 MB/s
 ```
+
+The flag is `--kilobytes/-k`. There is no `--throttle` option.
 
 ### Retries
 
 ```bash
-# Configure retry attempts for failed parts
-s3m --retries 5 file.dat s3/bucket/file.dat
+# Make up to 5 attempts for each multipart part
+s3m --retries 5 big-file.dat s3/bucket/big-file.dat
 ```
+
+`--retries N` is the number of **attempts**, not the number of retries after the
+first try. It applies to multipart parts and streaming requests. A plain upload
+smaller than the buffer is a single `PutObject` request and is never retried,
+whatever the value. `--retries 1` and `--retries 0` both make a single attempt,
+and a failure on that attempt is reported as an error.
+
+### Behavior notes
+
+* `s3m share --expire` accepts 1 to 604800 seconds. Values outside that range
+  exit 2 without printing a URL.
+* `s3m --clean` exits nonzero when it can't remove stale state.
+* Without `--config`, a missing `~/.config/s3m/config.yml` exits 1 with an
+  error that names the file.
 
 ### Concurrency
 

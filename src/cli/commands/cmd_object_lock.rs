@@ -92,7 +92,7 @@ pub fn command() -> Command {
                 .arg(
                     Arg::new("bypass-governance")
                         .long("bypass-governance")
-                        .help("Send x-amz-bypass-governance-retention (to shorten GOVERNANCE retention)")
+                        .help("Send x-amz-bypass-governance-retention when setting object retention (to shorten GOVERNANCE retention)")
                         .action(ArgAction::SetTrue),
                 ),
         )

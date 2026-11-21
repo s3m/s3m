@@ -1,3 +1,22 @@
+## Unreleased
+* **`ls` limits and pagination**: listing now follows every page for objects, buckets and multipart uploads instead of returning one page. `--number/-n N` is a client-enforced **total** limit on printed results, counted after `--older-than` filtering, and no longer a per-request page size. `--number 0` lists nothing and sends no list request. Age-based deletion (`rm --older-than`) stays unlimited. The `--json` output schema is unchanged: no keys were added or removed.
+* `ls --multipart` honours `--prefix`, and `--start-after` maps to the key marker only.
+* **BREAKING (invocations that used to be accepted)**:
+  * A host-only target (no bucket, for example `s3m ls s3`) now rejects `--multipart`, `--prefix` and `--start-after` before any request, as it already did for `--older-than`.
+  * `object-lock --bypass-governance` is rejected on a bucket target and on a legal-hold-only change. These used to be accepted and now exit 1.
+  * `object-lock get --version-id` is rejected on a bucket target. The help text always said object only.
+  * `object-lock` on a bucket that doesn't exist now exits 1 with the S3 error instead of reporting "not enabled" with exit 0.
+  * `share --expire` enforces the documented range of 1 to 604800. Other values exit 2 instead of printing a URL.
+  * `--retries 0` no longer reports success after making no attempts. On a multipart upload where the initiate request succeeds but the part uploads fail, it used to send no part requests, complete the upload anyway and exit 0. It now makes a single attempt, so that failure exits 1. An unreachable endpoint always failed, because the initiate request itself can't connect. `--retries N` means N attempts, not N retries, and applies to multipart parts and streaming requests only. A plain upload smaller than the buffer is one `PutObject` request and is never retried.
+  * `--clean` surfaces cleanup errors with a nonzero exit instead of exiting 0.
+  * A missing default config file exits 1 with an error naming the file, instead of a clap usage error with exit 2.
+* **`s3m-core` compatibility (source-breaking only for struct-literal construction, E0063)**:
+  * `ListBuckets` gained `continuation_token`. `ListMultipartUploads` gained `prefix`, `key_marker` and `upload_id_marker`. `ListAllMyBucketsResult` gained `continuation_token`. Every `new(max)` constructor keeps its signature, and the max-* fields are still per-request page limits. Code that uses `::new()` or `..Default::default()` is unaffected.
+  * `s3m::cli::Host::enc_key` changed from `Option<String>` to `Option<SecretString>`, because `-vv` was printing it in verbose logs.
+  * `RequestOptions::set_retries` now keeps at least one attempt and caps values above `u32::MAX` instead of silently falling back to 3.
+* **Compression**: the dependency update moved the Zstandard encoder (`zstd-safe` 8.2 to 8.3). Newly compressed objects are no longer byte-identical to output from older releases. Frames from either build still decode with the other, so this isn't data loss.
+* Docs: the README no longer shows a `--throttle` flag (the flag is `--kilobytes/-k`) and now describes `--buffer` in bytes, with values below 5 MiB raised to 10 MiB.
+
 ## 0.22.0 🧹 (2026-11-09)
 * **`rm --recursive` on an object prefix (issue #68)**: `s3m rm s3/bucket/integration/18/ --recursive` deletes every object whose key starts with the literal prefix (including a key equal to the prefix), page by page in `DeleteObjects` batches of at most 1,000, and never deletes the bucket. Empty/nonexistent prefixes are successful no-ops; listing, request and per-object errors give a non-zero exit with the number of objects already removed. In versioned buckets only delete markers are added and earlier versions are retained. A prefix without a trailing `/` prints a warning on stderr, since it also matches sibling keys such as `integration/180/...`.
 * **BREAKING (safety)**: `--bucket` combined with an object key or prefix (for example `rm -b s3/bucket/key`) is now rejected; previously the key was silently ignored. `--recursive` without `--bucket` requires a non-empty prefix and conflicts with `--older-than`, `--version-id` and `--abort`.

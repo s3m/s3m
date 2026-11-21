@@ -328,8 +328,7 @@ fn maybe_write_stream_metadata(
 
     let created_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
+        .map_or_default(|duration| duration.as_secs());
 
     write_metadata(
         &request.s3m_dir,
