@@ -24,7 +24,8 @@ mod common;
 
 use common::{
     MinioContext, calculate_file_hash, create_config_file, create_config_file_with_options,
-    create_test_file_with_content, decompress_zstd_to, get_s3m_binary, run_s3m_with_minio,
+    create_test_file_with_content, decompress_zstd_to, get_s3m_binary, owned_bucket::OwnedBucket,
+    run_s3m_with_minio,
 };
 use std::fs;
 use std::io::Write;
@@ -65,8 +66,8 @@ fn run_s3m_with_config(config_path: &str, args: &[&str]) -> Output {
 async fn test_e2e_normal_upload_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-hash-normal");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-hash-normal");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -105,8 +106,8 @@ async fn test_e2e_normal_upload_with_hash() {
 async fn test_e2e_multipart_upload_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-hash-multipart");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-hash-multipart");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -148,8 +149,8 @@ async fn test_e2e_multipart_upload_with_hash() {
 async fn test_e2e_stdin_upload() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-stdin");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-stdin");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -199,8 +200,8 @@ async fn test_e2e_stdin_upload() {
 async fn test_e2e_stdin_encrypt_roundtrip() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-stdin-encrypt");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-stdin-encrypt");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -251,8 +252,8 @@ async fn test_e2e_stdin_encrypt_roundtrip() {
 async fn test_e2e_stdin_compress_roundtrip() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-stdin-compress");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-stdin-compress");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -302,8 +303,8 @@ async fn test_e2e_stdin_compress_roundtrip() {
 async fn test_e2e_stdin_compress_encrypt_roundtrip() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-stdin-compress-encrypt");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-stdin-compress-encrypt");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -359,8 +360,8 @@ async fn test_e2e_stdin_compress_encrypt_roundtrip() {
 async fn test_e2e_compress_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-compress");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-compress");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -413,8 +414,8 @@ async fn test_e2e_compress_with_hash() {
 async fn test_e2e_compress_with_existing_extension() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-compress-ext");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-compress-ext");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -461,8 +462,8 @@ async fn test_e2e_compress_with_existing_extension() {
 async fn test_e2e_compress_and_encrypt_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-compress-encrypt");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-compress-encrypt");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -528,8 +529,8 @@ async fn test_e2e_compress_and_encrypt_with_hash() {
 async fn test_e2e_encrypt_only_with_hash() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-encrypt-only");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-encrypt-only");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -596,8 +597,8 @@ async fn test_e2e_encrypt_only_with_hash() {
 async fn test_e2e_encrypted_upload() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-encrypt-bucket");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-encrypt-bucket");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -659,8 +660,8 @@ async fn test_e2e_encrypted_upload() {
 async fn test_e2e_compressed_upload() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-compress-bucket");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-compress-bucket");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -700,8 +701,8 @@ async fn test_e2e_compressed_upload() {
 async fn test_e2e_checksum_validation() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-checksum-bucket");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-checksum-bucket");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -733,8 +734,8 @@ async fn test_e2e_checksum_validation() {
 async fn test_e2e_throttled_put_and_get_roundtrip() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-throttle-roundtrip");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-throttle-roundtrip");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -779,8 +780,8 @@ async fn test_e2e_throttled_put_and_get_roundtrip() {
 async fn test_e2e_different_buffer_sizes() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-buffer-bucket");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-buffer-bucket");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -810,8 +811,8 @@ async fn test_e2e_different_buffer_sizes() {
 async fn test_e2e_concurrent_uploads() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-concurrent-bucket");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-concurrent-bucket");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -854,8 +855,8 @@ async fn test_e2e_concurrent_uploads() {
 async fn test_e2e_large_file_multipart() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-large-bucket");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-large-bucket");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -903,8 +904,8 @@ async fn test_e2e_large_file_multipart() {
 async fn test_e2e_small_file_single_shot() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-size-small");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-size-small");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -957,8 +958,8 @@ async fn test_e2e_small_file_single_shot() {
 async fn test_e2e_exactly_10mb_edge_case() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-size-edge");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-size-edge");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1004,8 +1005,8 @@ async fn test_e2e_exactly_10mb_edge_case() {
 async fn test_e2e_large_file_triggers_multipart() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-size-multipart");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-size-multipart");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1058,8 +1059,8 @@ async fn test_e2e_large_file_triggers_multipart() {
 async fn test_e2e_very_large_file_multipart() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-size-very-large");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-size-very-large");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1105,8 +1106,8 @@ async fn test_e2e_very_large_file_multipart() {
 async fn test_e2e_tiny_file_single_shot() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-size-tiny");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-size-tiny");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1152,8 +1153,8 @@ async fn test_e2e_tiny_file_single_shot() {
 async fn test_e2e_small_buffer_uses_existing_ten_mib_fallback() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-custom-buffer");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-custom-buffer");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1212,8 +1213,8 @@ async fn test_e2e_small_buffer_uses_existing_ten_mib_fallback() {
 async fn test_e2e_progress_bar_enabled_by_default() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-progress-enabled");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-progress-enabled");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1250,8 +1251,8 @@ async fn test_e2e_progress_bar_enabled_by_default() {
 async fn test_e2e_progress_bar_disabled_with_quiet() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-progress-quiet");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-progress-quiet");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1286,8 +1287,8 @@ async fn test_e2e_progress_bar_disabled_with_quiet() {
 async fn test_e2e_progress_bar_multipart_upload() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-progress-multipart");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-progress-multipart");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1320,8 +1321,8 @@ async fn test_e2e_progress_bar_multipart_upload() {
 async fn test_e2e_quiet_flag_with_get_command() {
     let minio = MinioContext::get_or_start().await;
 
-    let bucket_guard_bucket_name = OwnedBucket::new(&minio, "e2e-get-quiet");
-    let bucket_name = bucket_guard_bucket_name.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-get-quiet");
+    let bucket_name = owned.name.as_str();
     minio
         .create_bucket(bucket_name)
         .await
@@ -1361,47 +1362,6 @@ async fn test_e2e_quiet_flag_with_get_command() {
     );
 
     println!("✅ Progress bar test (get --quiet): Download succeeded with minimal output");
-}
-
-/// Every test owns a fresh bucket; cleanup never addresses an existing fixture.
-struct OwnedBucket<'a> {
-    minio: &'a MinioContext,
-    name: String,
-}
-
-impl<'a> OwnedBucket<'a> {
-    fn new(minio: &'a MinioContext, label: &str) -> Self {
-        Self {
-            minio,
-            name: format!("s3m-test-{:016x}-{}", rand::random::<u64>(), label),
-        }
-    }
-}
-
-impl Drop for OwnedBucket<'_> {
-    fn drop(&mut self) {
-        let result = run_s3m_with_minio(
-            self.minio,
-            &[
-                "rm",
-                "-b",
-                "--recursive",
-                "--bypass-governance",
-                &format!("s3/{}", self.name),
-            ],
-        );
-        let error = String::from_utf8_lossy(&result.stderr);
-        // Some enforcement tests already remove their owned bucket.
-        let removed = result.status.success() || error.contains("NoSuchBucket");
-        eprintln!(
-            "owned bucket cleanup {}: exit={} {}",
-            self.name, result.status, error
-        );
-        assert!(
-            removed || std::thread::panicking(),
-            "owned bucket cleanup failed: {error}"
-        );
-    }
 }
 
 fn assert_uploaded_bytes(minio: &MinioContext, uri: &str, source: &std::path::Path) {

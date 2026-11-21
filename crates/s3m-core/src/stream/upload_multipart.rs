@@ -2,7 +2,7 @@ use crate::{
     progressbar::Bar,
     s3::RequestOptions,
     s3::{S3, actions, checksum::Checksum},
-    stream::{db::Db, iterator::PartIterator, part::Part},
+    stream::{db::Db, iterator::PartIterator, part::Part, retry::backoff_secs},
 };
 use anyhow::{Result, anyhow};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -179,6 +179,10 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
 #[path = "multipart_scheduling_tests.rs"]
 mod scheduling_tests;
 
+#[cfg(test)]
+#[path = "multipart_attempts_tests.rs"]
+mod attempts_tests;
+
 async fn await_tasks<T>(
     tasks: &mut FuturesUnordered<T>,
     pb: &Bar,
@@ -248,10 +252,10 @@ async fn upload_part(
 
     let mut etag: String = String::new();
 
-    // Retry with exponential backoff
+    // Retry with exponential backoff, capped like streamed parts
     let attempts = globals.retries.max(1);
     for attempt in 1..=attempts {
-        let backoff_time = 2u64.pow(attempt - 1);
+        let backoff_time = backoff_secs(attempt);
         if attempt > 1 {
             log::warn!("Error uploading part: {part_number}, retrying in {backoff_time} seconds");
 

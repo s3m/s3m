@@ -19,7 +19,8 @@ mod common;
 
 use common::{
     MinioContext, calculate_file_hash, create_config_file, create_config_file_with_options,
-    create_test_file_with_content, decompress_zstd_to, get_s3m_binary, run_s3m_with_minio,
+    create_test_file_with_content, decompress_zstd_to, get_s3m_binary, owned_bucket::OwnedBucket,
+    run_s3m_with_minio,
 };
 use serde_json::Value;
 use std::fs;
@@ -27,35 +28,6 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::{NamedTempFile, TempDir};
-
-/// A bucket this test run created; it is removed even when the test fails.
-struct OwnedBucket<'a> {
-    minio: &'a MinioContext,
-    name: String,
-}
-
-impl<'a> OwnedBucket<'a> {
-    async fn create(minio: &'a MinioContext, label: &str) -> Self {
-        let name = format!("e2e-get-{label}-{:016x}", rand::random::<u64>());
-        minio.create_bucket(&name).await.expect("Bucket creation");
-        Self { minio, name }
-    }
-}
-
-impl Drop for OwnedBucket<'_> {
-    fn drop(&mut self) {
-        let result = run_s3m_with_minio(
-            self.minio,
-            &["rm", "-b", "--recursive", &format!("s3/{}", self.name)],
-        );
-        let error = String::from_utf8_lossy(&result.stderr);
-        assert!(
-            result.status.success() || std::thread::panicking(),
-            "owned bucket cleanup {} failed: {error}",
-            self.name
-        );
-    }
-}
 
 /// Run s3m from `cwd`, where `get` writes when no destination is given.
 fn run_in(minio: &MinioContext, cwd: &Path, args: &[&str]) -> Output {

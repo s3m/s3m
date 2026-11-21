@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{MinioContext, run_s3m_with_minio};
+use common::{MinioContext, owned_bucket::OwnedBucket, run_s3m_with_minio};
 use std::fs;
 use tempfile::TempDir;
 
@@ -22,36 +22,6 @@ const ACLS: [&str; 7] = [
     "bucket-owner-read",
     "bucket-owner-full-control",
 ];
-
-/// A bucket this test run created; it is removed even when the test fails.
-struct OwnedBucket<'a> {
-    minio: &'a MinioContext,
-    name: String,
-}
-
-impl<'a> OwnedBucket<'a> {
-    fn new(minio: &'a MinioContext, label: &str) -> Self {
-        Self {
-            minio,
-            name: format!("e2e-cb-{label}-{:016x}", rand::random::<u64>()),
-        }
-    }
-}
-
-impl Drop for OwnedBucket<'_> {
-    fn drop(&mut self) {
-        let result = run_s3m_with_minio(
-            self.minio,
-            &["rm", "-b", "--recursive", &format!("s3/{}", self.name)],
-        );
-        let error = String::from_utf8_lossy(&result.stderr);
-        assert!(
-            result.status.success() || std::thread::panicking(),
-            "owned bucket cleanup {} failed: {error}",
-            self.name
-        );
-    }
-}
 
 fn listed_buckets(minio: &MinioContext) -> Vec<String> {
     let output = run_s3m_with_minio(minio, &["ls", "s3", "--json"]);

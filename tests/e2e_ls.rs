@@ -9,38 +9,9 @@
 
 mod common;
 
-use common::{MinioContext, run_s3m_with_minio};
+use common::{MinioContext, owned_bucket::OwnedBucket, run_s3m_with_minio};
 use std::io::Write;
 use tempfile::NamedTempFile;
-
-/// A bucket this test created; dropping it removes the bucket and its objects.
-struct OwnedBucket<'a> {
-    minio: &'a MinioContext,
-    name: String,
-}
-
-impl<'a> OwnedBucket<'a> {
-    async fn create(minio: &'a MinioContext, label: &str) -> Self {
-        let name = format!("e2e-ls-{label}-{:016x}", rand::random::<u64>());
-        minio.create_bucket(&name).await.expect("Bucket creation");
-        Self { minio, name }
-    }
-}
-
-impl Drop for OwnedBucket<'_> {
-    fn drop(&mut self) {
-        let result = run_s3m_with_minio(
-            self.minio,
-            &["rm", "-b", "--recursive", &format!("s3/{}", self.name)],
-        );
-        let error = String::from_utf8_lossy(&result.stderr);
-        assert!(
-            result.status.success() || std::thread::panicking(),
-            "owned bucket cleanup {} failed: {error}",
-            self.name
-        );
-    }
-}
 
 fn listed_json_keys(output: &std::process::Output) -> Vec<String> {
     assert!(

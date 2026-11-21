@@ -83,8 +83,8 @@ fn version_id_from(stdout: &[u8]) -> String {
 #[tokio::test]
 async fn test_e2e_object_lock_upload_succeeds() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-bucket");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-bucket");
+    let bucket = owned.name.as_str();
 
     // Create an Object-Lock-enabled bucket.
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
@@ -132,8 +132,8 @@ async fn test_e2e_object_lock_upload_succeeds() {
 #[tokio::test]
 async fn test_e2e_object_lock_on_plain_bucket_fails() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-plain-bucket");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-plain-bucket");
+    let bucket = owned.name.as_str();
 
     // Plain bucket (no Object Lock).
     minio.create_bucket(bucket).await.expect("Bucket creation");
@@ -172,8 +172,8 @@ async fn test_e2e_object_lock_on_plain_bucket_fails() {
 #[tokio::test]
 async fn test_e2e_object_lock_bucket_default_retention() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-default");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-default");
+    let bucket = owned.name.as_str();
 
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
@@ -289,8 +289,8 @@ fn instant(date: &str) -> chrono::DateTime<chrono::FixedOffset> {
 #[tokio::test]
 async fn test_e2e_object_lock_per_object_retention() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-retention");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-retention");
+    let bucket = owned.name.as_str();
 
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
@@ -355,8 +355,8 @@ async fn test_e2e_object_lock_per_object_retention() {
 #[tokio::test]
 async fn test_e2e_object_lock_version_delete_enforced() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-enforce");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-enforce");
+    let bucket = owned.name.as_str();
 
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
@@ -415,8 +415,8 @@ async fn test_e2e_object_lock_version_delete_enforced() {
 #[tokio::test]
 async fn test_e2e_delete_marker_reporting() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-marker");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-marker");
+    let bucket = owned.name.as_str();
 
     // cb --object-lock enables versioning, so a keyed delete inserts a marker.
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
@@ -450,8 +450,8 @@ async fn test_e2e_delete_marker_reporting() {
 #[tokio::test]
 async fn test_e2e_object_lock_per_object_legal_hold() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-legalhold");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-legalhold");
+    let bucket = owned.name.as_str();
 
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
@@ -595,8 +595,8 @@ async fn test_e2e_object_lock_version_scoped_retention_and_legal_hold() {
 #[tokio::test]
 async fn test_e2e_upload_lock_modes() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::retained(&minio, "e2e-objlock-modes");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::retained(&minio, "e2e-objlock-modes");
+    let bucket = owned.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     let file = create_test_file_with_content(512, "MODES_");
@@ -709,8 +709,8 @@ async fn test_e2e_upload_lock_modes() {
 #[tokio::test]
 async fn test_e2e_upload_lock_via_pipe() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-pipe");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-pipe");
+    let bucket = owned.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     // Streaming (--pipe) upload must carry retention through the stream engine.
@@ -745,8 +745,8 @@ async fn test_e2e_upload_lock_via_pipe() {
 #[tokio::test]
 async fn test_e2e_upload_lock_on_plain_bucket_via_pipe_fails() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-pipe-plain");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-pipe-plain");
+    let bucket = owned.name.as_str();
     minio.create_bucket(bucket).await.expect("plain bucket");
 
     let uri = format!("s3/{}/nope.dat", bucket);
@@ -775,8 +775,8 @@ async fn test_e2e_upload_lock_on_plain_bucket_via_pipe_fails() {
 #[tokio::test]
 async fn test_e2e_compliance_version_delete_cannot_be_bypassed() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::retained(&minio, "e2e-objlock-compliance");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::retained(&minio, "e2e-objlock-compliance");
+    let bucket = owned.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     let file = create_test_file_with_content(1024, "COMPLIANCE_");
@@ -845,8 +845,8 @@ async fn test_e2e_compliance_version_delete_cannot_be_bypassed() {
 #[tokio::test]
 async fn test_e2e_legal_hold_blocks_version_delete() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-hold-delete");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-hold-delete");
+    let bucket = owned.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     // Upload with a legal hold, no retention.
@@ -887,8 +887,8 @@ async fn test_e2e_legal_hold_blocks_version_delete() {
 #[tokio::test]
 async fn test_e2e_governance_shorten_requires_bypass() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-shorten");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-shorten");
+    let bucket = owned.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     let file = create_test_file_with_content(1024, "SHORTEN_");
@@ -963,8 +963,8 @@ async fn test_e2e_governance_shorten_requires_bypass() {
 #[tokio::test]
 async fn test_e2e_recursive_delete_blocked_by_lock() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-recursive");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-recursive");
+    let bucket = owned.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     let file = create_test_file_with_content(1024, "RECURSE_");
@@ -1037,8 +1037,8 @@ async fn test_e2e_recursive_delete_blocked_by_lock() {
 #[tokio::test]
 async fn test_e2e_recursive_delete_versioned_unlocked() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-recursive-versioned");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-recursive-versioned");
+    let bucket = owned.name.as_str();
     // Object Lock enables versioning, but we upload WITHOUT retention.
     make_lock_bucket(&minio, bucket);
 
@@ -1073,8 +1073,8 @@ async fn test_e2e_bucket_config_states() {
     let minio = MinioContext::get_or_start().await;
 
     // Lock-enabled bucket with no default rule yet.
-    let bucket_guard_locked = OwnedBucket::new(&minio, "e2e-cfg-locked");
-    let locked = bucket_guard_locked.name.as_str();
+    let owned_locked = OwnedBucket::new(&minio, "e2e-cfg-locked");
+    let locked = owned_locked.name.as_str();
     make_lock_bucket(&minio, locked);
     let no_rule = run_s3m_with_minio(&minio, &["object-lock", "get", &format!("s3/{}", locked)]);
     assert!(no_rule.status.success());
@@ -1115,8 +1115,8 @@ async fn test_e2e_bucket_config_states() {
     );
 
     // Plain (non-lock) bucket reports "not enabled" and the command still succeeds.
-    let bucket_guard_plain = OwnedBucket::new(&minio, "e2e-cfg-plain");
-    let plain = bucket_guard_plain.name.as_str();
+    let owned_plain = OwnedBucket::new(&minio, "e2e-cfg-plain");
+    let plain = owned_plain.name.as_str();
     minio.create_bucket(plain).await.expect("plain bucket");
     let plain_cfg = run_s3m_with_minio(&minio, &["object-lock", "get", &format!("s3/{}", plain)]);
     assert!(
@@ -1178,8 +1178,8 @@ async fn test_e2e_bucket_config_states() {
 #[tokio::test]
 async fn test_e2e_object_lock_json_output() {
     let minio = MinioContext::get_or_start().await;
-    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-json");
-    let bucket = bucket_guard_bucket.name.as_str();
+    let owned = OwnedBucket::new(&minio, "e2e-objlock-json");
+    let bucket = owned.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     // Bucket default retention as JSON.

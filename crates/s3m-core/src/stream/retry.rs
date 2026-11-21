@@ -4,6 +4,16 @@ use anyhow::Result;
 use rand::{RngExt, rng};
 use tokio::time::{Duration, sleep};
 
+/// Longest wait between two attempts at the same part.
+const MAX_BACKOFF_SECS: u64 = 30;
+
+/// Seconds to wait before `attempt` (1-based): 1, 2, 4, 8, 16, then 30 for
+/// every later attempt, however large the attempt budget is.
+pub(super) fn backoff_secs(attempt: u32) -> u64 {
+    2u64.saturating_pow(attempt.saturating_sub(1))
+        .min(MAX_BACKOFF_SECS)
+}
+
 pub(super) async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     let attempts = part.retries.max(1);
     let mut etag = String::new();
@@ -22,9 +32,7 @@ pub(super) async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     };
 
     for attempt in 1..=attempts {
-        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
-        const MAX_BACKOFF_SECS: u64 = 30;
-        let backoff_time = std::cmp::min(2u64.pow(attempt - 1), MAX_BACKOFF_SECS);
+        let backoff_time = backoff_secs(attempt);
 
         if attempt > 1 {
             // Add jitter (0-1000ms) to prevent thundering herd
@@ -95,4 +103,25 @@ pub(super) async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     }
 
     Ok(etag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::backoff_secs;
+
+    #[test]
+    fn backoff_doubles_then_stays_at_the_cap() {
+        for (attempt, expected) in [
+            (0, 1),
+            (1, 1),
+            (2, 2),
+            (5, 16),
+            (6, 30),
+            (64, 30),
+            (65, 30),
+            (u32::MAX, 30),
+        ] {
+            assert_eq!(backoff_secs(attempt), expected, "attempt {attempt}");
+        }
+    }
 }

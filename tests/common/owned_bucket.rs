@@ -26,6 +26,16 @@ impl<'a> OwnedBucket<'a> {
         }
     }
 
+    /// Creates a fresh bucket and returns the guard that removes it.
+    pub async fn create(minio: &'a MinioContext, label: &str) -> Self {
+        let bucket = Self::new(minio, label);
+        minio
+            .create_bucket(&bucket.name)
+            .await
+            .expect("Bucket creation");
+        bucket
+    }
+
     pub fn retained(minio: &'a MinioContext, label: &str) -> Self {
         assert!(
             minio.owns_disposable_service(),

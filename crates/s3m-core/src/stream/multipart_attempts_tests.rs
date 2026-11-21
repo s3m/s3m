@@ -1,12 +1,10 @@
+use super::{MultipartUploadRequest, upload_multipart};
+use crate::{
+    s3::{Credentials, Region, RequestOptions, S3},
+    stream::db::Db,
+};
 use anyhow::Result;
 use mockito::{Matcher, Server};
-use s3m_core::{
-    Credentials, Region, RequestOptions, S3,
-    stream::{
-        db::Db,
-        upload_multipart::{MultipartUploadRequest, upload_multipart},
-    },
-};
 use secrecy::SecretString;
 
 #[tokio::test]

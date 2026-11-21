@@ -9,7 +9,9 @@
 
 mod common;
 
-use common::{MinioContext, create_config_file, get_s3m_binary, run_s3m_with_minio};
+use common::{
+    MinioContext, create_config_file, get_s3m_binary, owned_bucket::OwnedBucket, run_s3m_with_minio,
+};
 use mockito::{Matcher, Server};
 use s3m::s3::{Credentials, Region, S3, actions::CreateMultipartUpload};
 use secrecy::SecretString;
@@ -17,38 +19,6 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::process::{Command, Output};
 use tempfile::NamedTempFile;
-
-/// A bucket this test file creates and removes; it never addresses a bucket it
-/// did not create.
-struct OwnedBucket<'a> {
-    minio: &'a MinioContext,
-    name: String,
-}
-
-impl<'a> OwnedBucket<'a> {
-    async fn create(minio: &'a MinioContext, label: &str) -> Self {
-        let name = format!("task7-rm-{label}-{:08x}", rand::random::<u32>());
-        minio.create_bucket(&name).await.expect("Bucket creation");
-        Self { minio, name }
-    }
-}
-
-impl Drop for OwnedBucket<'_> {
-    fn drop(&mut self) {
-        let out = run_s3m_with_minio(
-            self.minio,
-            &["rm", "-b", "--recursive", &format!("s3/{}", self.name)],
-        );
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        // Some tests delete their own bucket as the behavior under test.
-        let removed = out.status.success() || stderr.contains("NoSuchBucket");
-        assert!(
-            removed || std::thread::panicking(),
-            "cleanup of owned bucket {} failed: {stderr}",
-            self.name
-        );
-    }
-}
 
 fn payload_file(content: &[u8]) -> NamedTempFile {
     let mut file = NamedTempFile::new().expect("temp file");
