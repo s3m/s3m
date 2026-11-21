@@ -21,14 +21,16 @@ jobs:
         run: docker pull ghcr.io/rustfs/rustfs:1.0.0
 
       - name: Start RustFS for integration coverage
+        id: rustfs
         run: |
           docker rm -f s3m-coverage-rustfs 2>/dev/null || true
-          docker run -d --name s3m-coverage-rustfs \
+          id="$(docker run -d --name s3m-coverage-rustfs \
             -p 9000:9000 \
             -p 9001:9001 \
             -e RUSTFS_ACCESS_KEY=minioadmin \
             -e RUSTFS_SECRET_KEY=minioadmin \
-            ghcr.io/rustfs/rustfs:1.0.0
+            ghcr.io/rustfs/rustfs:1.0.0)"
+          echo "id=${id}" >> "$GITHUB_OUTPUT"
 
       - name: Wait for RustFS readiness
         run: |
@@ -66,6 +68,11 @@ jobs:
           MINIO_ENDPOINT: http://127.0.0.1:9000
           MINIO_ACCESS_KEY: minioadmin
           MINIO_SECRET_KEY: minioadmin
+          # COMPLIANCE retention cannot be removed through S3. This job owns the
+          # service and removes it in "Stop RustFS", so the retained Object Lock
+          # tests may run against it (see tests/common/owned_bucket.rs).
+          S3M_DISPOSABLE_OBJECT_LOCK_ENDPOINT: http://127.0.0.1:9000
+          S3M_DISPOSABLE_OBJECT_LOCK_CONTAINER_ID: ${{ steps.rustfs.outputs.id }}
 
       - name: Install grcov
         run: if [[ ! -e ~/.cargo/bin/grcov ]]; then cargo install grcov; fi
