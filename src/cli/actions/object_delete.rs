@@ -229,11 +229,12 @@ async fn collect_matched_delete_objects(
     now: DateTime<Utc>,
 ) -> Result<Vec<actions::ObjectIdentifier>> {
     let mut objects = Vec::new();
+    // Age deletion must select every match: no total, full 1000-key pages.
     object_list::visit_filtered_objects(
         s3,
         prefix,
         None,
-        Some(actions::DeleteObjects::MAX_OBJECTS.to_string()),
+        object_list::ListLimit::Unlimited,
         Some(older_than),
         now,
         |object| {
@@ -637,6 +638,109 @@ mod tests {
             version_id: None,
             bypass_governance: false,
         }
+    }
+
+    #[tokio::test]
+    async fn test_age_delete_selects_every_match_across_full_pages() {
+        let mut server = mockito::Server::new_async().await;
+        let page = |token: Option<&str>| {
+            let mut matchers = vec![
+                mockito::Matcher::UrlEncoded("list-type".into(), "2".into()),
+                mockito::Matcher::UrlEncoded("max-keys".into(), "1000".into()),
+                mockito::Matcher::UrlEncoded("prefix".into(), "integration/18/".into()),
+            ];
+            if let Some(token) = token {
+                matchers.push(mockito::Matcher::UrlEncoded(
+                    "continuation-token".into(),
+                    token.into(),
+                ));
+            }
+            mockito::Matcher::AllOf(matchers)
+        };
+        let page_1 = server
+            .mock("GET", "/bucket")
+            .match_query(page(None))
+            .match_request(|req| !req.path_and_query().contains("continuation-token"))
+            .with_status(200)
+            .with_body(list_page(&keys(0..1_000), true, Some("tok-2")))
+            .expect(1)
+            .create_async()
+            .await;
+        let page_2 = server
+            .mock("GET", "/bucket")
+            .match_query(page(Some("tok-2")))
+            .with_status(200)
+            .with_body(list_page(&keys(1_000..2_000), true, Some("tok-3")))
+            .expect(1)
+            .create_async()
+            .await;
+        let page_3 = server
+            .mock("GET", "/bucket")
+            .match_query(page(Some("tok-3")))
+            .with_status(200)
+            .with_body(list_page(&keys(2_000..2_001), false, None))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let matched = collect_matched_delete_objects(
+            &mock_s3(server.url()),
+            Some("integration/18/".to_string()),
+            crate::cli::age_filter::parse_age_filter("1d").unwrap(),
+            chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 4, 1, 0, 0, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        page_1.assert_async().await;
+        page_2.assert_async().await;
+        page_3.assert_async().await;
+        let matched_keys: Vec<String> = matched.into_iter().map(|object| object.key).collect();
+        assert_eq!(matched_keys, keys(0..2_001));
+    }
+
+    #[tokio::test]
+    async fn test_age_delete_uses_the_captured_instant_with_a_strict_cutoff() {
+        let mut server = mockito::Server::new_async().await;
+        // now = 2026-03-14T12:00:00Z and 30d => cutoff 2026-02-12T12:00:00Z.
+        let entries = [
+            ("logs/before", "2026-02-12T11:59:59.999Z"),
+            ("logs/at-cutoff", "2026-02-12T12:00:00.000Z"),
+            ("logs/after", "2026-02-12T12:00:00.001Z"),
+            ("logs/offset-before", "2026-02-12T13:59:59+02:00"),
+        ];
+        let contents = entries
+            .iter()
+            .fold(String::new(), |mut out, (key, modified)| {
+                let _ = write!(
+                    out,
+                    "<Contents><Key>{key}</Key><LastModified>{modified}</LastModified><ETag>\"e\"</ETag><Size>1</Size><StorageClass>STANDARD</StorageClass></Contents>"
+                );
+                out
+            });
+        let list = server
+            .mock("GET", "/bucket")
+            .match_query(mockito::Matcher::UrlEncoded("prefix".into(), "logs/".into()))
+            .with_status(200)
+            .with_body(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>bucket</Name><Prefix>logs/</Prefix><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>{contents}</ListBucketResult>"#
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let matched = collect_matched_delete_objects(
+            &mock_s3(server.url()),
+            Some("logs/".to_string()),
+            crate::cli::age_filter::parse_age_filter("30d").unwrap(),
+            chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 3, 14, 12, 0, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        list.assert_async().await;
+        let matched_keys: Vec<String> = matched.into_iter().map(|object| object.key).collect();
+        assert_eq!(matched_keys, ["logs/before", "logs/offset-before"]);
     }
 
     #[tokio::test]

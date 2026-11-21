@@ -175,7 +175,10 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     Ok(format!("ETag: {}", rs.e_tag))
 }
 
-// throttling tasks
+#[cfg(test)]
+#[path = "multipart_scheduling_tests.rs"]
+mod scheduling_tests;
+
 async fn await_tasks<T>(
     tasks: &mut FuturesUnordered<T>,
     pb: &Bar,
@@ -246,7 +249,8 @@ async fn upload_part(
     let mut etag: String = String::new();
 
     // Retry with exponential backoff
-    for attempt in 1..=globals.retries {
+    let attempts = globals.retries.max(1);
+    for attempt in 1..=attempts {
         let backoff_time = 2u64.pow(attempt - 1);
         if attempt > 1 {
             log::warn!("Error uploading part: {part_number}, retrying in {backoff_time} seconds");
@@ -276,8 +280,7 @@ async fn upload_part(
                     etag,
                     additional_checksum
                         .as_ref()
-                        .map(|c| format!(" additional_checksum: {}", c.checksum))
-                        .unwrap_or_default()
+                        .map_or_default(|c| format!(" additional_checksum: {}", c.checksum))
                 );
 
                 break;
@@ -288,13 +291,11 @@ async fn upload_part(
                     "Error uploading part: {}, attempt {}/{} failed: {}",
                     part.get_number(),
                     attempt,
-                    globals.retries,
+                    attempts,
                     e
                 );
 
-                // Increment attempt after an error
-                if attempt == globals.retries {
-                    // If it's the last attempt, return the error without incrementing attempt
+                if attempt == attempts {
                     return Err(e);
                 }
             }

@@ -13,6 +13,12 @@
 //! export MINIO_SECRET_KEY=minioadmin
 //! cargo test --tests -- --test-threads=1
 //! ```
+//! External services without a disposable ownership boundary cannot run the
+//! COMPLIANCE retention fixtures. Use `just test-integration` for a fresh
+//! disposable service, or unset `MINIO_ENDPOINT` to use managed containers.
+//! External owners must set `S3M_DISPOSABLE_OBJECT_LOCK_ENDPOINT` to the exact
+//! endpoint and `S3M_DISPOSABLE_OBJECT_LOCK_CONTAINER_ID` to their owned
+//! container ID, and remove that service on every exit (including failures).
 
 #![allow(
     clippy::expect_used,

@@ -21,16 +21,22 @@
 )]
 
 mod common;
+#[path = "support/object_lock_preflight.rs"]
+mod object_lock_preflight;
 
+use common::owned_bucket::OwnedBucket;
 use common::{
-    MinioContext, create_config_file, create_test_file_with_content, get_s3m_binary,
-    run_s3m_with_minio,
+    MinioContext, create_config_file, create_config_file_with_options,
+    create_test_file_with_content, get_s3m_binary, run_s3m_with_minio,
 };
+use mockito::{Matcher, Server};
+use serde_json::{Value, json};
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
-/// Far-future retain-until date so the test is not time-sensitive.
-const FUTURE_DATE: &str = "2099-01-01T00:00:00Z";
+/// Active retention for enforcement tests. COMPLIANCE data is owned by the
+/// disposable service boundary; GOVERNANCE remains removable through bypass.
+const FUTURE_DATE: &str = "2031-01-01T00:00:00Z";
 
 /// Run `s3m` against the test S3 service, feeding `stdin` (for `--pipe` uploads).
 fn run_with_stdin(minio: &MinioContext, args: &[&str], stdin: &[u8]) -> Output {
@@ -55,14 +61,12 @@ fn run_with_stdin(minio: &MinioContext, args: &[&str], stdin: &[u8]) -> Output {
     out
 }
 
-/// Create an Object-Lock-enabled bucket, tolerating "already exists".
+/// Create a fresh Object-Lock-enabled bucket.
 fn make_lock_bucket(minio: &MinioContext, bucket: &str) {
     let cb = run_s3m_with_minio(minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let err = String::from_utf8_lossy(&cb.stderr);
     assert!(
-        cb.status.success()
-            || err.contains("BucketAlreadyOwnedByYou")
-            || err.contains("BucketAlreadyExists"),
+        cb.status.success(),
         "object-lock bucket creation should succeed: {}",
         err
     );
@@ -79,15 +83,14 @@ fn version_id_from(stdout: &[u8]) -> String {
 #[tokio::test]
 async fn test_e2e_object_lock_upload_succeeds() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-bucket";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-bucket");
+    let bucket = bucket_guard_bucket.name.as_str();
 
     // Create an Object-Lock-enabled bucket.
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
     assert!(
-        cb.status.success()
-            || cb_err.contains("BucketAlreadyOwnedByYou")
-            || cb_err.contains("BucketAlreadyExists"),
+        cb.status.success(),
         "object-lock bucket creation should succeed: {}",
         cb_err
     );
@@ -114,6 +117,9 @@ async fn test_e2e_object_lock_upload_succeeds() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    let lock = read_object_lock(&minio, &s3_uri);
+    assert_retention(&lock, "GOVERNANCE");
+
     // The object should be retrievable.
     let head = run_s3m_with_minio(&minio, &["get", "-m", &s3_uri]);
     assert!(
@@ -126,7 +132,8 @@ async fn test_e2e_object_lock_upload_succeeds() {
 #[tokio::test]
 async fn test_e2e_object_lock_on_plain_bucket_fails() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-plain-bucket";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-plain-bucket");
+    let bucket = bucket_guard_bucket.name.as_str();
 
     // Plain bucket (no Object Lock).
     minio.create_bucket(bucket).await.expect("Bucket creation");
@@ -165,14 +172,13 @@ async fn test_e2e_object_lock_on_plain_bucket_fails() {
 #[tokio::test]
 async fn test_e2e_object_lock_bucket_default_retention() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-default";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-default");
+    let bucket = bucket_guard_bucket.name.as_str();
 
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
     assert!(
-        cb.status.success()
-            || cb_err.contains("BucketAlreadyOwnedByYou")
-            || cb_err.contains("BucketAlreadyExists"),
+        cb.status.success(),
         "object-lock bucket creation should succeed: {}",
         cb_err
     );
@@ -196,28 +202,100 @@ async fn test_e2e_object_lock_bucket_default_retention() {
         String::from_utf8_lossy(&set.stderr)
     );
 
+    assert_eq!(
+        String::from_utf8_lossy(&set.stdout),
+        "bucket default retention set: mode=GOVERNANCE\n"
+    );
+
     // Read it back (Put/GetObjectLockConfiguration round-trip).
     let get = run_s3m_with_minio(&minio, &["object-lock", "get", &format!("s3/{}", bucket)]);
     assert!(get.status.success(), "get bucket config should succeed");
-    let stdout = String::from_utf8_lossy(&get.stdout);
-    assert!(
-        stdout.contains("GOVERNANCE") && stdout.contains('1'),
-        "bucket config should show the default retention, got: {}",
-        stdout
+    assert_eq!(
+        String::from_utf8_lossy(&get.stdout),
+        "Object Lock: Enabled\nDefault retention:\n  mode: GOVERNANCE\n  days: 1\n"
     );
+    let expected = json!({
+        "kind": "object-lock",
+        "enabled": true,
+        "default_retention": {"mode": "GOVERNANCE", "days": 1, "years": null},
+    });
+    assert_eq!(bucket_lock_json(&minio, bucket), expected);
+
+    // A zero period is not a retention period (the S3 contract requires a
+    // positive integer): the service refuses it and the stored rule is unchanged.
+    for unit in ["--days", "--years"] {
+        let zero = run_s3m_with_minio(
+            &minio,
+            &[
+                "object-lock",
+                "set",
+                &format!("s3/{}", bucket),
+                "--mode",
+                "GOVERNANCE",
+                unit,
+                "0",
+            ],
+        );
+        assert_eq!(zero.status.code(), Some(1), "{unit} 0: {:?}", zero);
+        assert!(
+            String::from_utf8_lossy(&zero.stderr).contains("InvalidRetentionPeriod"),
+            "{unit} 0: {:?}",
+            zero
+        );
+        assert_eq!(bucket_lock_json(&minio, bucket), expected);
+    }
+}
+
+fn bucket_lock_json(minio: &MinioContext, bucket: &str) -> Value {
+    let out = run_s3m_with_minio(
+        minio,
+        &["object-lock", "get", &format!("s3/{bucket}"), "--json"],
+    );
+    assert!(out.status.success(), "{:?}", out);
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+fn object_lock_json(minio: &MinioContext, uri: &str, version_id: Option<&str>) -> Value {
+    let mut args = vec!["object-lock", "get", uri, "--json"];
+    if let Some(version_id) = version_id {
+        args.extend(["--version-id", version_id]);
+    }
+    let out = run_s3m_with_minio(minio, &args);
+    assert!(out.status.success(), "{:?}", out);
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// The JSON value at `pointer`; a missing field fails the test.
+fn field<'v>(value: &'v Value, pointer: &str) -> &'v Value {
+    let field = value.pointer(pointer);
+    assert!(field.is_some(), "{pointer} missing in {value}");
+    field.unwrap()
+}
+
+/// The retain-until instant of a JSON readback, compared as an instant.
+fn retain_until(lock: &Value) -> chrono::DateTime<chrono::FixedOffset> {
+    chrono::DateTime::parse_from_rfc3339(
+        field(lock, "/retention/retain_until_date")
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+fn instant(date: &str) -> chrono::DateTime<chrono::FixedOffset> {
+    chrono::DateTime::parse_from_rfc3339(date).unwrap()
 }
 
 #[tokio::test]
 async fn test_e2e_object_lock_per_object_retention() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-retention";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-retention");
+    let bucket = bucket_guard_bucket.name.as_str();
 
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
     assert!(
-        cb.status.success()
-            || cb_err.contains("BucketAlreadyOwnedByYou")
-            || cb_err.contains("BucketAlreadyExists"),
+        cb.status.success(),
         "object-lock bucket creation should succeed: {}",
         cb_err
     );
@@ -240,7 +318,12 @@ async fn test_e2e_object_lock_per_object_retention() {
         "get with no retention should succeed: {}",
         String::from_utf8_lossy(&before.stderr)
     );
+    assert_eq!(
+        String::from_utf8_lossy(&before.stdout),
+        "Retention: none\nLegal hold: OFF\n"
+    );
 
+    // An offset date is normalized to the same UTC instant before it is sent.
     let set = run_s3m_with_minio(
         &minio,
         &[
@@ -250,7 +333,7 @@ async fn test_e2e_object_lock_per_object_retention() {
             "--mode",
             "GOVERNANCE",
             "--retain-until",
-            FUTURE_DATE,
+            "2031-01-01T02:00:00+02:00",
         ],
     );
     assert!(
@@ -258,31 +341,27 @@ async fn test_e2e_object_lock_per_object_retention() {
         "set per-object retention should succeed: {}",
         String::from_utf8_lossy(&set.stderr)
     );
+    assert_eq!(
+        String::from_utf8_lossy(&set.stdout),
+        format!("retention set: mode=GOVERNANCE until={FUTURE_DATE}\n")
+    );
 
-    let after = run_s3m_with_minio(&minio, &["object-lock", "get", &s3_uri]);
-    assert!(
-        after.status.success(),
-        "get object retention should succeed: {}",
-        String::from_utf8_lossy(&after.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&after.stdout).contains("GOVERNANCE"),
-        "object retention should read GOVERNANCE, got: {}",
-        String::from_utf8_lossy(&after.stdout)
-    );
+    let after = object_lock_json(&minio, &s3_uri, None);
+    assert_eq!(*field(&after, "/retention/mode"), "GOVERNANCE");
+    assert_eq!(retain_until(&after), instant(FUTURE_DATE));
+    assert_eq!(*field(&after, "/legal_hold"), "OFF");
 }
 
 #[tokio::test]
 async fn test_e2e_object_lock_version_delete_enforced() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-enforce";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-enforce");
+    let bucket = bucket_guard_bucket.name.as_str();
 
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
     assert!(
-        cb.status.success()
-            || cb_err.contains("BucketAlreadyOwnedByYou")
-            || cb_err.contains("BucketAlreadyExists"),
+        cb.status.success(),
         "object-lock bucket creation should succeed: {}",
         cb_err
     );
@@ -336,15 +415,14 @@ async fn test_e2e_object_lock_version_delete_enforced() {
 #[tokio::test]
 async fn test_e2e_delete_marker_reporting() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-marker";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-marker");
+    let bucket = bucket_guard_bucket.name.as_str();
 
     // cb --object-lock enables versioning, so a keyed delete inserts a marker.
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
     assert!(
-        cb.status.success()
-            || cb_err.contains("BucketAlreadyOwnedByYou")
-            || cb_err.contains("BucketAlreadyExists"),
+        cb.status.success(),
         "bucket creation should succeed: {}",
         cb_err
     );
@@ -372,14 +450,13 @@ async fn test_e2e_delete_marker_reporting() {
 #[tokio::test]
 async fn test_e2e_object_lock_per_object_legal_hold() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-legalhold";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-legalhold");
+    let bucket = bucket_guard_bucket.name.as_str();
 
     let cb = run_s3m_with_minio(&minio, &["cb", "--object-lock", &format!("s3/{}", bucket)]);
     let cb_err = String::from_utf8_lossy(&cb.stderr);
     assert!(
-        cb.status.success()
-            || cb_err.contains("BucketAlreadyOwnedByYou")
-            || cb_err.contains("BucketAlreadyExists"),
+        cb.status.success(),
         "object-lock bucket creation should succeed: {}",
         cb_err
     );
@@ -404,16 +481,16 @@ async fn test_e2e_object_lock_per_object_legal_hold() {
         "legal-hold on should succeed: {}",
         String::from_utf8_lossy(&on.stderr)
     );
+    assert_eq!(String::from_utf8_lossy(&on.stdout), "legal hold: ON\n");
     let get_on = run_s3m_with_minio(&minio, &["object-lock", "get", &s3_uri]);
     assert!(
         get_on.status.success(),
         "get legal hold should succeed: {}",
         String::from_utf8_lossy(&get_on.stderr)
     );
-    assert!(
-        String::from_utf8_lossy(&get_on.stdout).contains("ON"),
-        "legal hold should read ON, got: {}",
-        String::from_utf8_lossy(&get_on.stdout)
+    assert_eq!(
+        String::from_utf8_lossy(&get_on.stdout),
+        "Retention: none\nLegal hold: ON\n"
     );
 
     // Turn it OFF again (otherwise the object can't be deleted).
@@ -422,10 +499,92 @@ async fn test_e2e_object_lock_per_object_legal_hold() {
         &["object-lock", "set", &s3_uri, "--legal-hold", "off"],
     );
     assert!(off.status.success(), "legal-hold off should succeed");
-    let get_off = run_s3m_with_minio(&minio, &["object-lock", "get", &s3_uri]);
-    assert!(
-        String::from_utf8_lossy(&get_off.stdout).contains("OFF"),
-        "legal hold should read OFF"
+    assert_eq!(String::from_utf8_lossy(&off.stdout), "legal hold: OFF\n");
+    assert_eq!(
+        object_lock_json(&minio, &s3_uri, None),
+        json!({"kind": "object-lock", "key": "held.dat", "retention": null, "legal_hold": "OFF"})
+    );
+}
+
+#[tokio::test]
+async fn test_e2e_object_lock_version_scoped_retention_and_legal_hold() {
+    let minio = MinioContext::get_or_start().await;
+    let owned = OwnedBucket::new(&minio, "versions");
+    let bucket = owned.name.as_str();
+    make_lock_bucket(&minio, bucket);
+
+    // Distinct bytes per version, so each upload creates a new version.
+    let first_file = create_test_file_with_content(512, &format!("V1_{}_", bucket));
+    let second_file = create_test_file_with_content(512, &format!("V2_{}_", bucket));
+    let uri = format!("s3/{}/doc.dat", bucket);
+    let first = run_s3m_with_minio(&minio, &[first_file.path().to_str().unwrap(), &uri]);
+    assert!(first.status.success(), "{:?}", first);
+    let older = version_id_from(&first.stdout);
+    let second = run_s3m_with_minio(&minio, &[second_file.path().to_str().unwrap(), &uri]);
+    assert!(second.status.success(), "{:?}", second);
+    let latest = version_id_from(&second.stdout);
+    assert_ne!(older, latest);
+
+    let set = run_s3m_with_minio(
+        &minio,
+        &[
+            "object-lock",
+            "set",
+            &uri,
+            "--version-id",
+            &older,
+            "--mode",
+            "GOVERNANCE",
+            "--retain-until",
+            FUTURE_DATE,
+            "--legal-hold",
+            "on",
+        ],
+    );
+    assert!(set.status.success(), "{:?}", set);
+
+    // Only the addressed (older) version carries the retention and the hold.
+    let older_lock = object_lock_json(&minio, &uri, Some(&older));
+    assert_eq!(*field(&older_lock, "/retention/mode"), "GOVERNANCE");
+    assert_eq!(retain_until(&older_lock), instant(FUTURE_DATE));
+    assert_eq!(*field(&older_lock, "/legal_hold"), "ON");
+    let unlocked =
+        json!({"kind": "object-lock", "key": "doc.dat", "retention": null, "legal_hold": "OFF"});
+    assert_eq!(object_lock_json(&minio, &uri, Some(&latest)), unlocked);
+    assert_eq!(object_lock_json(&minio, &uri, None), unlocked);
+
+    // The latest version is deletable; the held older version is not until
+    // its hold is released for that version id.
+    let held = run_s3m_with_minio(
+        &minio,
+        &["rm", &uri, "--version-id", &older, "--bypass-governance"],
+    );
+    assert_eq!(held.status.code(), Some(1), "{:?}", held);
+    let release = run_s3m_with_minio(
+        &minio,
+        &[
+            "object-lock",
+            "set",
+            &uri,
+            "--version-id",
+            &older,
+            "--legal-hold",
+            "off",
+        ],
+    );
+    assert!(release.status.success(), "{:?}", release);
+    assert_eq!(
+        *field(&object_lock_json(&minio, &uri, Some(&older)), "/legal_hold"),
+        "OFF"
+    );
+    let removed = run_s3m_with_minio(
+        &minio,
+        &["rm", &uri, "--version-id", &older, "--bypass-governance"],
+    );
+    assert!(removed.status.success(), "{:?}", removed);
+    assert_eq!(
+        String::from_utf8_lossy(&removed.stdout),
+        format!("doc.dat: deleted version {older}\n")
     );
 }
 
@@ -436,7 +595,8 @@ async fn test_e2e_object_lock_per_object_legal_hold() {
 #[tokio::test]
 async fn test_e2e_upload_lock_modes() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-modes";
+    let bucket_guard_bucket = OwnedBucket::retained(&minio, "e2e-objlock-modes");
+    let bucket = bucket_guard_bucket.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     let file = create_test_file_with_content(512, "MODES_");
@@ -528,16 +688,29 @@ async fn test_e2e_upload_lock_modes() {
         "got: {both_out}"
     );
 
+    for (uri, mode) in [
+        (&gov, "GOVERNANCE"),
+        (&comp, "COMPLIANCE"),
+        (&both, "GOVERNANCE"),
+    ] {
+        let lock = read_object_lock(&minio, uri);
+        assert_retention(&lock, mode);
+    }
     // Turn the legal holds off so the bucket can be torn down cleanly.
     for key in [&hold, &both] {
-        run_s3m_with_minio(&minio, &["object-lock", "set", key, "--legal-hold", "off"]);
+        assert!(
+            run_s3m_with_minio(&minio, &["object-lock", "set", key, "--legal-hold", "off"])
+                .status
+                .success()
+        );
     }
 }
 
 #[tokio::test]
 async fn test_e2e_upload_lock_via_pipe() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-pipe";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-pipe");
+    let bucket = bucket_guard_bucket.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     // Streaming (--pipe) upload must carry retention through the stream engine.
@@ -565,12 +738,15 @@ async fn test_e2e_upload_lock_via_pipe() {
         "piped upload should carry retention, got: {}",
         String::from_utf8_lossy(&got.stdout)
     );
+    let lock = read_object_lock(&minio, &uri);
+    assert_retention(&lock, "GOVERNANCE");
 }
 
 #[tokio::test]
 async fn test_e2e_upload_lock_on_plain_bucket_via_pipe_fails() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-pipe-plain";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-pipe-plain");
+    let bucket = bucket_guard_bucket.name.as_str();
     minio.create_bucket(bucket).await.expect("plain bucket");
 
     let uri = format!("s3/{}/nope.dat", bucket);
@@ -599,7 +775,8 @@ async fn test_e2e_upload_lock_on_plain_bucket_via_pipe_fails() {
 #[tokio::test]
 async fn test_e2e_compliance_version_delete_cannot_be_bypassed() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-compliance";
+    let bucket_guard_bucket = OwnedBucket::retained(&minio, "e2e-objlock-compliance");
+    let bucket = bucket_guard_bucket.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     let file = create_test_file_with_content(1024, "COMPLIANCE_");
@@ -636,12 +813,40 @@ async fn test_e2e_compliance_version_delete_cannot_be_bypassed() {
         !bypass.status.success(),
         "COMPLIANCE retention must not be bypassable with --bypass-governance"
     );
+
+    // Shortening or downgrading COMPLIANCE retention is refused even with
+    // --bypass-governance, and the stored retention is unchanged.
+    for (mode, date) in [
+        ("COMPLIANCE", "2030-01-01T00:00:00Z"),
+        ("GOVERNANCE", FUTURE_DATE),
+    ] {
+        let shorten = run_s3m_with_minio(
+            &minio,
+            &[
+                "object-lock",
+                "set",
+                &uri,
+                "--version-id",
+                &vid,
+                "--mode",
+                mode,
+                "--retain-until",
+                date,
+                "--bypass-governance",
+            ],
+        );
+        assert_eq!(shorten.status.code(), Some(1), "{mode}: {:?}", shorten);
+        let lock = object_lock_json(&minio, &uri, Some(&vid));
+        assert_eq!(*field(&lock, "/retention/mode"), "COMPLIANCE");
+        assert_eq!(retain_until(&lock), instant(FUTURE_DATE));
+    }
 }
 
 #[tokio::test]
 async fn test_e2e_legal_hold_blocks_version_delete() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-hold-delete";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-hold-delete");
+    let bucket = bucket_guard_bucket.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     // Upload with a legal hold, no retention.
@@ -682,7 +887,8 @@ async fn test_e2e_legal_hold_blocks_version_delete() {
 #[tokio::test]
 async fn test_e2e_governance_shorten_requires_bypass() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-shorten";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-shorten");
+    let bucket = bucket_guard_bucket.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     let file = create_test_file_with_content(1024, "SHORTEN_");
@@ -725,6 +931,11 @@ async fn test_e2e_governance_shorten_requires_bypass() {
         "shortening GOVERNANCE retention without bypass must be refused"
     );
 
+    assert_eq!(
+        retain_until(&object_lock_json(&minio, &uri, None)),
+        instant(FUTURE_DATE)
+    );
+
     // With --bypass-governance it is allowed.
     assert!(
         run_s3m_with_minio(
@@ -744,16 +955,26 @@ async fn test_e2e_governance_shorten_requires_bypass() {
         .success(),
         "shortening with --bypass-governance should succeed"
     );
+    let lock = object_lock_json(&minio, &uri, None);
+    assert_eq!(*field(&lock, "/retention/mode"), "GOVERNANCE");
+    assert_eq!(retain_until(&lock), instant(earlier));
 }
 
 #[tokio::test]
 async fn test_e2e_recursive_delete_blocked_by_lock() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-recursive";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-recursive");
+    let bucket = bucket_guard_bucket.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     let file = create_test_file_with_content(1024, "RECURSE_");
     let path = file.path().to_str().expect("path");
+    let free_uri = format!("s3/{}/free.dat", bucket);
+    assert!(
+        run_s3m_with_minio(&minio, &[path, &free_uri])
+            .status
+            .success()
+    );
     let uri = format!("s3/{}/locked.dat", bucket);
     assert!(
         run_s3m_with_minio(
@@ -781,6 +1002,18 @@ async fn test_e2e_recursive_delete_blocked_by_lock() {
         !rm.status.success(),
         "recursive delete of a bucket with a locked version must fail"
     );
+    // Partial failure: the unlocked object is gone, exactly the locked object
+    // survives, and the bucket itself is kept.
+    let listing = run_s3m_with_minio(&minio, &["ls", &format!("s3/{}", bucket), "--json"]);
+    assert!(listing.status.success(), "{:?}", listing);
+    let listing: Value = serde_json::from_slice(&listing.stdout).unwrap();
+    let keys: Vec<&str> = field(&listing, "/objects")
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|object| field(object, "/key").as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["locked.dat"]);
 
     // With --bypass-governance the recursive delete purges the locked versions
     // and removes the bucket.
@@ -804,7 +1037,8 @@ async fn test_e2e_recursive_delete_blocked_by_lock() {
 #[tokio::test]
 async fn test_e2e_recursive_delete_versioned_unlocked() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-recursive-versioned";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-recursive-versioned");
+    let bucket = bucket_guard_bucket.name.as_str();
     // Object Lock enables versioning, but we upload WITHOUT retention.
     make_lock_bucket(&minio, bucket);
 
@@ -839,7 +1073,8 @@ async fn test_e2e_bucket_config_states() {
     let minio = MinioContext::get_or_start().await;
 
     // Lock-enabled bucket with no default rule yet.
-    let locked = "e2e-cfg-locked";
+    let bucket_guard_locked = OwnedBucket::new(&minio, "e2e-cfg-locked");
+    let locked = bucket_guard_locked.name.as_str();
     make_lock_bucket(&minio, locked);
     let no_rule = run_s3m_with_minio(&minio, &["object-lock", "get", &format!("s3/{}", locked)]);
     assert!(no_rule.status.success());
@@ -866,30 +1101,85 @@ async fn test_e2e_bucket_config_states() {
         .success()
     );
     let years = run_s3m_with_minio(&minio, &["object-lock", "get", &format!("s3/{}", locked)]);
-    let years_out = String::from_utf8_lossy(&years.stdout);
-    assert!(
-        years_out.contains("COMPLIANCE") && years_out.contains('2'),
-        "default retention in years should read back, got: {years_out}"
+    assert_eq!(
+        String::from_utf8_lossy(&years.stdout),
+        "Object Lock: Enabled\nDefault retention:\n  mode: COMPLIANCE\n  years: 2\n"
+    );
+    assert_eq!(
+        bucket_lock_json(&minio, locked),
+        json!({
+            "kind": "object-lock",
+            "enabled": true,
+            "default_retention": {"mode": "COMPLIANCE", "days": null, "years": 2},
+        })
     );
 
     // Plain (non-lock) bucket reports "not enabled" and the command still succeeds.
-    let plain = "e2e-cfg-plain";
+    let bucket_guard_plain = OwnedBucket::new(&minio, "e2e-cfg-plain");
+    let plain = bucket_guard_plain.name.as_str();
     minio.create_bucket(plain).await.expect("plain bucket");
     let plain_cfg = run_s3m_with_minio(&minio, &["object-lock", "get", &format!("s3/{}", plain)]);
     assert!(
         plain_cfg.status.success(),
         "get on a plain bucket should not error"
     );
-    assert!(
-        String::from_utf8_lossy(&plain_cfg.stdout).contains("not enabled"),
-        "plain bucket should report Object Lock not enabled"
+    assert_eq!(
+        String::from_utf8_lossy(&plain_cfg.stdout),
+        "Object Lock: not enabled on this bucket\n"
     );
+    assert_eq!(
+        bucket_lock_json(&minio, plain),
+        json!({"kind": "object-lock", "enabled": false})
+    );
+
+    // Object Lock settings on a plain bucket's object are a service error.
+    let file = create_test_file_with_content(64, "PLAIN_OBJ_");
+    let uri = format!("s3/{}/plain.dat", plain);
+    assert!(
+        run_s3m_with_minio(&minio, &[file.path().to_str().unwrap(), &uri])
+            .status
+            .success()
+    );
+    for args in [
+        vec!["object-lock", "set", &uri, "--legal-hold", "on"],
+        vec![
+            "object-lock",
+            "set",
+            &uri,
+            "--mode",
+            "GOVERNANCE",
+            "--retain-until",
+            FUTURE_DATE,
+        ],
+        vec!["object-lock", "get", &uri],
+    ] {
+        let out = run_s3m_with_minio(&minio, &args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {:?}", out);
+        assert!(out.stdout.is_empty(), "{args:?}: {:?}", out);
+    }
+
+    // A bucket that does not exist is an error, never "not enabled".
+    let missing = format!("s3/{}-missing", plain);
+    for args in [
+        vec!["object-lock", "get", missing.as_str()],
+        vec!["object-lock", "get", missing.as_str(), "--json"],
+    ] {
+        let out = run_s3m_with_minio(&minio, &args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {:?}", out);
+        assert!(out.stdout.is_empty(), "{args:?}: {:?}", out);
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("NoSuchBucket"),
+            "{args:?}: {:?}",
+            out
+        );
+    }
 }
 
 #[tokio::test]
 async fn test_e2e_object_lock_json_output() {
     let minio = MinioContext::get_or_start().await;
-    let bucket = "e2e-objlock-json";
+    let bucket_guard_bucket = OwnedBucket::new(&minio, "e2e-objlock-json");
+    let bucket = bucket_guard_bucket.name.as_str();
     make_lock_bucket(&minio, bucket);
 
     // Bucket default retention as JSON.
@@ -905,16 +1195,13 @@ async fn test_e2e_object_lock_json_output() {
             "7",
         ],
     );
-    let bucket_json = run_s3m_with_minio(
-        &minio,
-        &["object-lock", "get", &format!("s3/{}", bucket), "--json"],
-    );
-    let bj = String::from_utf8_lossy(&bucket_json.stdout);
-    assert!(
-        bj.contains("\"kind\": \"object-lock\"")
-            && bj.contains("\"default_retention\"")
-            && bj.contains("GOVERNANCE"),
-        "bucket JSON should describe the default retention, got: {bj}"
+    assert_eq!(
+        bucket_lock_json(&minio, bucket),
+        json!({
+            "kind": "object-lock",
+            "enabled": true,
+            "default_retention": {"mode": "GOVERNANCE", "days": 7, "years": null},
+        })
     );
 
     // Object retention as JSON.
@@ -932,12 +1219,422 @@ async fn test_e2e_object_lock_json_output() {
             FUTURE_DATE,
         ],
     );
-    let obj_json = run_s3m_with_minio(&minio, &["object-lock", "get", &uri, "--json"]);
-    let oj = String::from_utf8_lossy(&obj_json.stdout);
+    let object = object_lock_json(&minio, &uri, None);
+    let mut keys: Vec<&str> = object
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["key", "kind", "legal_hold", "retention"]);
+    assert_eq!(*field(&object, "/kind"), "object-lock");
+    assert_eq!(*field(&object, "/key"), "j.dat");
+    assert_eq!(*field(&object, "/retention/mode"), "GOVERNANCE");
+    assert_eq!(retain_until(&object), instant(FUTURE_DATE));
+    assert_eq!(*field(&object, "/legal_hold"), "OFF");
+}
+
+// ---------------------------------------------------------------------------
+// Argument validation and error mapping against a local mock service
+// ---------------------------------------------------------------------------
+
+fn run_against(server: &Server, args: &[&str]) -> Output {
+    let config = create_config_file(&server.url(), "minioadmin", "minioadmin");
+    let output = Command::new(get_s3m_binary())
+        .arg("--config")
+        .arg(config.path())
+        .args(args)
+        .output()
+        .expect("run s3m");
+    drop(config);
+    output
+}
+
+const TARGET_ERROR: &str = "to an object target (host/bucket/key), not a bucket";
+
+const INVALID_OBJECT_LOCK_INVOCATIONS: &[(&[&str], i32, &str)] = &[
+    (&["object-lock"], 2, "Usage:"),
+    (&["object-lock", "get"], 2, "required arguments"),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault",
+            "--mode",
+            "WORM",
+            "--days",
+            "1",
+        ],
+        2,
+        "invalid value 'WORM'",
+    ),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault",
+            "--mode",
+            "GOVERNANCE",
+            "--days",
+            "1",
+            "--years",
+            "1",
+        ],
+        2,
+        "cannot be used with",
+    ),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault",
+            "--mode",
+            "GOVERNANCE",
+            "--days=-1",
+        ],
+        2,
+        "invalid value '-1'",
+    ),
+    (
+        &["object-lock", "set", "s3/vault", "--mode", "GOVERNANCE"],
+        1,
+        "bucket default retention requires exactly one of --days or --years",
+    ),
+    (
+        &["object-lock", "set", "s3/vault", "--days", "1"],
+        1,
+        "--mode is required to set a bucket default retention",
+    ),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault/k",
+            "--mode",
+            "GOVERNANCE",
+            "--days",
+            "1",
+        ],
+        1,
+        "--days/--years apply to a bucket target",
+    ),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault",
+            "--mode",
+            "GOVERNANCE",
+            "--retain-until",
+            FUTURE_DATE,
+        ],
+        1,
+        TARGET_ERROR,
+    ),
+    (
+        &["object-lock", "set", "s3/vault", "--legal-hold", "on"],
+        1,
+        TARGET_ERROR,
+    ),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault",
+            "--mode",
+            "GOVERNANCE",
+            "--days",
+            "1",
+            "--version-id",
+            "v1",
+        ],
+        1,
+        TARGET_ERROR,
+    ),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault",
+            "--mode",
+            "GOVERNANCE",
+            "--days",
+            "1",
+            "--bypass-governance",
+        ],
+        1,
+        TARGET_ERROR,
+    ),
+    (
+        &["object-lock", "get", "s3/vault", "--version-id", "v1"],
+        1,
+        TARGET_ERROR,
+    ),
+    (
+        &["object-lock", "set", "s3/vault/k", "--legal-hold", "maybe"],
+        2,
+        "invalid value 'maybe'",
+    ),
+    (
+        &["object-lock", "set", "s3/vault/k", "--mode", "GOVERNANCE"],
+        1,
+        "--mode and --retain-until must be used together for an object",
+    ),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault/k",
+            "--retain-until",
+            FUTURE_DATE,
+        ],
+        1,
+        "--mode and --retain-until must be used together for an object",
+    ),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault/k",
+            "--mode",
+            "GOVERNANCE",
+            "--retain-until",
+            "2031-13-01",
+        ],
+        1,
+        "invalid date \"2031-13-01\"",
+    ),
+    (&["object-lock", "set", "s3/vault/k"], 1, "nothing to set"),
+    (
+        &[
+            "object-lock",
+            "set",
+            "s3/vault/k",
+            "--legal-hold",
+            "on",
+            "--bypass-governance",
+        ],
+        1,
+        "--bypass-governance only applies when setting object retention",
+    ),
+];
+
+#[test]
+fn test_object_lock_rejects_invalid_flags_and_targets_without_requests() {
+    let mut server = Server::new();
+    let forbidden: Vec<mockito::Mock> = ["GET", "HEAD", "PUT", "POST", "DELETE"]
+        .into_iter()
+        .map(|method| {
+            server
+                .mock(method, Matcher::Any)
+                .with_status(500)
+                .expect(0)
+                .create()
+        })
+        .collect();
+
+    for (args, code, message) in INVALID_OBJECT_LOCK_INVOCATIONS {
+        let out = run_against(&server, args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(*code), "{args:?}: {stderr}");
+        assert!(stderr.contains(message), "{args:?}: {stderr}");
+        assert!(out.stdout.is_empty(), "{args:?}: {:?}", out.stdout);
+    }
+    for mock in forbidden {
+        mock.assert();
+    }
+}
+
+fn s3_error(status: usize, code: &str) -> (usize, String) {
+    (
+        status,
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>{code}</Code><Message>{code} message</Message><RequestId>r</RequestId></Error>"#
+        ),
+    )
+}
+
+#[test]
+fn test_object_lock_get_separates_unset_settings_from_missing_resources() {
+    let mut server = Server::new();
+
+    // Missing lock configuration: the documented "not enabled" success.
+    let (status, body) = s3_error(404, "ObjectLockConfigurationNotFoundError");
+    let unset = server
+        .mock("GET", "/plain")
+        .match_query(Matcher::UrlEncoded("object-lock".into(), String::new()))
+        .with_status(status)
+        .with_body(body)
+        .expect(1)
+        .create();
+    let out = run_against(&server, &["object-lock", "get", "s3/plain"]);
+    assert!(out.status.success(), "{:?}", out);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Object Lock: not enabled on this bucket\n"
+    );
+    unset.assert();
+
+    // Missing bucket, key or version: an error, not "none"/"not enabled".
+    let (status, body) = s3_error(404, "NoSuchBucket");
+    let bucket = server
+        .mock("GET", "/gone")
+        .match_query(Matcher::UrlEncoded("object-lock".into(), String::new()))
+        .with_status(status)
+        .with_body(body)
+        .expect(1)
+        .create();
+    let out = run_against(&server, &["object-lock", "get", "s3/gone"]);
+    assert_eq!(out.status.code(), Some(1), "{:?}", out);
+    assert!(out.stdout.is_empty(), "{:?}", out);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("NoSuchBucket"));
+    bucket.assert();
+
+    for code in ["NoSuchKey", "NoSuchVersion"] {
+        let (status, body) = s3_error(404, code);
+        let retention = server
+            .mock("GET", "/locked/missing.dat")
+            .match_query(Matcher::UrlEncoded("retention".into(), String::new()))
+            .with_status(status)
+            .with_body(body)
+            .expect(1)
+            .create();
+        let out = run_against(&server, &["object-lock", "get", "s3/locked/missing.dat"]);
+        assert_eq!(out.status.code(), Some(1), "{code}: {:?}", out);
+        assert!(out.stdout.is_empty(), "{code}: {:?}", out);
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(code),
+            "{:?}",
+            out
+        );
+        retention.assert();
+        retention.remove();
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ObjectLockReadback {
+    retention: RetentionReadback,
+    legal_hold: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RetentionReadback {
+    mode: String,
+    retain_until_date: String,
+}
+
+fn read_object_lock(minio: &MinioContext, uri: &str) -> ObjectLockReadback {
+    let output = run_s3m_with_minio(minio, &["object-lock", "get", uri, "--json"]);
     assert!(
-        oj.contains("\"kind\": \"object-lock\"")
-            && oj.contains("\"retention\"")
-            && oj.contains("\"legal_hold\""),
-        "object JSON should include retention and legal_hold, got: {oj}"
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[tokio::test]
+async fn test_e2e_transformed_uploads_preserve_lock_and_bytes() {
+    let minio = MinioContext::get_or_start().await;
+    let bucket = OwnedBucket::new(&minio, "transform-lock");
+    make_lock_bucket(&minio, &bucket.name);
+    let data: Vec<u8> = (0..=255_u8).cycle().take(262_147).collect();
+    let source = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(source.path(), &data).unwrap();
+    for pipe in [false, true] {
+        for (compress, encrypt, suffix) in [
+            (true, false, ".zst"),
+            (false, true, ".enc"),
+            (true, true, ".zst.enc"),
+        ] {
+            let key = encrypt.then_some("01234567890123456789012345678901");
+            let config = create_config_file_with_options(
+                minio.endpoint(),
+                minio.access_key(),
+                minio.secret_key(),
+                key,
+                compress,
+            );
+            let uri = format!("s3/{}/transform-{pipe}-{compress}-{encrypt}", bucket.name);
+            let mut command = Command::new(get_s3m_binary());
+            command.args([
+                "--config",
+                config.path().to_str().unwrap(),
+                "--object-lock-mode",
+                "GOVERNANCE",
+                "--retain-until",
+                "2031-01-01T02:00:00+02:00",
+                "--legal-hold",
+            ]);
+            if pipe {
+                command.arg("--pipe");
+            } else {
+                command.arg(source.path());
+            }
+            let mut child = command
+                .arg(&uri)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            if pipe {
+                child.stdin.take().unwrap().write_all(&data).unwrap();
+            } else {
+                drop(child.stdin.take());
+            }
+            let upload = child.wait_with_output().unwrap();
+            assert!(
+                upload.status.success(),
+                "{}",
+                String::from_utf8_lossy(&upload.stderr)
+            );
+            let stored = format!("{uri}{suffix}");
+            let lock = read_object_lock(&minio, &stored);
+            let released = run_s3m_with_minio(
+                &minio,
+                &["object-lock", "set", &stored, "--legal-hold", "off"],
+            );
+            assert!(released.status.success());
+            assert_retention(&lock, "GOVERNANCE");
+            assert_eq!(lock.legal_hold, "ON");
+
+            let directory = tempfile::tempdir().unwrap();
+            let decoded = directory.path().join("decoded");
+            let download = Command::new(get_s3m_binary())
+                .args([
+                    "--config",
+                    config.path().to_str().unwrap(),
+                    "get",
+                    &stored,
+                    decoded.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                download.status.success(),
+                "{}",
+                String::from_utf8_lossy(&download.stderr)
+            );
+            let downloaded = std::fs::read(decoded).unwrap();
+            let restored = if compress {
+                zstd::stream::decode_all(std::io::Cursor::new(downloaded)).unwrap()
+            } else {
+                downloaded
+            };
+            assert_eq!(restored, data);
+            assert_eq!(blake3::hash(&restored), blake3::hash(&data));
+        }
+    }
+}
+
+fn assert_retention(lock: &ObjectLockReadback, mode: &str) {
+    assert_eq!(lock.retention.mode, mode);
+    let actual = &lock.retention.retain_until_date;
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(actual).unwrap(),
+        chrono::DateTime::parse_from_rfc3339(FUTURE_DATE).unwrap()
     );
 }

@@ -72,7 +72,7 @@ pub async fn stream_compressed(request: FileStreamUpload<'_>) -> Result<String> 
         .await?;
 
     // Upload final part and complete multipart upload
-    let final_etag = upload_final_part(&mut stream, &key, &upload_id, s3, &globals).await?;
+    let final_etag = upload_final_part(&stream).await?;
 
     stream.etags.push(final_etag);
 

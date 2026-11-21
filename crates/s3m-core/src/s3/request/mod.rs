@@ -9,14 +9,15 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
-use tokio::time::Duration;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
 };
-use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
+use upload_stream::paced;
 use url::Url;
+
+mod upload_stream;
 
 const DEFAULT_FRAMED_CHUNK_SIZE_BYTES: usize = 1024 * 128;
 
@@ -33,23 +34,6 @@ pub struct MultipartRequest<'a> {
     pub seek: u64,
     pub chunk: u64,
     pub throttle: Option<usize>,
-}
-
-/// Calculate the duration per chunk to achieve the desired bandwidth
-///
-/// # Parameters
-/// - `bandwidth_kb_per_sec`: Throttle limit in KB/s
-/// - `chunk_size`: Size of the data chunk in bytes
-///
-/// # Returns
-/// Duration to wait after processing each chunk
-fn calculate_duration_per_chunk(bandwidth_kb_per_sec: usize, chunk_size: usize) -> Duration {
-    let bandwidth_bytes_per_sec = bandwidth_kb_per_sec * 1024;
-    // Calculate duration in nanoseconds using integer arithmetic
-    // duration = (chunk_size * 1_000_000_000) / bandwidth_bytes_per_sec
-    let nanos = (u128::from(chunk_size as u64) * 1_000_000_000)
-        / u128::from(bandwidth_bytes_per_sec as u64);
-    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 /// # Errors
@@ -86,34 +70,12 @@ pub async fn request(
                 })
         };
 
-        if let Some(bandwidth_kb) = throttle {
-            let duration_per_chunk =
-                calculate_duration_per_chunk(bandwidth_kb, DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
-
-            log::info!(
-                "Throttling enabled: {} KB/s (duration per chunk: {:.3}s)",
-                bandwidth_kb,
-                duration_per_chunk.as_secs_f64()
-            );
-
-            let rate_limited_stream = stream.throttle(duration_per_chunk);
-
-            let body = Body::wrap_stream(rate_limited_stream);
-
-            client
-                .request(method, url)
-                .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
-                .headers(headers)
-                .body(body)
-        } else {
-            let body = Body::wrap_stream(stream);
-
-            client
-                .request(method, url)
-                .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
-                .headers(headers)
-                .body(body)
-        }
+        let body = Body::wrap_stream(paced(stream, throttle));
+        client
+            .request(method, url)
+            .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+            .headers(headers)
+            .body(body)
     } else {
         client
             .request(method, url)
@@ -148,36 +110,13 @@ pub async fn multipart_upload(request: MultipartRequest<'_>) -> Result<Response>
     let stream =
         FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
 
-    let request = if let Some(bandwidth_kb) = request.throttle {
-        let duration_per_chunk =
-            calculate_duration_per_chunk(bandwidth_kb, DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
-
-        log::info!(
-            "Throttling enabled: {} KB/s (duration per chunk: {:.3}s)",
-            bandwidth_kb,
-            duration_per_chunk.as_secs_f64()
-        );
-
-        let rate_limited_stream = stream.throttle(duration_per_chunk);
-
-        let body = Body::wrap_stream(rate_limited_stream);
-
-        request
-            .client
-            .request(request.method, request.url)
-            .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
-            .headers(headers)
-            .body(body)
-    } else {
-        let body = Body::wrap_stream(stream);
-
-        request
-            .client
-            .request(request.method, request.url)
-            .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
-            .headers(headers)
-            .body(body)
-    };
+    let body = Body::wrap_stream(paced(stream, request.throttle));
+    let request = request
+        .client
+        .request(request.method, request.url)
+        .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+        .headers(headers)
+        .body(body);
 
     Ok(request.send().await?)
 }
@@ -221,18 +160,33 @@ pub async fn upload(
     clippy::float_cmp
 )]
 mod tests {
+    use super::upload_stream::calculate_duration_per_chunk;
     use super::*;
     use mockito::Server;
     use reqwest::StatusCode;
+    use tokio::time::Duration;
 
     #[test]
     fn test_calculate_duration_per_chunk() {
-        let bandwidth_kb_per_sec = 1024;
         let chunk_size = 1024 * 128;
+        // (KB/s, expected delay between 128 KiB chunks)
+        let cases = [
+            (1, Duration::from_secs(128)),
+            (3, Duration::from_nanos(42_666_666_666)),
+            (1024, Duration::from_millis(125)),
+            (102_400, Duration::from_micros(1_250)),
+            // KB/s values whose byte rate overflows usize mean "no delay"
+            (usize::MAX / 1000, Duration::ZERO),
+            (usize::MAX, Duration::ZERO),
+        ];
 
-        let duration = calculate_duration_per_chunk(bandwidth_kb_per_sec, chunk_size);
-
-        assert_eq!(duration.as_secs_f64(), 0.125);
+        for (bandwidth_kb_per_sec, expected) in cases {
+            assert_eq!(
+                calculate_duration_per_chunk(bandwidth_kb_per_sec, chunk_size),
+                expected,
+                "{bandwidth_kb_per_sec} KB/s"
+            );
+        }
     }
 
     #[tokio::test]

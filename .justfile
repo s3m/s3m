@@ -66,18 +66,41 @@ test-debug:
   echo "🧪 Running single test with debug output..."
   cargo test --test e2e_binary test_binary_version -- --nocapture
 
-# Run e2e integration tests with RustFS (Podman)
-test-integration: container
+# Run e2e tests in an owned disposable RustFS service, or an explicit external one.
+test-integration *args:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  # Retain the existing MINIO_* test-harness contract for the S3 endpoint.
-  export MINIO_ENDPOINT=${MINIO_ENDPOINT:-http://localhost:9000}
+  if [[ -z "${MINIO_ENDPOINT+x}" ]]; then
+    # A fresh service is the cleanup boundary for COMPLIANCE retention.
+    # Never reuse or remove the separately managed `just container` service.
+    id=$(podman run -d \
+      -p 127.0.0.1::9000 \
+      --tmpfs /data:rw,mode=1777 --tmpfs /logs:rw,mode=1777 \
+      -e RUSTFS_ACCESS_KEY=minioadmin -e RUSTFS_SECRET_KEY=minioadmin \
+      ghcr.io/rustfs/rustfs:1.0.0)
+    cleanup() {
+      status=$?
+      trap - EXIT
+      podman rm -f "$id" || status=$?
+      exit "$status"
+    }
+    trap cleanup EXIT
+    address=$(podman port "$id" 9000/tcp)
+    export MINIO_ENDPOINT="http://${address}"
+    export MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin
+    export S3M_DISPOSABLE_OBJECT_LOCK_ENDPOINT="$MINIO_ENDPOINT"
+    export S3M_DISPOSABLE_OBJECT_LOCK_CONTAINER_ID="$id"
+    timeout 30 bash -c 'until curl -sf "$MINIO_ENDPOINT/minio/health/live" >/dev/null; do sleep 1; done'
+  fi
+
+  # Explicit external endpoints retain the MINIO_* contract. Retained fixtures
+  # require the caller's matching disposable endpoint/container opt-in.
   export MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
   export MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
 
   echo "🧪 Running e2e tests with RustFS..."
-  cargo test --tests -- --test-threads=1
+  cargo test --tests {{args}} -- --test-threads=1
 
 clippy:
   cargo clippy --workspace --all-targets --all-features

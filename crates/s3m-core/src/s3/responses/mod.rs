@@ -117,7 +117,7 @@ pub struct CommonPrefix {
 /// List of Buckets
 #[derive(Deserialize, Debug, Clone)]
 pub struct Buckets {
-    #[serde(rename = "Bucket")]
+    #[serde(rename = "Bucket", default)]
     pub bucket: Vec<Bucket>,
 }
 
@@ -143,6 +143,9 @@ pub struct ListAllMyBucketsResult {
     /// list of Buckets
     #[serde(rename = "Buckets")]
     pub buckets: Buckets,
+    /// Opaque token for the next `ListBuckets` page; absent on the last page.
+    #[serde(rename = "ContinuationToken", default)]
+    pub continuation_token: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -513,6 +516,30 @@ DeleteMarker: []
         assert_eq!(parsed.code, "InvalidRequest");
         assert_eq!(parsed.message, "bad request");
         assert_eq!(parsed.request_id, "");
+    }
+
+    #[test]
+    fn test_list_buckets_empty_buckets_element() {
+        let xml = r"<ListAllMyBucketsResult><Owner><ID>owner</ID></Owner><Buckets/></ListAllMyBucketsResult>";
+        let parsed: ListAllMyBucketsResult = quick_xml::de::from_str(xml).unwrap();
+
+        assert!(parsed.buckets.bucket.is_empty());
+    }
+
+    #[test]
+    fn test_list_buckets_continuation_token() {
+        let xml = r"<ListAllMyBucketsResult><Buckets><Bucket><Name>b1</Name><CreationDate>2026-03-14T00:00:00.000Z</CreationDate></Bucket></Buckets><ContinuationToken>a+b/c==</ContinuationToken></ListAllMyBucketsResult>";
+        let parsed: ListAllMyBucketsResult = quick_xml::de::from_str(xml).unwrap();
+
+        assert_eq!(parsed.buckets.bucket.len(), 1);
+        assert_eq!(parsed.continuation_token.as_deref(), Some("a+b/c=="));
+    }
+
+    #[test]
+    fn test_list_buckets_without_buckets_element_is_error() {
+        let xml = r"<ListAllMyBucketsResult><Owner><ID>owner</ID></Owner></ListAllMyBucketsResult>";
+
+        assert!(quick_xml::de::from_str::<ListAllMyBucketsResult>(xml).is_err());
     }
 
     #[test]

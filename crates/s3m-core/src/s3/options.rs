@@ -33,8 +33,10 @@ impl RequestOptions {
         }
     }
 
+    /// Set the attempt budget: at least one attempt, values above `u32::MAX`
+    /// saturate to it.
     pub fn set_retries(&mut self, retries: usize) {
-        self.retries = u32::try_from(retries).unwrap_or(3);
+        self.retries = u32::try_from(retries).unwrap_or(u32::MAX).max(1);
     }
 }
 
@@ -68,5 +70,17 @@ mod tests {
 
         options.encrypt = true;
         assert!(options.encrypt);
+    }
+
+    #[test]
+    fn test_set_retries_clamps_attempt_budget() {
+        let mut options = RequestOptions::new();
+        let max = usize::try_from(u32::MAX).unwrap();
+
+        // 0 attempts would skip every part request and still report success.
+        for (requested, expected) in [(0, 1), (max, u32::MAX), (usize::MAX, u32::MAX)] {
+            options.set_retries(requested);
+            assert_eq!(options.retries, expected, "{requested}");
+        }
     }
 }

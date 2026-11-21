@@ -211,20 +211,38 @@ fn dispatch_ls(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<Action> {
     let max_kub = sub_m
         .get_one::<usize>("max-kub")
         .map(std::string::ToString::to_string);
+    let list_multipart_uploads = sub_m
+        .get_one("ListMultipartUploads")
+        .copied()
+        .unwrap_or(false);
 
-    if older_than.is_some() && hbk.bucket.is_none() {
-        return Err(anyhow!(
-            "--older-than requires a bucket or prefix target, for example s3/my-bucket or s3/my-bucket/prefix"
-        ));
+    if hbk.bucket.is_none() {
+        if older_than.is_some() {
+            return Err(anyhow!(
+                "--older-than requires a bucket or prefix target, for example s3/my-bucket or s3/my-bucket/prefix"
+            ));
+        }
+        if list_multipart_uploads {
+            return Err(anyhow!(
+                "--multipart requires a bucket target, for example s3/my-bucket"
+            ));
+        }
+        if prefix.is_some() {
+            return Err(anyhow!(
+                "--prefix requires a bucket target, for example s3/my-bucket"
+            ));
+        }
+        if start_after.is_some() {
+            return Err(anyhow!(
+                "--start-after requires a bucket target, for example s3/my-bucket"
+            ));
+        }
     }
 
     Ok(Action::ListObjects {
         bucket: hbk.bucket.clone(),
         json,
-        list_multipart_uploads: sub_m
-            .get_one("ListMultipartUploads")
-            .copied()
-            .unwrap_or(false),
+        list_multipart_uploads,
         max_kub,
         older_than,
         prefix,
@@ -397,11 +415,19 @@ fn dispatch_object_lock(hbk: &S3Location, matches: &clap::ArgMatches) -> Result<
         .ok_or_else(|| anyhow!("object-lock requires a 'get' or 'set' subcommand"))?;
 
     match verb {
-        "get" => Ok(Action::ObjectLockGet {
-            key: hbk.key.clone(),
-            version_id: sub.get_one::<String>("version-id").cloned(),
-            json: sub.get_flag("json"),
-        }),
+        "get" => {
+            let version_id = sub.get_one::<String>("version-id").cloned();
+            if hbk.key.is_none() && version_id.is_some() {
+                return Err(anyhow!(
+                    "--version-id applies to an object target (host/bucket/key), not a bucket"
+                ));
+            }
+            Ok(Action::ObjectLockGet {
+                key: hbk.key.clone(),
+                version_id,
+                json: sub.get_flag("json"),
+            })
+        }
         "set" => dispatch_object_lock_set(hbk, sub),
         other => Err(anyhow!("unknown object-lock subcommand: {other}")),
     }
@@ -422,9 +448,13 @@ fn dispatch_object_lock_set(hbk: &S3Location, sub: &clap::ArgMatches) -> Result<
     match &hbk.key {
         // Bucket-level default retention.
         None => {
-            if retain_until.is_some() || legal_hold.is_some() || version_id.is_some() {
+            if retain_until.is_some()
+                || legal_hold.is_some()
+                || version_id.is_some()
+                || bypass_governance
+            {
                 return Err(anyhow!(
-                    "--retain-until/--legal-hold/--version-id apply to an object target (host/bucket/key), not a bucket"
+                    "--retain-until/--legal-hold/--version-id/--bypass-governance apply to an object target (host/bucket/key), not a bucket"
                 ));
             }
             let mode = mode
@@ -459,6 +489,13 @@ fn dispatch_object_lock_set(hbk: &S3Location, sub: &clap::ArgMatches) -> Result<
             if retention.is_none() && legal_hold.is_none() {
                 return Err(anyhow!(
                     "nothing to set: provide --mode with --retain-until and/or --legal-hold"
+                ));
+            }
+            // Only PutObjectRetention accepts the bypass header; a legal hold
+            // change would silently drop it.
+            if bypass_governance && retention.is_none() {
+                return Err(anyhow!(
+                    "--bypass-governance only applies when setting object retention (--mode with --retain-until)"
                 ));
             }
             Ok(Action::ObjectLockSet(ObjectLockSetTarget::Object {

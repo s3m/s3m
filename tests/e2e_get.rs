@@ -4,6 +4,8 @@
 //! - Basic get operation
 //! - Download and decrypt encrypted files
 //! - Download and decompress compressed files
+//! - Overwrite refusal and --force, metadata and versions without a body
+//! - Service failures and presigned `share` URLs served by the provider
 
 #![allow(
     clippy::expect_used,
@@ -16,12 +18,73 @@
 mod common;
 
 use common::{
-    MinioContext, calculate_file_hash, create_config_file_with_options,
+    MinioContext, calculate_file_hash, create_config_file, create_config_file_with_options,
     create_test_file_with_content, decompress_zstd_to, get_s3m_binary, run_s3m_with_minio,
 };
+use serde_json::Value;
+use std::fs;
 use std::io::Write;
-use std::process::Command;
+use std::path::Path;
+use std::process::{Command, Output};
 use tempfile::{NamedTempFile, TempDir};
+
+/// A bucket this test run created; it is removed even when the test fails.
+struct OwnedBucket<'a> {
+    minio: &'a MinioContext,
+    name: String,
+}
+
+impl<'a> OwnedBucket<'a> {
+    async fn create(minio: &'a MinioContext, label: &str) -> Self {
+        let name = format!("e2e-get-{label}-{:016x}", rand::random::<u64>());
+        minio.create_bucket(&name).await.expect("Bucket creation");
+        Self { minio, name }
+    }
+}
+
+impl Drop for OwnedBucket<'_> {
+    fn drop(&mut self) {
+        let result = run_s3m_with_minio(
+            self.minio,
+            &["rm", "-b", "--recursive", &format!("s3/{}", self.name)],
+        );
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            result.status.success() || std::thread::panicking(),
+            "owned bucket cleanup {} failed: {error}",
+            self.name
+        );
+    }
+}
+
+/// Run s3m from `cwd`, where `get` writes when no destination is given.
+fn run_in(minio: &MinioContext, cwd: &Path, args: &[&str]) -> Output {
+    let config = create_config_file(minio.endpoint(), minio.access_key(), minio.secret_key());
+    Command::new(get_s3m_binary())
+        .current_dir(cwd)
+        .arg("--config")
+        .arg(config.path())
+        .args(args)
+        .output()
+        .expect("Failed to execute s3m")
+}
+
+fn assert_success(output: &Output, args: &[&str]) {
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
 
 #[tokio::test]
 async fn test_e2e_put_and_get_object() {
@@ -187,4 +250,159 @@ async fn test_e2e_decompress_and_verify_hash() {
         "✅ Decompress verification: Hash matches - {}",
         original_hash
     );
+}
+
+#[tokio::test]
+async fn test_e2e_get_refuses_existing_file_unless_forced() {
+    let minio = MinioContext::get_or_start().await;
+    let bucket = OwnedBucket::create(&minio, "force").await;
+    let source = create_test_file_with_content(64 * 1024, "FORCE_OVERWRITE_");
+    let uri = format!("s3/{}/force.dat", bucket.name);
+    let upload_args = ["-q", source.path().to_str().unwrap(), uri.as_str()];
+    assert_success(&run_s3m_with_minio(&minio, &upload_args), &upload_args);
+
+    let dir = TempDir::new().unwrap();
+    let dest = dir.path().join("existing.dat");
+    let local = b"local data that must survive a refused get";
+    fs::write(&dest, local).unwrap();
+    let dest_str = dest.to_str().unwrap();
+
+    let refused = run_s3m_with_minio(&minio, &["get", &uri, dest_str]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("already exists"));
+    assert_eq!(String::from_utf8_lossy(&refused.stdout), "");
+    assert_eq!(fs::read(&dest).unwrap(), local);
+
+    for flag in ["--force", "-f"] {
+        fs::write(&dest, local).unwrap();
+        let args = ["get", uri.as_str(), dest_str, flag, "-q"];
+        let output = run_s3m_with_minio(&minio, &args);
+        assert_success(&output, &args);
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert_eq!(
+            calculate_file_hash(&dest),
+            calculate_file_hash(source.path()),
+            "{args:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_e2e_get_meta_and_versions_skip_the_body() {
+    let minio = MinioContext::get_or_start().await;
+    let bucket = OwnedBucket::create(&minio, "meta").await;
+    let source = create_test_file_with_content(4096, "META_");
+    let uri = format!("s3/{}/dir/meta.dat", bucket.name);
+    let upload_args = [
+        "-q",
+        "-m",
+        "owner=alice",
+        source.path().to_str().unwrap(),
+        &uri,
+    ];
+    assert_success(&run_s3m_with_minio(&minio, &upload_args), &upload_args);
+    let cwd = TempDir::new().unwrap();
+
+    let text = run_in(&minio, cwd.path(), &["get", &uri, "-m"]);
+    assert_success(&text, &["get -m"]);
+    let stdout = String::from_utf8_lossy(&text.stdout);
+    let fields: Vec<(&str, &str)> = stdout
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name, value.trim()))
+        .collect();
+    assert!(fields.contains(&("content-length", "4096")), "{stdout}");
+    assert!(fields.contains(&("x-amz-meta-owner", "alice")), "{stdout}");
+
+    let json = run_in(&minio, cwd.path(), &["get", &uri, "--meta", "--json"]);
+    assert_success(&json, &["get --meta --json"]);
+    let meta: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(meta.get("bucket"), Some(&Value::from(bucket.name.as_str())));
+    assert_eq!(meta.get("key"), Some(&Value::from("dir/meta.dat")));
+    assert_eq!(meta.get("content_length"), Some(&Value::from(4096)));
+    assert_eq!(
+        meta.get("metadata"),
+        Some(&serde_json::json!({"owner": "alice"}))
+    );
+
+    let versions = run_in(&minio, cwd.path(), &["get", &uri, "--versions", "--json"]);
+    assert_success(&versions, &["get --versions --json"]);
+    let listing: Value = serde_json::from_slice(&versions.stdout).unwrap();
+    let entries_json = listing.get("versions").and_then(Value::as_array).unwrap();
+    assert_eq!(entries_json.len(), 1, "{listing}");
+    let version = entries_json.first().unwrap();
+    assert_eq!(version.get("key"), Some(&Value::from("dir/meta.dat")));
+    assert_eq!(version.get("size_bytes"), Some(&Value::from(4096)));
+    assert_eq!(version.get("is_latest"), Some(&Value::from(true)));
+
+    assert_eq!(entries(cwd.path()), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn test_e2e_get_service_failures_leave_no_file() {
+    let minio = MinioContext::get_or_start().await;
+    let bucket = OwnedBucket::create(&minio, "failure").await;
+    let source = create_test_file_with_content(1024, "DENIED_");
+    let uri = format!("s3/{}/present.dat", bucket.name);
+    let upload_args = ["-q", source.path().to_str().unwrap(), uri.as_str()];
+    assert_success(&run_s3m_with_minio(&minio, &upload_args), &upload_args);
+    let cwd = TempDir::new().unwrap();
+
+    let missing = run_in(
+        &minio,
+        cwd.path(),
+        &["get", &format!("s3/{}/absent.dat", bucket.name)],
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("Code: NoSuchKey"));
+
+    let wrong_secret = create_config_file(minio.endpoint(), minio.access_key(), "wrong-secret");
+    let denied = Command::new(get_s3m_binary())
+        .current_dir(cwd.path())
+        .arg("--config")
+        .arg(wrong_secret.path())
+        .args(["get", &uri])
+        .output()
+        .unwrap();
+    assert_eq!(denied.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("403 Forbidden"));
+
+    assert_eq!(String::from_utf8_lossy(&missing.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&denied.stdout), "");
+    assert_eq!(entries(cwd.path()), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn test_e2e_share_url_serves_exact_bytes_until_tampered() {
+    let minio = MinioContext::get_or_start().await;
+    let bucket = OwnedBucket::create(&minio, "share").await;
+    let source = create_test_file_with_content(2048, "SHARED_");
+    let uri = format!("s3/{}/dir/my file (1).txt", bucket.name);
+    let upload_args = ["-q", source.path().to_str().unwrap(), uri.as_str()];
+    assert_success(&run_s3m_with_minio(&minio, &upload_args), &upload_args);
+    let expected = fs::read(source.path()).unwrap();
+
+    for flags in [vec![], vec!["--expire", "43200"], vec!["-e", "604800"]] {
+        let args = [vec!["share", uri.as_str()], flags].concat();
+        let output = run_s3m_with_minio(&minio, &args);
+        assert_success(&output, &args);
+        let url = String::from_utf8(output.stdout).unwrap();
+        let url = url.trim_end();
+
+        let response = reqwest::get(url).await.unwrap();
+        assert_eq!(response.status(), 200, "{args:?}");
+        assert_eq!(
+            response.bytes().await.unwrap().as_ref(),
+            expected.as_slice()
+        );
+
+        // The expiry is signed: changing it must invalidate the URL.
+        let expires = url
+            .split(['?', '&'])
+            .find(|pair| pair.starts_with("X-Amz-Expires="))
+            .unwrap();
+        let tampered = url.replace(expires, "X-Amz-Expires=3600");
+        let rejected = reqwest::get(&tampered).await.unwrap();
+        assert_eq!(rejected.status(), 403, "{tampered}");
+    }
 }

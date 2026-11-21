@@ -76,8 +76,7 @@ fn config_parse_error(err: &serde_saphyr::Error, path: &str) -> anyhow::Error {
         serde_saphyr::Error::DuplicateMappingKey { key, location } => {
             let key = key
                 .as_deref()
-                .map(|k| format!(" `{k}`"))
-                .unwrap_or_default();
+                .map_or_else(String::new, |k| format!(" `{k}`"));
             anyhow::anyhow!(
                 "duplicate key{key} at line {}, column {}",
                 location.line(),
@@ -129,7 +128,7 @@ pub struct Host {
     #[serde(default)]
     pub buckets: BTreeMap<String, Vec<MonitorRule>>,
 
-    pub enc_key: Option<String>,
+    pub enc_key: Option<SecretString>,
     pub compress: Option<bool>,
 }
 
@@ -139,7 +138,9 @@ impl Config {
     /// Will return an error if the config file is not found or if the config
     /// cannot be parsed
     pub fn new(config_path: PathBuf) -> Result<Self> {
-        let file = File::open(config_path)?;
+        let file = File::open(&config_path).with_context(move || {
+            format!("unable to open config file: {}", config_path.display())
+        })?;
 
         // No source snippets: they would echo config lines, secret_key included.
         let options = serde_saphyr::options! { with_snippet: false };
@@ -675,7 +676,10 @@ hosts:
         let r = r.unwrap();
         assert_eq!(r, Region::aws("us-east-2"));
         assert_eq!(h.compress, Some(true));
-        assert_eq!(h.enc_key, Some(String::from("secret")));
+        assert_eq!(
+            h.enc_key.as_ref().map(ExposeSecret::expose_secret),
+            Some("secret")
+        );
     }
 
     #[test]

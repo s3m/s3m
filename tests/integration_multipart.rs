@@ -1,202 +1,265 @@
-//! Integration tests for multipart upload functionality
-//!
-//! These tests verify the end-to-end behavior of multipart uploads,
-//! including resumability, part management, and error handling.
+//! Multipart failure and resume through the real CLI and persisted database.
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-#![allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::assertions_on_constants,
-    clippy::missing_panics_doc,
-    clippy::missing_errors_doc,
-    clippy::indexing_slicing,
-    clippy::const_is_empty,
-    clippy::redundant_closure_for_method_calls,
-    clippy::useless_vec
-)]
+mod common;
+#[path = "support/stream_home.rs"]
+mod stream_home;
 
-use s3m::s3::{Credentials, Region, S3};
-use secrecy::SecretString;
-use std::io::Write;
+use common::{create_config_file, get_s3m_binary};
+use mockito::{Matcher, Mock, Server};
+use s3m::stream::state::StreamMode;
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::{Arc, Mutex, mpsc},
+    time::Duration,
+};
+use stream_home::StreamHome;
 use tempfile::NamedTempFile;
 
-/// Helper function to create a test S3 client
-fn create_test_s3_client() -> S3 {
-    S3::new(
-        &Credentials::new(
-            "AKIAIOSFODNN7EXAMPLE",
-            &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
-        ),
-        &"us-west-1".parse::<Region>().expect("valid region"),
-        Some("test-bucket".to_string()),
-        false,
-    )
+const PART_SIZE: usize = 5 * 1024 * 1024;
+const INITIATE: &str = "<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>resume-upload</UploadId></InitiateMultipartUploadResult>";
+const COMPLETE: &str = "<CompleteMultipartUploadResult><Location>local</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>completed</ETag></CompleteMultipartUploadResult>";
+
+struct MultipartFixture {
+    server: mockito::ServerGuard,
+    initiate: Mock,
+    first: Mock,
+    home: StreamHome,
+    config: NamedTempFile,
+    source: PathBuf,
+    payload: Vec<u8>,
 }
 
-/// Helper function to create a temporary file with specified size
-fn create_temp_file_with_size(size_bytes: usize) -> NamedTempFile {
-    let mut file = NamedTempFile::new().expect("Failed to create temp file");
-    let data = vec![0u8; size_bytes];
-    file.write_all(&data).expect("Failed to write to temp file");
-    file.flush().expect("Failed to flush temp file");
-    file
-}
+impl MultipartFixture {
+    fn new(payload: Vec<u8>) -> Self {
+        let mut server = Server::new();
+        let home = StreamHome::new(&payload).unwrap();
+        let config = create_config_file(&server.url(), "dummy", "dummy-secret");
+        let source = home.path().join("source.bin");
+        fs::write(&source, &payload).unwrap();
+        let initiate = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploads".into(), String::new()))
+            .with_body(INITIATE)
+            .expect(1)
+            .create();
+        let first = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("uploadId".into(), "resume-upload".into()),
+                Matcher::UrlEncoded("partNumber".into(), "1".into()),
+            ]))
+            .match_body(payload[..PART_SIZE].to_vec())
+            .with_header("etag", "first")
+            .expect(1)
+            .create();
 
-#[test]
-fn test_multipart_upload_requires_s3_connection() {
-    // This test verifies that multipart upload setup exists and compiles
-    // It will fail at runtime without a real S3 connection, which is expected
-    let _s3 = create_test_s3_client();
-
-    // Verify we can create the necessary structures
-    assert!(true, "Multipart upload structures compile successfully");
-}
-
-#[test]
-fn test_small_file_upload_preparation() {
-    // Test that we can prepare a small file for upload
-    let temp_file = create_temp_file_with_size(1024); // 1KB file
-
-    assert!(temp_file.path().exists(), "Temp file should exist");
-    assert_eq!(
-        temp_file.as_file().metadata().unwrap().len(),
-        1024,
-        "File should be 1KB"
-    );
-}
-
-#[test]
-fn test_large_file_upload_preparation() {
-    // Test that we can prepare a large file for upload
-    // 10MB file - small enough for tests but large enough to trigger multipart logic
-    let temp_file = create_temp_file_with_size(10 * 1024 * 1024);
-
-    assert!(temp_file.path().exists(), "Temp file should exist");
-    assert_eq!(
-        temp_file.as_file().metadata().unwrap().len(),
-        10 * 1024 * 1024,
-        "File should be 10MB"
-    );
-}
-
-#[test]
-fn test_part_size_calculation_for_various_file_sizes() {
-    use s3m::s3::tools::calculate_part_size;
-
-    // Test small file (< 5GB) with default 10MB buffer
-    let part_size = calculate_part_size(100 * 1024 * 1024, 10 * 1024 * 1024) // 100MB file, 10MB buffer
-        .expect("Should calculate part size for 100MB file");
-    assert!(
-        part_size >= 5 * 1024 * 1024,
-        "Part size should be at least 5MB"
-    );
-
-    // Test medium file (500GB) with 50MB buffer
-    let part_size = calculate_part_size(500 * 1024 * 1024 * 1024, 50 * 1024 * 1024)
-        .expect("Should calculate part size for 500GB file");
-    assert!(
-        part_size >= 5 * 1024 * 1024,
-        "Part size should be at least 5MB"
-    );
-    assert!(
-        part_size <= 5 * 1024 * 1024 * 1024,
-        "Part size should be at most 5GB"
-    );
-
-    // Test large file (4TB) with 512MB buffer
-    let part_size = calculate_part_size(4 * 1024 * 1024 * 1024 * 1024, 512 * 1024 * 1024)
-        .expect("Should calculate part size for 4TB file");
-    assert!(
-        part_size >= 5 * 1024 * 1024,
-        "Part size should be at least 5MB"
-    );
-}
-
-#[test]
-fn test_part_size_calculation_valid_ranges() {
-    use s3m::s3::tools::calculate_part_size;
-
-    // Test that calculate_part_size works for valid file sizes
-    // Small file
-    let result = calculate_part_size(100 * 1024 * 1024, 10 * 1024 * 1024); // 100MB, 10MB parts
-    assert!(result.is_ok(), "Should succeed for 100MB file");
-
-    // Medium file
-    let result = calculate_part_size(10 * 1024 * 1024 * 1024, 50 * 1024 * 1024); // 10GB, 50MB parts
-    assert!(result.is_ok(), "Should succeed for 10GB file");
-
-    // Large file (1TB)
-    let result = calculate_part_size(1024 * 1024 * 1024 * 1024, 100 * 1024 * 1024); // 1TB, 100MB parts
-    assert!(result.is_ok(), "Should succeed for 1TB file");
-}
-
-#[test]
-fn test_concurrent_part_preparation() {
-    // Test that we can prepare multiple parts concurrently
-    // This doesn't actually upload but tests the preparation logic
-
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::thread;
-
-    let counter = Arc::new(AtomicUsize::new(0));
-    let mut handles = vec![];
-
-    // Simulate preparing 10 parts concurrently
-    for i in 0..10 {
-        let counter_clone = Arc::clone(&counter);
-        let handle = thread::spawn(move || {
-            // Simulate part preparation work
-            let _temp_file = create_temp_file_with_size(1024 * 1024); // 1MB
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-            i
-        });
-        handles.push(handle);
+        Self {
+            server,
+            initiate,
+            first,
+            home,
+            config,
+            source,
+            payload,
+        }
     }
 
-    // Wait for all parts to be prepared
-    for handle in handles {
-        handle.join().expect("Thread panicked");
+    fn command(&self) -> Command {
+        let mut command = Command::new(get_s3m_binary());
+        command
+            .env("HOME", self.home.path())
+            .arg("--config")
+            .arg(self.config.path())
+            .args(["-r", "1", "-n", "1"]);
+        command
     }
+}
 
+#[test]
+fn failed_multipart_preserves_confirmed_parts_and_resumes_only_pending_bytes() {
+    let payload: Vec<u8> = (0..u32::try_from(PART_SIZE + 37).unwrap())
+        .map(|offset| u8::try_from(offset % 251).unwrap())
+        .collect();
+    let mut fixture = MultipartFixture::new(payload);
+    let failed = fixture
+        .server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+        .match_body(fixture.payload[PART_SIZE..].to_vec())
+        .with_status(503)
+        .with_body("<Error><Code>ServiceUnavailable</Code></Error>")
+        .expect(2)
+        .create();
+    let complete = fixture
+        .server
+        .mock("POST", "/bucket/key")
+        .match_query(Matcher::UrlEncoded(
+            "uploadId".into(),
+            "resume-upload".into(),
+        ))
+        .with_body(COMPLETE)
+        .expect(0)
+        .create();
+
+    let result = fixture
+        .command()
+        .args([
+            "--buffer",
+            &PART_SIZE.to_string(),
+            fixture.source.to_str().unwrap(),
+            "s3/bucket/key",
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success(), "failed part reported success");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("multipart upload failed"));
+    let entries = fixture.home.entries().unwrap();
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry.upload_id.as_deref(), Some("resume-upload"));
+    assert_eq!((entry.parts_uploaded, entry.parts_pending), (1, 1));
+    assert_eq!(entry.bytes_uploaded, u64::try_from(PART_SIZE).unwrap());
+    assert_eq!(entry.etag, None);
+    let metadata = entry.metadata.as_ref().unwrap();
     assert_eq!(
-        counter.load(Ordering::SeqCst),
-        10,
-        "All 10 parts should be prepared"
+        metadata.checksum,
+        blake3::hash(&fixture.payload).to_hex().to_string()
     );
+    assert_eq!(metadata.source_path, fixture.source);
+    assert_eq!(metadata.part_size, u64::try_from(PART_SIZE).unwrap());
+    assert!(matches!(metadata.mode, StreamMode::FileMultipart));
+    assert!(!metadata.pipe && !metadata.compress && !metadata.encrypt);
+    let metadata_path = s3m::stream::state::state_file_path(fixture.home.base(), &entry.id);
+    let id = entry.id.clone();
+
+    // A second failed resume must retain the same pending part and upload ID.
+    let again = fixture
+        .command()
+        .args(["streams", "resume", &id])
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    let repeated = fixture.home.entries().unwrap();
+    assert_eq!(
+        (repeated[0].parts_uploaded, repeated[0].parts_pending),
+        (1, 1)
+    );
+    assert_eq!(repeated[0].upload_id, entry.upload_id);
+    failed.assert();
+    complete.assert();
+    failed.remove();
+    complete.remove();
+    let saved_metadata = fs::read(&metadata_path).unwrap();
+
+    // Resume rejects changed and missing sources without destroying state.
+    fs::write(&fixture.source, b"changed").unwrap();
+    let changed = fixture
+        .command()
+        .args(["streams", "resume", &id])
+        .output()
+        .unwrap();
+    assert!(!changed.status.success());
+    assert!(String::from_utf8_lossy(&changed.stderr).contains("Source file changed"));
+    fs::remove_file(&fixture.source).unwrap();
+    let missing = fixture
+        .command()
+        .args(["streams", "resume", &id])
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("Source file missing or unreadable"));
+    assert_eq!(fs::read(&metadata_path).unwrap(), saved_metadata);
+    assert_eq!(fixture.home.entries().unwrap()[0].parts_pending, 1);
+    fixture.initiate.assert();
+    fixture.first.assert();
 }
 
 #[test]
-fn test_upload_id_format_validation() {
-    // Test that upload IDs are properly formatted
-    // This is important for resumable uploads
-
-    let upload_id = "AbCdEf123456";
-    assert!(!upload_id.is_empty(), "Upload ID should not be empty");
-    assert!(
-        upload_id.chars().all(|c| c.is_alphanumeric()),
-        "Upload ID should be alphanumeric"
-    );
-}
-
-#[test]
-fn test_etag_storage_and_retrieval() {
-    // Test that ETags are properly stored and can be retrieved
-    // ETags are critical for multipart upload completion
-
-    let etags = vec![
-        "etag1".to_string(),
-        "etag2".to_string(),
-        "etag3".to_string(),
-    ];
-
-    assert_eq!(etags.len(), 3, "Should have 3 ETags");
-    assert_eq!(etags[0], "etag1");
-    assert_eq!(etags[1], "etag2");
-    assert_eq!(etags[2], "etag3");
-
-    // Test that ETags are in correct order (order matters for S3)
-    for (i, etag) in etags.iter().enumerate() {
-        assert_eq!(etag, &format!("etag{}", i + 1), "ETags should be in order");
+fn interrupted_multipart_resumes_pending_bytes_after_repeated_kills() {
+    let payload = vec![23_u8; PART_SIZE + 19];
+    let mut fixture = MultipartFixture::new(payload);
+    for _ in 0..2 {
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let stalled = fixture
+            .server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+            .match_body(fixture.payload[PART_SIZE..].to_vec())
+            .with_body_from_request(move |_| {
+                seen_tx.send(()).unwrap();
+                release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+                Vec::new()
+            })
+            .expect(1)
+            .create();
+        let mut child = fixture
+            .command()
+            .arg("-b")
+            .arg(PART_SIZE.to_string())
+            .arg(&fixture.source)
+            .arg("s3/bucket/key")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        seen_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("pending part reached server");
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+        release_tx.send(()).unwrap();
+        stalled.assert();
+        stalled.remove();
+        let interrupted = fixture.home.entries().unwrap();
+        assert_eq!(
+            (interrupted[0].parts_uploaded, interrupted[0].parts_pending),
+            (1, 1)
+        );
+        assert_eq!(interrupted[0].upload_id.as_deref(), Some("resume-upload"));
+        assert_eq!(interrupted[0].etag, None);
     }
+    let entries = fixture.home.entries().unwrap();
+    let second = fixture
+        .server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("uploadId".into(), "resume-upload".into()),
+            Matcher::UrlEncoded("partNumber".into(), "2".into()),
+        ]))
+        .match_body(fixture.payload[PART_SIZE..].to_vec())
+        .with_header("etag", "second")
+        .expect(1)
+        .create();
+    let complete = fixture.server.mock("POST", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "resume-upload".into()))
+        .match_body(Matcher::Regex("(?s)<Part>.*<ETag>first</ETag>.*<PartNumber>1</PartNumber>.*<Part>.*<ETag>second</ETag>.*<PartNumber>2</PartNumber>".into()))
+        .with_body(COMPLETE).expect(1).create();
+
+    let resumed = fixture
+        .command()
+        .args(["streams", "resume", &entries[0].id])
+        .output()
+        .unwrap();
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    fixture.initiate.assert();
+    fixture.first.assert();
+    second.assert();
+    complete.assert();
+    let finished = fixture.home.entries().unwrap();
+    assert_eq!(finished[0].etag.as_deref(), Some("completed"));
+    assert_eq!(finished[0].parts_pending, 0);
+    assert_eq!(fs::read(&fixture.source).unwrap(), fixture.payload);
 }

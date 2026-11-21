@@ -22,7 +22,10 @@ impl AgeFilter {
     /// Will return `Err` if the object's `LastModified` timestamp can not be parsed
     pub fn matches(self, object: &Object, now: DateTime<Utc>) -> Result<bool> {
         let last_modified = parse_last_modified(object)?;
-        Ok(last_modified < now - self.duration)
+        // A cutoff before the earliest representable date selects nothing.
+        Ok(now
+            .checked_sub_signed(self.duration)
+            .is_some_and(|cutoff| last_modified < cutoff))
     }
 }
 
@@ -55,15 +58,16 @@ pub fn parse_age_filter(input: &str) -> Result<AgeFilter> {
     }
 
     let duration = match unit {
-        'd' => Duration::days(amount),
-        'h' => Duration::hours(amount),
-        'm' => Duration::minutes(amount),
+        'd' => Duration::try_days(amount),
+        'h' => Duration::try_hours(amount),
+        'm' => Duration::try_minutes(amount),
         _ => {
             return Err(anyhow!(
                 "Invalid duration '{input}'. Expected Nd, Nh, or Nm"
             ));
         }
-    };
+    }
+    .ok_or_else(|| anyhow!("Invalid duration '{input}'. Duration is too large"))?;
 
     Ok(AgeFilter::new(duration))
 }
@@ -161,6 +165,35 @@ mod tests {
         assert!(
             !filter
                 .matches(&object("2026-02-12T12:00:00Z"), now)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_parse_age_filter_rejects_out_of_range_durations() {
+        for input in [
+            "999999999999999d",
+            "9223372036854775807h",
+            "9223372036854775807m",
+        ] {
+            let err = parse_age_filter(input).unwrap_err().to_string();
+            assert_eq!(
+                err,
+                format!("Invalid duration '{input}'. Duration is too large")
+            );
+        }
+    }
+
+    #[test]
+    fn test_matches_nothing_when_cutoff_precedes_supported_dates() {
+        // Representable as a duration, but `now - duration` is before the
+        // earliest supported date: nothing can be older than that.
+        let filter = parse_age_filter("100000000d").unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap();
+
+        assert!(
+            !filter
+                .matches(&object("1970-01-01T00:00:00Z"), now)
                 .unwrap()
         );
     }

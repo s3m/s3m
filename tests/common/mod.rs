@@ -10,6 +10,7 @@
 
 #[path = "../support/minio_runtime.rs"]
 mod minio_runtime;
+pub mod owned_bucket;
 mod rustfs;
 
 use minio_runtime::MinioRuntime;
@@ -79,6 +80,43 @@ pub enum MinioContext {
 pub type RustFSContext = MinioContext;
 
 impl MinioContext {
+    /// Whether retained fixtures are owned by a disposable service boundary.
+    ///
+    /// External runners must identify the exact endpoint and container they
+    /// own and remove that container on every exit, including test failures.
+    pub fn owns_disposable_service(&self) -> bool {
+        match self {
+            Self::Container(_) => true,
+            Self::External { endpoint, .. } => {
+                let owned_endpoint = env::var_os("S3M_DISPOSABLE_OBJECT_LOCK_ENDPOINT");
+                let id = env::var_os("S3M_DISPOSABLE_OBJECT_LOCK_CONTAINER_ID");
+                match owned_endpoint {
+                    None => {
+                        assert!(
+                            id.is_none(),
+                            "disposable fixtures require S3M_DISPOSABLE_OBJECT_LOCK_ENDPOINT \
+                             with S3M_DISPOSABLE_OBJECT_LOCK_CONTAINER_ID"
+                        );
+                        false
+                    }
+                    Some(owned_endpoint) => {
+                        assert_eq!(
+                            owned_endpoint.to_str(),
+                            Some(endpoint.as_str()),
+                            "disposable fixture endpoint must match the actual service"
+                        );
+                        let id = id.expect(
+                            "disposable fixture must identify its exact owned container with \
+                             S3M_DISPOSABLE_OBJECT_LOCK_CONTAINER_ID",
+                        );
+                        assert!(!id.is_empty(), "owned container ID must be present");
+                        true
+                    }
+                }
+            }
+        }
+    }
+
     /// Use the configured endpoint or start a `RustFS` container.
     pub async fn get_or_start() -> Self {
         match minio_runtime::resolve_minio_runtime(MINIO_ROOT_USER, MINIO_ROOT_PASSWORD) {
@@ -150,28 +188,9 @@ impl MinioContext {
     }
 }
 
-/// Get the path to the s3m binary (builds it if needed)
+/// Get the path to the s3m binary built by Cargo for integration tests.
 pub fn get_s3m_binary() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target");
-    path.push("debug");
-    path.push("s3m");
-
-    // Build the binary if it doesn't exist
-    if !path.exists() {
-        let output = Command::new("cargo")
-            .args(["build", "--bin", "s3m"])
-            .output()
-            .expect("Failed to build s3m binary");
-
-        assert!(
-            output.status.success(),
-            "Failed to build s3m: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    path
+    PathBuf::from(env!("CARGO_BIN_EXE_s3m"))
 }
 
 /// Run s3m command with the S3 test context - creates a config file automatically.
