@@ -1,6 +1,15 @@
-## Unreleased
-* **`ls` limits and pagination**: listing now follows every page for objects, buckets and multipart uploads instead of returning one page. `--number/-n N` is a client-enforced **total** limit on printed results, counted after `--older-than` filtering, and no longer a per-request page size. `--number 0` lists nothing and sends no list request. Age-based deletion (`rm --older-than`) stays unlimited. The `--json` output schema is unchanged: no keys were added or removed.
+## 0.23.0 🔢 (2026-11-21)
+* **`ls` limits and pagination (issue #70)**: listing now follows every page for objects, buckets and multipart uploads instead of returning one page. `--number/-n N` is a client-enforced **total** limit on printed results, counted after `--older-than` filtering, and no longer a per-request page size. `--number 0` lists nothing and sends no list request. Age-based deletion (`rm --older-than`) stays unlimited. The `--json` output schema is unchanged: no keys were added or removed.
 * `ls --multipart` honours `--prefix`, and `--start-after` maps to the key marker only.
+* **Fixes**:
+  * `get --force` no longer empties an existing file when the response has no `Content-Length`. The response is checked before the destination is touched.
+  * `-vv` no longer prints the host `enc_key` in the debug log.
+  * `--decrypt` works without a config file. It used to fail when `~/.config/s3m/config.yml` didn't exist.
+  * `monitor` reports a rule whose `age` is out of range as a failed check instead of crashing.
+  * The last part of a streamed upload (`--pipe`, `--compress` or encryption) is now retried like every other part. It used to get a single attempt.
+  * `--older-than` rejects a duration too large to represent instead of crashing.
+  * Very large `-k/--kilobytes` values no longer overflow the throttle calculation.
+  * A failed multipart part now waits at most 30 seconds before its next attempt, the same as streamed parts. The wait used to double without limit (`-r 20` could wait about 3 days before the last attempt), and very large `--retries` values could overflow it.
 * **BREAKING (invocations that used to be accepted)**:
   * A host-only target (no bucket, for example `s3m ls s3`) now rejects `--multipart`, `--prefix` and `--start-after` before any request, as it already did for `--older-than`.
   * `object-lock --bypass-governance` is rejected on a bucket target and on a legal-hold-only change. These used to be accepted and now exit 1.
