@@ -37,6 +37,25 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
+      # Every commit a PR brings in must be signed with a key GitHub verifies
+      # (see .github/RELEASING.md). GitHub's own merge and squash commits are
+      # verified too. Pushes and workflow_call runs skip this step.
+      - name: Verify PR commit signatures
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          unverified=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$HEAD_SHA?per_page=100" \
+            --jq '.commits[] | select(.commit.verification.verified != true) | "\(.sha) \(.commit.verification.reason)"')
+          if [[ -n "$unverified" ]]; then
+            echo "GitHub could not verify these PR commits:"
+            echo "$unverified"
+            echo "Sign your commits: https://docs.github.com/en/authentication/managing-commit-signature-verification"
+            exit 1
+          fi
+
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
 

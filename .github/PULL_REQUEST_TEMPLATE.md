@@ -1,3 +1,4 @@
 - [ ] Have you test the code?
 - [ ] Have you check that the existing tests are passing?
 - [ ] The destination branch is **develop**?
+- [ ] Are all your commits signed, so GitHub shows them as **Verified**? CI rejects unsigned commits.
