@@ -1,6 +1,7 @@
 # s3m
 
 [![Release](https://github.com/s3m/s3m/actions/workflows/release.yml/badge.svg?branch=develop)](https://github.com/s3m/s3m/actions/workflows/release.yml?query=branch%3Adevelop)
+[![Deploy](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fs3m%2Fs3m%2Freleases%2Flatest&query=%24.tag_name&label=ghcr.io%2Fs3m%2Fs3m&logo=docker&logoColor=white&color=blue)](https://github.com/s3m/s3m/pkgs/container/s3m)
 [![Test & Build](https://github.com/s3m/s3m/actions/workflows/build.yml/badge.svg)](https://github.com/s3m/s3m/actions/workflows/build.yml)
 [![codecov](https://codecov.io/gh/s3m/s3m/graph/badge.svg?token=Y2BQJUGPJ5)](https://codecov.io/gh/s3m/s3m)
 [![crates.io](https://img.shields.io/crates/v/s3m.svg)](https://crates.io/crates/s3m)
