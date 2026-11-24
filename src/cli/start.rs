@@ -8,12 +8,12 @@ use crate::cli::{
     s3_location::{S3Location, host_bucket_key},
 };
 use crate::s3::{Credentials, Region, S3};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use clap::ArgMatches;
 use colored::Colorize;
 use secrecy::{ExposeSecret, SecretString};
 use std::{
-    fs,
+    ffi::OsString,
     path::{Path, PathBuf},
     process::exit,
 };
@@ -175,26 +175,34 @@ fn resolve_s3_and_action(
     Ok((s3, action))
 }
 
-fn config_dir() -> PathBuf {
-    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+/// Environment variable that replaces `~/.config/s3m` as the directory holding the default
+/// `config.yml` and the local upload state (`streams/`).
+pub const S3M_HOME_ENV: &str = "S3M_HOME";
 
-    home_dir.join(".config").join("s3m")
+fn config_dir() -> PathBuf {
+    config_dir_from(std::env::var_os(S3M_HOME_ENV), dirs::home_dir())
 }
 
-pub fn get_config_path() -> Result<PathBuf> {
-    let config_path = config_dir();
-    fs::create_dir_all(&config_path)
-        .context(format!("unable to create: {}", config_path.display()))?;
+/// A non-empty `S3M_HOME` wins; otherwise `<home>/.config/s3m`, with the temp directory
+/// standing in for a missing home.
+fn config_dir_from(s3m_home: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
+    if let Some(dir) = s3m_home.filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(dir);
+    }
 
-    Ok(config_path)
+    home.unwrap_or_else(std::env::temp_dir)
+        .join(".config")
+        .join("s3m")
 }
 
 /// # Errors
 /// Will return an error if the config file is not found
 pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     // --help and --version exit inside get_matches, before anything is written.
-    let matches = commands::new(&config_dir()).get_matches();
-    let config_path = get_config_path()?;
+    // Nothing is created here: a read-only home must not stop `ls`, `get` or `rm`. The
+    // upload state directories are created when an upload first writes to them.
+    let config_path = config_dir();
+    let matches = commands::new(&config_path).get_matches();
 
     init_logger(&matches);
 
@@ -276,9 +284,38 @@ hosts:
     secret_key: YYY";
 
     #[test]
-    fn test_get_config_path() {
-        let config_path = get_config_path();
-        assert!(config_path.is_ok());
+    fn test_config_dir_defaults_to_home_config() {
+        assert_eq!(
+            config_dir_from(None, Some(PathBuf::from("/home/u"))),
+            PathBuf::from("/home/u/.config/s3m")
+        );
+    }
+
+    #[test]
+    fn test_config_dir_honours_s3m_home() {
+        assert_eq!(
+            config_dir_from(
+                Some(OsString::from("/var/lib/s3m")),
+                Some(PathBuf::from("/home/u"))
+            ),
+            PathBuf::from("/var/lib/s3m")
+        );
+    }
+
+    #[test]
+    fn test_config_dir_ignores_empty_s3m_home() {
+        assert_eq!(
+            config_dir_from(Some(OsString::new()), Some(PathBuf::from("/home/u"))),
+            PathBuf::from("/home/u/.config/s3m")
+        );
+    }
+
+    #[test]
+    fn test_config_dir_without_home_uses_temp_dir() {
+        assert_eq!(
+            config_dir_from(None, None),
+            std::env::temp_dir().join(".config").join("s3m")
+        );
     }
 
     #[test]

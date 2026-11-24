@@ -85,6 +85,36 @@ impl Db {
         Ok(etag.clone())
     }
 
+    /// The `ETag` saved by the last completed upload of this file to this key, as the
+    /// server returned it (usually quoted).
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not query the db
+    pub fn cached_etag(&self) -> Result<Option<String>> {
+        Ok(self
+            .storage
+            .get(format!("etag {}", self.key).as_bytes())?
+            .map(|s| String::from_utf8(s.to_vec()))
+            .transpose()?)
+    }
+
+    /// Forget a completed upload of this file to this key: its saved `ETag` and its
+    /// multipart `upload_id`. The next upload then starts from scratch instead of
+    /// reporting the cached `ETag` or resuming an upload the server already completed.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not update the db
+    pub fn forget_upload(&self) -> Result<()> {
+        self.storage
+            .remove(format!("etag {}", self.key).as_bytes())?;
+        self.storage.remove(&self.key)?;
+        self.storage.flush()?;
+        state::touch_metadata(&self.state_dir)?;
+        Ok(())
+    }
+
     /// # Errors
     ///
     /// Will return `Err` if can not query the db
@@ -215,6 +245,47 @@ mod tests {
     use secrecy::SecretString;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    fn test_s3() -> S3 {
+        S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_forget_upload_clears_etag_and_upload_id_of_this_key_only() -> Result<()> {
+        let dir = tempdir()?;
+        let s3 = test_s3();
+        let db = Db::new(&s3, "key", "checksum", 0, dir.path())?;
+        // Another key in the same state directory (same content): sled locks the directory,
+        // so the second handle shares the storage, as two keys of one file do.
+        let other = Db {
+            storage: db.storage.clone(),
+            key: format!("{} other 0", &s3.hash()[0..8]),
+            state_dir: db.state_dir.clone(),
+        };
+
+        db.save_upload_id("uid")?;
+        db.save_etag("\"abc\"")?;
+        other.save_upload_id("other-uid")?;
+        other.save_etag("\"def\"")?;
+        assert_eq!(db.cached_etag()?, Some("\"abc\"".to_string()));
+
+        db.forget_upload()?;
+
+        assert_eq!(db.cached_etag()?, None);
+        assert_eq!(db.check()?, None);
+        assert_eq!(db.upload_id()?, None);
+        assert_eq!(other.cached_etag()?, Some("\"def\"".to_string()));
+        assert_eq!(other.upload_id()?, Some("other-uid".to_string()));
+        Ok(())
+    }
 
     #[test]
     fn test_db() -> Result<()> {

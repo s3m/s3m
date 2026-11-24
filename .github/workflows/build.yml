@@ -67,6 +67,24 @@ jobs:
           target: ${{ matrix.target }}
           package: ${{ steps.build.outputs.name }}
 
+      # The release image packages this same binary. Build it the same way and run it the
+      # way a pod does (non-root, read-only root), so a broken image fails CI on develop
+      # instead of the release.
+      - name: Build and check the container image
+        if: matrix.build == 'linux'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ steps.build.outputs.name }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p context/linux/amd64
+          cp "target/${TARGET}/release/${NAME}" context/linux/amd64/s3m
+          docker buildx build --platform linux/amd64 --file .github/container/Dockerfile \
+            --tag s3m:ci --load context
+          .github/container/smoke-test.sh s3m:ci "${VERSION}"
+
   # The same crate checks the release runs, so a package crates.io would refuse (missing
   # metadata, unpublishable files, a stale s3m-core pin) fails here on develop, not after
   # the release tag exists.

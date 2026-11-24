@@ -48,7 +48,7 @@ https://s3m.stream
 
 ## Configuration
 
-Create `~/.config/s3m/config.yml`:
+Create `~/.config/s3m/config.yml`, or pass another file with `--config`:
 
 ```yaml
 hosts:
@@ -73,6 +73,19 @@ hosts:
     access_key: B2_KEY
     secret_key: B2_SECRET
 ```
+
+### Where s3m keeps its files
+
+s3m reads `config.yml` and keeps the local state of uploads (`streams/`, used to
+resume multipart uploads) in `~/.config/s3m`. Set `S3M_HOME` to use another
+directory, for example a writable volume in a container:
+
+```bash
+S3M_HOME=/var/lib/s3m s3m --config /etc/s3m/config.yml backup.tar s3/backups/backup.tar
+```
+
+The directory is created only when an upload writes to it. Commands that keep no
+local state (`ls`, `get`, `rm`, `show`, ...) also work with a read-only home.
 
 ## Usage
 
@@ -392,8 +405,13 @@ and a failure on that attempt is reported as an error.
 * `s3m share --expire` accepts 1 to 604800 seconds. Values outside that range
   exit 2 without printing a URL.
 * `s3m --clean` exits nonzero when it can't remove stale state.
-* Without `--config`, a missing `~/.config/s3m/config.yml` exits 1 with an
-  error that names the file.
+* Without `--config`, a missing `~/.config/s3m/config.yml` (or
+  `$S3M_HOME/config.yml`) exits 1 with an error that names the file.
+* Uploading a file that s3m already uploaded to the same key, unchanged (same
+  content and modification time), is skipped when the object on the server still
+  has the `ETag` of that upload. s3m checks with a `HEAD` request. When the object
+  is gone or changed, or the `HEAD` request fails (for example credentials that
+  may write but not read), the file is uploaded again.
 
 ### Concurrency
 
@@ -417,6 +435,68 @@ reserved for the runtime, and the value is always at least `1`.
 - When the input size is unknown, `s3m` uses a fixed multipart buffer of `512 MiB` per part.
 - Streaming and transformed upload paths (for example `STDIN`, compression, and encryption) use a two-line progress display: the top line shows local buffering progress for the current `512 MiB` part, and the bottom line shows either `confirmed ...` bytes or `sending part N ... | confirmed ...` during the active part upload.
 - For interrupted or failed multipart uploads from streaming paths, configure bucket lifecycle rules to clean up incomplete multipart uploads automatically.
+
+## Container image
+
+Each release is published as a multi-arch image (`linux/amd64`, `linux/arm64`) at
+`ghcr.io/s3m/s3m`, tagged `X.Y.Z`, `X.Y`, `X` and `latest`. The image holds the
+static binary at `/s3m` (the entrypoint), CA certificates and a non-root user, on
+[distroless static](https://github.com/GoogleContainerTools/distroless). `S3M_HOME`
+is `/tmp/s3m`.
+
+```bash
+docker run --rm \
+  -v ~/.config/s3m/config.yml:/config.yml:ro \
+  -v "$PWD":/data:ro \
+  ghcr.io/s3m/s3m:0.24.0 --config /config.yml /data/backup.tar s3/backups/backup.tar
+```
+
+The `/s3m` binary is byte for byte the one in that release's
+`s3m-X.Y.Z-<arch>-unknown-linux-musl.tar.gz`, so it can be checked against the
+release's `SHA256SUMS`. The image has a build provenance attestation:
+
+```bash
+gh attestation verify oci://ghcr.io/s3m/s3m:0.24.0 --repo s3m/s3m \
+  --signer-workflow s3m/s3m/.github/workflows/release.yml
+```
+
+### Kubernetes image volume
+
+To run s3m from another container (for example a backup `CronJob` that first
+writes a snapshot), mount the image as an
+[image volume](https://kubernetes.io/docs/concepts/storage/volumes/#image) pinned
+by digest. Image volumes may be mounted `noexec`, so copy the binary to an
+`emptyDir` first:
+
+```yaml
+spec:
+  volumes:
+    - name: s3m
+      image:
+        reference: ghcr.io/s3m/s3m@sha256:<digest>
+    - name: s3m-config
+      secret:
+        secretName: s3m-config # holds config.yml
+    - name: work
+      emptyDir: {}
+  containers:
+    - name: backup
+      image: <your job image>
+      env:
+        - name: S3M_HOME
+          value: /work/s3m
+      command: ["/bin/sh", "-ec"]
+      args:
+        - |
+          cp /opt/s3m/s3m /work/s3m-bin && chmod 0755 /work/s3m-bin
+          # ... write /work/snapshot ...
+          /work/s3m-bin --config /etc/s3m/config.yml --retries 5 \
+            /work/snapshot "r2/backups/snapshot-$(date +%F).snap"
+      volumeMounts:
+        - { name: s3m, mountPath: /opt/s3m, readOnly: true }
+        - { name: s3m-config, mountPath: /etc/s3m, readOnly: true }
+        - { name: work, mountPath: /work }
+```
 
 ## Use as a library
 

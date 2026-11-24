@@ -1378,3 +1378,147 @@ fn assert_uploaded_bytes(minio: &MinioContext, uri: &str, source: &std::path::Pa
     assert_eq!(restored, original);
     assert_eq!(blake3::hash(&restored), blake3::hash(&original));
 }
+
+/// Run s3m with its own home, so the upload state of a test is not shared with other tests
+/// or with the developer's `~/.config/s3m`. `HOME` and `S3M_HOME` name the same directory,
+/// so the state is isolated whether or not the binary knows `S3M_HOME`.
+fn run_s3m_in_home(config_path: &str, home: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(get_s3m_binary())
+        .env("HOME", home)
+        .env("S3M_HOME", home.join(".config").join("s3m"))
+        .args(["--config", config_path])
+        .args(args)
+        .output()
+        .expect("Failed to execute s3m")
+}
+
+fn etag_lines(output: &Output) -> Vec<String> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.starts_with("ETag:"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn assert_success(output: &Output, what: &str) {
+    assert!(
+        output.status.success(),
+        "{what} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Upload, delete the object on the server, upload the same file again: the local state
+/// still holds the first upload's `ETag`. That cache used to report success without sending
+/// anything, so the object stayed deleted. The second upload must really store it.
+async fn reupload_after_remote_delete(label: &str, size: usize) {
+    let minio = MinioContext::get_or_start().await;
+    let owned = OwnedBucket::new(&minio, label);
+    let bucket = owned.name.as_str();
+    minio.create_bucket(bucket).await.expect("Bucket creation");
+
+    let config = create_config_file(minio.endpoint(), minio.access_key(), minio.secret_key());
+    let config = config.path().to_str().expect("config path");
+    let home = TempDir::new().expect("home");
+    let source = create_test_file_with_content(size, label);
+    let source_path = source.path().to_str().expect("source path");
+    let target = format!("s3/{bucket}/reupload.dat");
+
+    let first = run_s3m_in_home(config, home.path(), &[source_path, &target]);
+    assert_success(&first, "first upload");
+    // Regression: file uploads printed `ETag: ETag: "..."`.
+    let etags = etag_lines(&first);
+    assert_eq!(etags.len(), 1, "one ETag line expected: {etags:?}");
+    assert!(
+        !etags[0].starts_with("ETag: ETag"),
+        "ETag label printed twice: {etags:?}"
+    );
+    assert!(
+        home.path().join(".config/s3m/streams").is_dir(),
+        "the first upload must leave its state in the test's home"
+    );
+    // A real upload and a skipped one print the same single `ETag:` line.
+    let skipped = run_s3m_in_home(config, home.path(), &[source_path, &target]);
+    assert_success(&skipped, "upload of an unchanged file");
+    assert_eq!(etag_lines(&first), etag_lines(&skipped));
+    assert_success(
+        &run_s3m_in_home(config, home.path(), &["rm", &target]),
+        "delete",
+    );
+    assert_success(
+        &run_s3m_in_home(config, home.path(), &[source_path, &target]),
+        "second upload",
+    );
+
+    let download_dir = TempDir::new().expect("download dir");
+    let download = download_dir.path().join("reupload.dat");
+    assert_success(
+        &run_s3m_in_home(
+            config,
+            home.path(),
+            &["get", &target, download.to_str().expect("download path")],
+        ),
+        "download after the second upload",
+    );
+    assert_eq!(
+        calculate_file_hash(&download),
+        calculate_file_hash(source.path())
+    );
+}
+
+#[tokio::test]
+async fn test_e2e_reupload_after_remote_delete() {
+    reupload_after_remote_delete("e2e-reupload-single", 64 * 1024).await;
+}
+
+// Multipart also keeps the completed upload id: forgetting only the ETag would resume an
+// upload the server already completed, and the second upload would fail.
+#[tokio::test]
+async fn test_e2e_reupload_after_remote_delete_multipart() {
+    reupload_after_remote_delete("e2e-reupload-multipart", 11 * 1024 * 1024).await;
+}
+
+/// A read-only or missing home (a Kubernetes pod with `readOnlyRootFilesystem`, a
+/// `FROM scratch` image) used to fail every command with `unable to create: ...`, because
+/// `~/.config/s3m` was created at startup. Commands that keep no local state must work,
+/// and an upload must work when `S3M_HOME` points somewhere writable.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_e2e_unwritable_home() {
+    let minio = MinioContext::get_or_start().await;
+    let owned = OwnedBucket::new(&minio, "e2e-unwritable-home");
+    let bucket = owned.name.as_str();
+    minio.create_bucket(bucket).await.expect("Bucket creation");
+
+    let config = create_config_file(minio.endpoint(), minio.access_key(), minio.secret_key());
+    let config = config.path().to_str().expect("config path");
+    // A regular file as HOME: nothing can be created below it, even by root.
+    let home = NamedTempFile::new().expect("home file");
+    let run = |s3m_home: Option<&std::path::Path>, args: &[&str]| {
+        let mut cmd = Command::new(get_s3m_binary());
+        cmd.env("HOME", home.path()).env_remove("S3M_HOME");
+        if let Some(dir) = s3m_home {
+            cmd.env("S3M_HOME", dir);
+        }
+        cmd.args(["--config", config])
+            .args(args)
+            .output()
+            .expect("Failed to execute s3m")
+    };
+
+    assert_success(&run(None, &["ls", &format!("s3/{bucket}")]), "ls");
+
+    let state = TempDir::new().expect("S3M_HOME");
+    let source = create_test_file_with_content(1024, "UNWRITABLE_HOME_");
+    let source_path = source.path().to_str().expect("source path");
+    let target = format!("s3/{bucket}/unwritable-home.dat");
+    assert_success(
+        &run(Some(state.path()), &[source_path, &target]),
+        "upload with S3M_HOME",
+    );
+    assert!(state.path().join("streams").is_dir());
+
+    let listing = run(None, &["ls", &format!("s3/{bucket}")]);
+    assert_success(&listing, "ls after upload");
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("unwritable-home.dat"));
+}

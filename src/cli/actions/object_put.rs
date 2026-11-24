@@ -1,7 +1,7 @@
 use crate::{
     cli::{actions::Action, globals::GlobalArgs, progressbar::Bar},
     s3::{
-        S3,
+        S3, actions,
         checksum::{Checksum, ChecksumAlgorithm},
         limits::MAX_OBJECT_SIZE_BYTES,
         tools,
@@ -118,14 +118,13 @@ async fn handle_put_object(s3: &S3, request: PutObjectRequest, globals: GlobalAr
 
     if request.pipe {
         let etag = handle_pipe_upload(s3, request, globals).await?;
-        print_etag(&etag, quiet);
+        print_report(&etag_report(&etag), quiet);
         return Ok(());
     }
 
     let local_file = request.load_local_file()?;
-    if let Some(etag) = handle_file_upload(s3, request, globals, local_file).await? {
-        print_etag(&etag, quiet);
-    }
+    let report = handle_file_upload(s3, request, globals, local_file).await?;
+    print_report(&report, quiet);
 
     Ok(())
 }
@@ -168,7 +167,7 @@ async fn handle_file_upload(
     request: PutObjectRequest,
     globals: GlobalArgs,
     local_file: LocalFile,
-) -> Result<Option<String>> {
+) -> Result<String> {
     let file_path = local_file.path.as_path();
 
     match (globals.compress, globals.encrypt) {
@@ -185,7 +184,7 @@ async fn handle_file_upload(
                 file_path,
             })
             .await
-            .map(Some)
+            .map(|etag| etag_report(&etag))
         }
         (true, false) => {
             log::info!("COMPRESS - streaming compressed file");
@@ -200,7 +199,7 @@ async fn handle_file_upload(
                 file_path,
             })
             .await
-            .map(Some)
+            .map(|etag| etag_report(&etag))
         }
         (false, true) => {
             log::info!("ENCRYPT - streaming encrypted file");
@@ -215,7 +214,7 @@ async fn handle_file_upload(
                 file_path,
             })
             .await
-            .map(Some)
+            .map(|etag| etag_report(&etag))
         }
         (false, false) => handle_standard_file_upload(s3, request, globals, local_file).await,
     }
@@ -226,7 +225,7 @@ async fn handle_standard_file_upload(
     request: PutObjectRequest,
     globals: GlobalArgs,
     local_file: LocalFile,
-) -> Result<Option<String>> {
+) -> Result<String> {
     if local_file.size > MAX_OBJECT_SIZE_BYTES {
         log::error!("object size limit 5 TB");
         return Err(anyhow!("object size limit 5 TB"));
@@ -261,11 +260,8 @@ async fn handle_standard_file_upload(
         part_size,
     )?;
 
-    if let Some(etag) = db.check()? {
-        if !request.quiet {
-            println!("{etag}");
-        }
-        return Ok(None);
+    if let Some(etag) = cached_upload_still_current(s3, &request.key, &db).await? {
+        return Ok(etag_report(&etag));
     }
 
     let additional_checksum = calculate_additional_checksum(
@@ -294,7 +290,7 @@ async fn handle_standard_file_upload(
         .await
         .context("multipart upload failed")?;
 
-        return Ok(Some(etag));
+        return Ok(etag);
     }
 
     let etag = upload(UploadRequest {
@@ -311,7 +307,46 @@ async fn handle_standard_file_upload(
     })
     .await?;
 
-    Ok(Some(etag))
+    Ok(etag)
+}
+
+/// The local state only records that this file was once uploaded to this key. Before
+/// skipping the upload, ask the server: the object may have been deleted or replaced since.
+/// Only a matching `ETag` skips it. A missing object, another `ETag`, or a `HEAD` that fails
+/// (for example credentials allowed to write but not to read) forgets the cached upload so
+/// the file is uploaded again.
+async fn cached_upload_still_current(s3: &S3, key: &str, db: &Db) -> Result<Option<String>> {
+    let Some(cached) = db.cached_etag()? else {
+        return Ok(None);
+    };
+
+    match actions::HeadObject::new(key, None).request(s3).await {
+        Ok(headers) => match headers.get("etag") {
+            Some(remote) if same_etag(remote, &cached) => {
+                log::info!("{key} is already uploaded with ETag {cached}, skipping");
+                return Ok(Some(cached));
+            }
+            remote => log::info!(
+                "{key} changed on the server (ETag {remote:?}, uploaded {cached}), uploading again"
+            ),
+        },
+        Err(error) => {
+            log::info!("could not confirm the earlier upload of {key} ({error}), uploading again");
+        }
+    }
+
+    db.forget_upload()?;
+    Ok(None)
+}
+
+/// `ETag`s compare without their quotes or a weak `W/` prefix: `CompleteMultipartUpload`
+/// and `HEAD` do not always quote them the same way.
+fn same_etag(a: &str, b: &str) -> bool {
+    fn bare(etag: &str) -> &str {
+        etag.trim().trim_start_matches("W/").trim_matches('"')
+    }
+    let a = bare(a);
+    !a.is_empty() && a == bare(b)
 }
 
 fn maybe_write_stream_metadata(
@@ -387,9 +422,15 @@ impl PutObjectRequest {
 }
 
 /// Print the `ETag` if not in quiet mode
-fn print_etag(etag: &str, quiet: bool) {
+/// Streamed uploads return a bare `ETag`; file uploads return the response lines already
+/// labelled (`ETag: ...`, `Version ID: ...`), so the label is added only here.
+fn etag_report(etag: &str) -> String {
+    format!("ETag: {etag}")
+}
+
+fn print_report(report: &str, quiet: bool) {
     if !quiet {
-        println!("ETag: {etag}");
+        println!("{}", report.trim_end());
     }
 }
 
@@ -470,8 +511,143 @@ async fn calculate_additional_checksum(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use super::augment_object_lock_error;
-    use crate::s3::{ApiError, Error};
+    use super::{augment_object_lock_error, cached_upload_still_current, same_etag};
+    use crate::{
+        s3::{ApiError, Credentials, Error, Region, S3},
+        stream::db::Db,
+    };
+    use mockito::Server;
+    use secrecy::SecretString;
+    use tempfile::TempDir;
+
+    fn mock_s3(endpoint: &str) -> S3 {
+        S3::new(
+            &Credentials::new("AKIA", &SecretString::new("secret".into())),
+            &Region::custom("us-east-1", endpoint),
+            Some("bucket".to_string()),
+            false,
+        )
+    }
+
+    /// A state db that already holds a completed multipart upload of this file to `key`.
+    fn completed_upload(s3: &S3, dir: &TempDir, etag: &str) -> Db {
+        let db = Db::new(s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("completed-upload-id").unwrap();
+        db.save_etag(etag).unwrap();
+        db
+    }
+
+    #[test]
+    fn test_same_etag_ignores_quotes_and_weak_prefix() {
+        assert!(same_etag("\"abc-2\"", "abc-2"));
+        assert!(same_etag("W/\"abc\"", "\"abc\""));
+        assert!(!same_etag("\"abc\"", "\"abd\""));
+        assert!(!same_etag("\"\"", ""));
+    }
+
+    #[tokio::test]
+    async fn test_cache_hit_skips_when_server_has_same_etag() {
+        let mut server = Server::new_async().await;
+        let head = server
+            .mock("HEAD", "/bucket/key")
+            .with_status(200)
+            .with_header("etag", "\"abc-2\"")
+            .create_async()
+            .await;
+        let s3 = mock_s3(&server.url());
+        let dir = TempDir::new().unwrap();
+        let db = completed_upload(&s3, &dir, "\"abc-2\"");
+
+        let skipped = cached_upload_still_current(&s3, "key", &db).await.unwrap();
+
+        head.assert_async().await;
+        assert_eq!(skipped, Some("\"abc-2\"".to_string()));
+        assert_eq!(
+            db.upload_id().unwrap().as_deref(),
+            Some("completed-upload-id")
+        );
+    }
+
+    // Regression: a cached ETag used to report success with no request at all, even when
+    // the object had been deleted on the server.
+    #[tokio::test]
+    async fn test_cache_hit_uploads_again_when_object_is_gone() {
+        let mut server = Server::new_async().await;
+        let head = server
+            .mock("HEAD", "/bucket/key")
+            .with_status(404)
+            .create_async()
+            .await;
+        let s3 = mock_s3(&server.url());
+        let dir = TempDir::new().unwrap();
+        let db = completed_upload(&s3, &dir, "\"abc-2\"");
+
+        let skipped = cached_upload_still_current(&s3, "key", &db).await.unwrap();
+
+        head.assert_async().await;
+        assert_eq!(skipped, None);
+        assert_eq!(db.check().unwrap(), None);
+        // The completed upload id must go too, or the re-upload resumes a finished upload.
+        assert_eq!(db.upload_id().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_cache_hit_uploads_again_when_object_changed() {
+        let mut server = Server::new_async().await;
+        let _head = server
+            .mock("HEAD", "/bucket/key")
+            .with_status(200)
+            .with_header("etag", "\"other\"")
+            .create_async()
+            .await;
+        let s3 = mock_s3(&server.url());
+        let dir = TempDir::new().unwrap();
+        let db = completed_upload(&s3, &dir, "\"abc-2\"");
+
+        assert_eq!(
+            cached_upload_still_current(&s3, "key", &db).await.unwrap(),
+            None
+        );
+        assert_eq!(db.cached_etag().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_cache_hit_uploads_again_when_head_is_forbidden() {
+        let mut server = Server::new_async().await;
+        let _head = server
+            .mock("HEAD", "/bucket/key")
+            .with_status(403)
+            .create_async()
+            .await;
+        let s3 = mock_s3(&server.url());
+        let dir = TempDir::new().unwrap();
+        let db = completed_upload(&s3, &dir, "\"abc-2\"");
+
+        assert_eq!(
+            cached_upload_still_current(&s3, "key", &db).await.unwrap(),
+            None
+        );
+        assert_eq!(db.cached_etag().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_no_cached_upload_sends_no_request() {
+        let mut server = Server::new_async().await;
+        let head = server
+            .mock("HEAD", "/bucket/key")
+            .expect(0)
+            .create_async()
+            .await;
+        let s3 = mock_s3(&server.url());
+        let dir = TempDir::new().unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+
+        assert_eq!(
+            cached_upload_still_current(&s3, "key", &db).await.unwrap(),
+            None
+        );
+        head.assert_async().await;
+    }
 
     fn api_error(code: &str) -> anyhow::Error {
         anyhow::Error::new(Error::Api(ApiError {

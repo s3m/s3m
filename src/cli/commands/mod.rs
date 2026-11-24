@@ -208,7 +208,7 @@ fn add_transfer_args(cmd: Command, config_streams_path: &Path) -> Command {
         .arg(
             Arg::new("config")
             .long("config")
-            .long_help("Path to config.yml.\n\nDefault:\n  ~/.config/s3m/config.yml")
+            .long_help("Path to config.yml.\n\nDefault:\n  $S3M_HOME/config.yml when S3M_HOME is set, otherwise ~/.config/s3m/config.yml\n\nS3M_HOME also holds the local upload state (streams/).")
             .num_args(1)
             .short('c')
             .value_parser(validator_is_file())

@@ -32,7 +32,7 @@ PackageCloud deployment.
 5. **One compiler.** The guard resolves Rust `stable` to an exact version once; every Rust
    job of the run, PackageCloud included, installs that version, and the release notes end
    with `Built with Rust X.Y.Z`.
-6. **Not atomic.** The release publishes to several places (GitHub, crates.io,
+6. **Not atomic.** The release publishes to several places (GitHub, crates.io, GHCR,
    PackageCloud). Each step is safe to repeat, which is what makes a failure recoverable;
    see [When something fails](#when-something-fails).
 
@@ -71,8 +71,10 @@ flowchart TD
     T --> V["Check tag and assets"]
     V --> P["Publish s3m-core, then s3m, to crates.io"]
     V --> PC["PackageCloud"]
+    V --> I["ghcr.io image: push, check binaries, attest, move tags"]
     P --> W["just release waits for develop CI"]
     PC --> W
+    I --> W
     CI --> W
     W --> M["Operator pushes the SHA to protected main"]
 ```
@@ -90,6 +92,9 @@ re-checked), and a crate version crates.io already has is skipped.
   release, crates.io, PackageCloud) are fixed by re-running.
 - **crates.io after the tag:** if `s3m-core` was published and `s3m` was not, re-run the
   `Publish to crates.io` job; the already published crate is skipped.
+- **Container image:** re-run the `Container image` job. An `X.Y.Z` image that is
+  already in the registry is not rebuilt: the job checks that it holds the released
+  binaries, attests it again and moves `X.Y`, `X` and `latest` to it.
 - **PackageCloud** keeps `continue-on-error: true`, so an outage leaves the run green.
   Open the job's log after each release to see that the packages were pushed.
 - **If `just release` stopped before moving `main`**, push it yourself once `develop`'s
@@ -110,10 +115,25 @@ For version `X.Y.Z`, the GitHub release carries:
 - `s3m-X.Y.Z.crate` and `s3m-core-X.Y.Z.crate`, the packages sent to crates.io
 - `SHA256SUMS` for all of them, plus a build-provenance attestation for every file
 
+The `Container image` job also publishes `ghcr.io/s3m/s3m:X.Y.Z` (and moves `X.Y`, `X`
+and `latest`): a `linux/amd64` + `linux/arm64` index built from
+[`.github/container/Dockerfile`](container/Dockerfile). It copies the musl binaries out
+of the release tarballs, so `/s3m` in the image has the same SHA-256 as in
+`SHA256SUMS`; the job fails if it does not. The image gets its own provenance
+attestation, stored in the registry. Test & Build builds and smoke-tests the amd64
+image on every push, so a broken Dockerfile fails there first.
+
 ## Settings
 
 - **Secrets**: `CRATES_TOKEN` (crates.io; publishes both crates), `PACKAGECLOUD_TOKEN`
-  and `CODECOV_TOKEN`.
+  and `CODECOV_TOKEN`. The image is pushed with the workflow's own `GITHUB_TOKEN`
+  (`packages: write`).
+- **`ghcr.io/s3m/s3m`**: GHCR creates the package as private on the first push. Make it
+  public once (organization **Packages** → `s3m` → **Package settings** → **Change
+  visibility**) and check that it is linked to this repository, so the workflow keeps
+  write access.
+- **Base image**: the Dockerfile pins `distroless/static-debian13:nonroot` by digest.
+  Refresh the digest when updating dependencies; the command is in the Dockerfile.
 - **`main`**: protected, requires the **`CI OK`** check, signed commits and linear history,
   no force pushes or deletions.
 - **`develop`**: keep fast-forward only. Pull requests need one approving review and the
@@ -161,10 +181,12 @@ For version `X.Y.Z`, the GitHub release carries:
 - [ ] The secrets exist, and commits are signed and show **Verified** on GitHub.
 - [ ] Bump the version on `sandbox`, wait for Test & Build, fast-forward `develop`, run
       `just release`.
+- [ ] After the first release with an image (0.24.0), make `ghcr.io/s3m/s3m` public.
 
 ## Verifying a release
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
 gh attestation verify <file> --repo s3m/s3m --signer-workflow s3m/s3m/.github/workflows/release.yml
+gh attestation verify oci://ghcr.io/s3m/s3m:X.Y.Z --repo s3m/s3m --signer-workflow s3m/s3m/.github/workflows/release.yml
 ```

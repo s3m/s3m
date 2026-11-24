@@ -3,8 +3,9 @@ name: Release
 
 # Run manually on `develop` (`just release`). The commit is the one Test & Build already
 # passed on develop; nothing is bumped or committed here. The run builds that commit and
-# publishes the GitHub release (which creates the tag), the crates and PackageCloud. `main` is moved by
-# `just release` once this run has succeeded and develop's own Test & Build has finished
+# publishes the GitHub release (which creates the tag), the crates, the container image
+# and PackageCloud. `main` is moved by `just release` once this run has succeeded and
+# develop's own Test & Build has finished
 # (a still-pending `CI OK` blocks protected-branch updates, even for the workflow's token).
 # A failed job is fixed by "Re-run failed jobs"; nothing is published before every build
 # job has succeeded.
@@ -421,6 +422,149 @@ jobs:
           }
           publish "${PACKAGE}-core"
           publish "${PACKAGE}"
+
+  # ghcr.io/s3m/s3m: a multi-arch image (linux/amd64, linux/arm64) holding the musl binaries
+  # of this release, byte for byte, so a consumer can cross-check them against SHA256SUMS.
+  # Nothing is compiled: the binaries come from the release's own tarballs. The X.Y.Z tag is
+  # pushed once and never rebuilt; a re-run finds it, checks it and only moves the X.Y, X and
+  # latest tags (the guard already refused any version below the latest release).
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - guard
+      - release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      PACKAGE: ${{ needs.guard.outputs.package }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download the Linux archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: dist-*-unknown-linux-musl
+          merge-multiple: true
+          path: dist
+
+      - name: Unpack the binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in amd64:x86_64 arm64:aarch64; do
+            arch="${pair%%:*}"
+            dir="${PACKAGE}-${VERSION}-${pair#*:}-unknown-linux-musl"
+            mkdir -p "context/linux/${arch}"
+            tar -xzf "dist/${dir}.tar.gz" -O "${dir}/${PACKAGE}" > "context/linux/${arch}/s3m"
+          done
+          sha256sum context/linux/*/s3m
+
+      - name: Log in to the GitHub Container Registry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Build and push the image
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "${image}:${VERSION}" >/dev/null 2>&1; then
+            echo "${image}:${VERSION} is already published; checking it instead of rebuilding."
+          else
+            # The layers carry the commit time, not the build time.
+            SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "${GITHUB_SHA}")"
+            export SOURCE_DATE_EPOCH
+            docker buildx create --use --driver docker-container >/dev/null
+            labels=()
+            for kv in \
+              "org.opencontainers.image.title=${PACKAGE}" \
+              "org.opencontainers.image.description=CLI for streams of data in S3 buckets" \
+              "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              "org.opencontainers.image.url=https://s3m.stream" \
+              "org.opencontainers.image.version=${VERSION}" \
+              "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              "org.opencontainers.image.licenses=BSD-3-Clause"; do
+              # Labels on each image, annotations on the index: GHCR reads the index.
+              labels+=(--label "${kv}" --annotation "index:${kv}")
+            done
+            # --provenance=false: the attestation below is the provenance, and the index
+            # holds only the two platform images.
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --file .github/container/Dockerfile \
+              --provenance=false \
+              "${labels[@]}" \
+              --tag "${image}:${VERSION}" \
+              --output type=registry,oci-mediatypes=true \
+              context
+          fi
+          digest="$(docker buildx imagetools inspect "${image}:${VERSION}" --format '{{json .Manifest}}' | jq -r .digest)"
+          [[ "${digest}" == sha256:* ]] || { echo "::error::No digest for ${image}:${VERSION}."; exit 1; }
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "${image}:${VERSION} is ${image}@${digest}"
+
+      # The image must hold exactly the released binaries, run, and work on a read-only root.
+      - name: Check the published image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.push.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          ref="${IMAGE}@${DIGEST}"
+          platforms="$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' \
+            | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")')"
+          if [[ "${platforms}" != "linux/amd64 linux/arm64" ]]; then
+            echo "::error::${ref} holds '${platforms}', expected linux/amd64 and linux/arm64."
+            exit 1
+          fi
+          for arch in amd64 arm64; do
+            docker pull --quiet --platform "linux/${arch}" "${ref}" >/dev/null
+            id="$(docker create --platform "linux/${arch}" "${ref}")"
+            docker cp "${id}:/s3m" "s3m-${arch}"
+            docker rm "${id}" >/dev/null
+            if ! cmp -s "s3m-${arch}" "context/linux/${arch}/s3m"; then
+              echo "::error::The linux/${arch} binary in ${ref} differs from the released one."
+              exit 1
+            fi
+            echo "linux/${arch}: $(sha256sum < "s3m-${arch}" | cut -d' ' -f1)"
+          done
+          docker pull --quiet --platform linux/amd64 "${ref}" >/dev/null
+          .github/container/smoke-test.sh "${ref}" "${VERSION}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-name: ${{ steps.push.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Move the X.Y, X and latest tags
+        shell: bash
+        env:
+          IMAGE: ${{ steps.push.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION%.*}" \
+            --tag "${IMAGE}:${VERSION%%.*}" \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}@${DIGEST}"
+          echo "${IMAGE}:${VERSION%.*}, :${VERSION%%.*} and :latest now point at ${DIGEST}."
 
   # Debian, Ubuntu and RPM repositories on PackageCloud, from the same commit and
   # compiler. The job keeps its continue-on-error: a PackageCloud outage does not fail the
