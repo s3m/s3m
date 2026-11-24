@@ -133,7 +133,8 @@ image on every push, so a broken Dockerfile fails there first.
   visibility**) and check that it is linked to this repository, so the workflow keeps
   write access.
 - **Base image**: the Dockerfile pins `distroless/static-debian13:nonroot` by digest.
-  Refresh the digest when updating dependencies; the command is in the Dockerfile.
+  Dependabot ([`dependabot.yml`](dependabot.yml)) opens a pull request against `sandbox`
+  when distroless publishes a new digest; the manual refresh command is in the Dockerfile.
 - **`main`**: protected, requires the **`CI OK`** check, signed commits and linear history,
   no force pushes or deletions.
 - **`develop`**: keep fast-forward only. Pull requests need one approving review and the
@@ -181,7 +182,7 @@ image on every push, so a broken Dockerfile fails there first.
 - [ ] The secrets exist, and commits are signed and show **Verified** on GitHub.
 - [ ] Bump the version on `sandbox`, wait for Test & Build, fast-forward `develop`, run
       `just release`.
-- [ ] After the first release with an image (0.24.0), make `ghcr.io/s3m/s3m` public.
+- [x] After the first release with an image (0.24.0), make `ghcr.io/s3m/s3m` public.
 
 ## Verifying a release
 

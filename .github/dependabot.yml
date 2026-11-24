@@ -1,0 +1,11 @@
+---
+# Only the container base image: the distroless digest pinned in .github/container/Dockerfile.
+# Pull requests target sandbox, where all work lands before develop (see RELEASING.md).
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /.github/container
+    target-branch: sandbox
+    schedule:
+      interval: weekly
+    labels: []

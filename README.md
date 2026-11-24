@@ -451,7 +451,7 @@ is `/tmp/s3m`.
 docker run --rm \
   -v ~/.config/s3m/config.yml:/config.yml:ro \
   -v "$PWD":/data:ro \
-  ghcr.io/s3m/s3m:0.24.0 --config /config.yml /data/backup.tar s3/backups/backup.tar
+  ghcr.io/s3m/s3m:latest --config /config.yml /data/backup.tar s3/backups/backup.tar
 ```
 
 The `/s3m` binary is byte for byte the one in that release's
@@ -459,7 +459,7 @@ The `/s3m` binary is byte for byte the one in that release's
 release's `SHA256SUMS`. The image has a build provenance attestation:
 
 ```bash
-gh attestation verify oci://ghcr.io/s3m/s3m:0.24.0 --repo s3m/s3m \
+gh attestation verify oci://ghcr.io/s3m/s3m:latest --repo s3m/s3m \
   --signer-workflow s3m/s3m/.github/workflows/release.yml
 ```
 
