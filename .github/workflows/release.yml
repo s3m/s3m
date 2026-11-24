@@ -535,8 +535,8 @@ jobs:
           # Each platform by its own manifest digest, so no local tag can mix them up.
           for arch in amd64 arm64; do
             child="$(jq -r --arg a "${arch}" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"${index}")"
-            docker pull --quiet "${IMAGE}@${child}" >/dev/null
-            id="$(docker create "${IMAGE}@${child}")"
+            docker pull --quiet --platform "linux/${arch}" "${IMAGE}@${child}" >/dev/null
+            id="$(docker create --platform "linux/${arch}" "${IMAGE}@${child}")"
             docker cp "${id}:/s3m" "s3m-${arch}"
             docker rm "${id}" >/dev/null
             if ! cmp -s "s3m-${arch}" "context/linux/${arch}/s3m"; then
