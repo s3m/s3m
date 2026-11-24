@@ -1496,7 +1496,10 @@ async fn test_e2e_unwritable_home() {
     let home = NamedTempFile::new().expect("home file");
     let run = |s3m_home: Option<&std::path::Path>, args: &[&str]| {
         let mut cmd = Command::new(get_s3m_binary());
-        cmd.env("HOME", home.path()).env_remove("S3M_HOME");
+        // No temp directory either, as in a FROM scratch image.
+        cmd.env("HOME", home.path())
+            .env("TMPDIR", home.path().join("no-tmp"))
+            .env_remove("S3M_HOME");
         if let Some(dir) = s3m_home {
             cmd.env("S3M_HOME", dir);
         }

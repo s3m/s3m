@@ -81,7 +81,12 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
 
         let response = action.request(request.s3).await?;
 
+        // A new upload id starts from nothing. The part trees are shared by every upload of
+        // the same content, so parts left by an interrupted upload (another key, or this key
+        // before the file was touched) would otherwise be planned or completed again; a stale
+        // part in CompleteMultipartUpload fails it with InvalidPart.
         db_parts.clear()?;
+        db_uploaded.clear()?;
         // save the upload_id to resume if required
         request.sdb.save_upload_id(&response.upload_id)?;
         response.upload_id
@@ -339,4 +344,94 @@ async fn try_upload_part(request: UploadPartRequest<'_>) -> Result<String> {
     log::debug!("Uploading part: {}", request.part_number);
 
     Ok(action.request(request.s3, &request.globals).await?)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::{MultipartUploadRequest, upload_multipart};
+    use crate::{
+        s3::{Credentials, Region, RequestOptions, S3},
+        stream::{db::Db, part::Part},
+    };
+    use mockito::{Matcher, Server};
+    use rkyv::{rancor::Error as RkyvError, to_bytes};
+    use secrecy::SecretString;
+    use std::io::Write;
+
+    // Regression: a fresh upload id kept the parts another upload of the same content had
+    // already sent, and CompleteMultipartUpload listed them (S3 answers InvalidPart).
+    #[tokio::test]
+    async fn new_upload_does_not_complete_with_stale_uploaded_parts() {
+        let mut server = Server::new_async().await;
+        let s3 = S3::new(
+            &Credentials::new("AKIA", &SecretString::new("secret".into())),
+            &Region::custom("us-east-1", server.url()),
+            Some("bucket".to_string()),
+            false,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        let stale = Part::new(3, 10, 5, None).set_etag("\"STALE\"".to_string());
+        db.db_uploaded()
+            .unwrap()
+            .insert(
+                3_u16.to_be_bytes(),
+                to_bytes::<RkyvError>(&stale).unwrap().as_slice(),
+            )
+            .unwrap();
+
+        let _initiate = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploads".into(), String::new()))
+            .with_body("<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>new-id</UploadId></InitiateMultipartUploadResult>")
+            .create_async()
+            .await;
+        let parts = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("uploadId".into(), "new-id".into()),
+                Matcher::Regex("partNumber=[12]".into()),
+            ]))
+            .with_header("ETag", "\"fresh\"")
+            .expect(2)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "new-id".into()))
+            .with_body_from_request(|request| {
+                let body = String::from_utf8_lossy(request.body().unwrap()).to_string();
+                if body.contains("STALE") {
+                    b"stale part sent".to_vec()
+                } else {
+                    b"<CompleteMultipartUploadResult><Location>l</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>\"done-2\"</ETag></CompleteMultipartUploadResult>".to_vec()
+                }
+            })
+            .create_async()
+            .await;
+
+        let result = upload_multipart(MultipartUploadRequest {
+            s3: &s3,
+            key: "key",
+            file: file.path(),
+            file_size: 10,
+            chunk_size: 5,
+            sdb: &db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: None,
+            max_requests: 1,
+            globals: RequestOptions::default(),
+        })
+        .await;
+
+        parts.assert_async().await;
+        complete.assert_async().await;
+        assert_eq!(result.unwrap(), "ETag: \"done-2\"");
+    }
 }

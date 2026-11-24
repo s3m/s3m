@@ -259,10 +259,12 @@ fn add_runtime_args(cmd: Command, num_threads: String) -> Command {
         .arg(
             Arg::new("tmp-dir")
             .help("Specify a directory for temporarily storing the STDIN buffer")
-            .long_help("Directory used for temporary streaming buffers.\n\nThis matters mainly for --pipe, compression and encryption paths.")
+            .long_help("Directory used for temporary streaming buffers.\n\nThis matters mainly for --pipe, compression and encryption paths.\n\nDefault: the system temp directory ($TMPDIR, usually /tmp)")
             .short('t')
             .long("tmp-dir")
-            .default_value(std::env::temp_dir().into_os_string())
+            // No default_value: clap would validate it on every command, so a missing
+            // temp directory (a FROM scratch image, a bad $TMPDIR) broke even `ls`.
+            // Uploads fall back to std::env::temp_dir() when they need it.
             .value_parser(validator_is_dir())
             .num_args(1)
         )
@@ -535,6 +537,15 @@ hosts:
             Some("/tmp".to_string())
         );
 
+        Ok(())
+    }
+
+    // Regression: the default was validated on every command, before any of them ran.
+    #[test]
+    fn test_tmp_dir_has_no_default_to_validate() -> Result<()> {
+        let config = get_config().unwrap();
+        let m = new(&config).try_get_matches_from(vec!["s3m", "test"])?;
+        assert_eq!(m.get_one::<PathBuf>("tmp-dir"), None);
         Ok(())
     }
 

@@ -144,8 +144,14 @@ fn test_show_lists_configured_host_names_without_secrets() {
             "{args:?}"
         );
         assert!(stderr.is_empty(), "{args:?}: {stderr}");
-        for secret in [SHOW_SECRET, SHOW_ENC_KEY, "AKID", "127.0.0.1"] {
-            assert!(!stdout.contains(secret), "{args:?} printed {secret}");
+        // Name what leaked, never the value: a failure message must not print a secret.
+        for (what, value) in [
+            ("a secret_key", SHOW_SECRET),
+            ("the enc_key", SHOW_ENC_KEY),
+            ("an access_key", "AKID"),
+            ("the endpoint", "127.0.0.1"),
+        ] {
+            assert!(!stdout.contains(value), "{args:?} printed {what}");
         }
     }
 }

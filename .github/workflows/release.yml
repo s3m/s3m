@@ -484,7 +484,8 @@ jobs:
           if docker buildx imagetools inspect "${image}:${VERSION}" >/dev/null 2>&1; then
             echo "${image}:${VERSION} is already published; checking it instead of rebuilding."
           else
-            # The layers carry the commit time, not the build time.
+            # The image and its files carry the commit time, not the build time
+            # (SOURCE_DATE_EPOCH with rewrite-timestamp below).
             SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "${GITHUB_SHA}")"
             export SOURCE_DATE_EPOCH
             docker buildx create --use --driver docker-container >/dev/null
@@ -508,7 +509,7 @@ jobs:
               --provenance=false \
               "${labels[@]}" \
               --tag "${image}:${VERSION}" \
-              --output type=registry,oci-mediatypes=true \
+              --output type=registry,oci-mediatypes=true,rewrite-timestamp=true \
               context
           fi
           digest="$(docker buildx imagetools inspect "${image}:${VERSION}" --format '{{json .Manifest}}' | jq -r .digest)"
@@ -525,25 +526,27 @@ jobs:
         run: |
           set -euo pipefail
           ref="${IMAGE}@${DIGEST}"
-          platforms="$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' \
-            | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")')"
+          index="$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}')"
+          platforms="$(jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")' <<<"${index}")"
           if [[ "${platforms}" != "linux/amd64 linux/arm64" ]]; then
             echo "::error::${ref} holds '${platforms}', expected linux/amd64 and linux/arm64."
             exit 1
           fi
+          # Each platform by its own manifest digest, so no local tag can mix them up.
           for arch in amd64 arm64; do
-            docker pull --quiet --platform "linux/${arch}" "${ref}" >/dev/null
-            id="$(docker create --platform "linux/${arch}" "${ref}")"
+            child="$(jq -r --arg a "${arch}" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $a) | .digest' <<<"${index}")"
+            docker pull --quiet "${IMAGE}@${child}" >/dev/null
+            id="$(docker create "${IMAGE}@${child}")"
             docker cp "${id}:/s3m" "s3m-${arch}"
             docker rm "${id}" >/dev/null
             if ! cmp -s "s3m-${arch}" "context/linux/${arch}/s3m"; then
               echo "::error::The linux/${arch} binary in ${ref} differs from the released one."
               exit 1
             fi
-            echo "linux/${arch}: $(sha256sum < "s3m-${arch}" | cut -d' ' -f1)"
+            echo "linux/${arch} (${child}): $(sha256sum < "s3m-${arch}" | cut -d' ' -f1)"
+            [[ "${arch}" != amd64 ]] || amd64="${IMAGE}@${child}"
           done
-          docker pull --quiet --platform linux/amd64 "${ref}" >/dev/null
-          .github/container/smoke-test.sh "${ref}" "${VERSION}"
+          .github/container/smoke-test.sh "${amd64}" "${VERSION}"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4

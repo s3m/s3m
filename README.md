@@ -411,7 +411,9 @@ and a failure on that attempt is reported as an error.
   content and modification time), is skipped when the object on the server still
   has the `ETag` of that upload. s3m checks with a `HEAD` request. When the object
   is gone or changed, or the `HEAD` request fails (for example credentials that
-  may write but not read), the file is uploaded again.
+  may write but not read), the file is uploaded again. The skip compares only
+  the `ETag`: `--meta`, `--acl` and Object Lock flags given on that run are not
+  applied to the existing object (use `s3m acl` or `s3m object-lock` for that).
 
 ### Concurrency
 
