@@ -99,6 +99,8 @@ fn checksum_replaces_content_md5_on_single_and_multipart_uploads() -> Result<()>
             String::from_utf8_lossy(&output.stderr)
         );
         put.assert();
+        // On Windows each fixture holds the shared profile lock until dropped.
+        drop(fixture);
 
         let mut server = Server::new();
         let payload = vec![7; 11 * MIB + 137];
