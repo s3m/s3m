@@ -240,7 +240,7 @@ async fn handle_standard_file_upload(
     );
 
     let blake3_checksum = blake3_checksum(&local_file.path, request.quiet)?;
-    log::info!("checksum: {blake3_checksum}");
+    log::info!("blake3: {blake3_checksum}");
 
     let db = Db::new(
         s3,
@@ -448,7 +448,7 @@ pub fn blake3_checksum(file: &Path, quiet: bool) -> Result<String> {
 
     if let Some(pb) = pb.progress.as_ref() {
         pb.finish_and_clear();
-        println!("checksum: {checksum}");
+        println!("blake3: {checksum}");
     }
 
     Ok(checksum)

@@ -47,7 +47,7 @@ impl Bar {
 
         let style_result = ProgressStyle::default_spinner()
             .tick_strings(PROGRES_CHARS_SPINNER)
-            .template("checksum: {spinner:.green}");
+            .template("blake3: {spinner:.green}");
 
         let style = match style_result {
             Ok(s) => s,

@@ -166,6 +166,7 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
         uploaded,
         request.additional_checksum,
     );
+    let checksum = action.checksum()?;
     let rs = action.request(request.s3).await?;
 
     // cleanup uploads tree
@@ -177,7 +178,20 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     // upload finished
     log::info!("Upload finished, ETag: {}", rs.e_tag);
 
-    Ok(format!("ETag: {}", rs.e_tag))
+    Ok(upload_report(&rs.e_tag, checksum.as_ref()))
+}
+
+/// The lines printed after the upload: the `ETag`, then the additional checksum of the
+/// whole object if one was requested.
+fn upload_report(etag: &str, checksum: Option<&Checksum>) -> String {
+    let mut report = format!("ETag: {etag}");
+    if let Some(checksum) = checksum {
+        let checksum = checksum.report();
+        log::info!("{checksum}");
+        report.push('\n');
+        report.push_str(&checksum);
+    }
+    report
 }
 
 #[cfg(test)]

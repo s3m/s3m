@@ -48,6 +48,14 @@ fn checksum_choices_send_known_digest_and_original_bytes() -> Result<()> {
             String::from_utf8_lossy(&output.stderr)
         );
         put.assert();
+        let report = format!("{algorithm} (base64): {digest}");
+        ensure!(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.trim() == report),
+            "{algorithm}: {report} not in {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
         println!(
             "checksum={algorithm} header={digest} transmitted=hello world exit={}",
             output.status
@@ -137,6 +145,114 @@ fn checksum_replaces_content_md5_on_single_and_multipart_uploads() -> Result<()>
         }
         done.assert();
     }
+    Ok(())
+}
+
+// <https://github.com/s3m/s3m/issues/74>: the BLAKE3 hash s3m prints is labelled as such,
+// and the --checksum value is printed with its algorithm, comparable with x-amz-checksum-*.
+#[test]
+fn upload_output_labels_blake3_and_additional_checksum() -> Result<()> {
+    let blake3 = format!("blake3: {}", blake3::hash(b"hello world").to_hex());
+    let sha256 = "sha256 (base64): uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=";
+    for (args, expected) in [(vec![], None), (vec!["--checksum", "sha256"], Some(sha256))] {
+        let mut server = Server::new();
+        let fixture = Fixture::new(&server.url(), b"hello world")?;
+        let put = server
+            .mock("PUT", "/bucket/key")
+            .with_header("etag", "\"single\"")
+            .expect(1)
+            .create();
+        let output = fixture
+            .command()
+            .args(&args)
+            .arg(&fixture.source)
+            .arg("s3/bucket/key")
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        ensure!(output.status.success(), "{args:?}: {stdout}");
+        put.assert();
+        let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+        ensure!(lines.contains(&blake3.as_str()), "{args:?}: {stdout}");
+        ensure!(
+            !lines.iter().any(|line| line.starts_with("checksum:")),
+            "{args:?}: unlabelled checksum in {stdout}"
+        );
+        ensure!(lines.contains(&"ETag: \"single\""), "{args:?}: {stdout}");
+        ensure!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("sha256 (base64):"))
+                == expected.is_some(),
+            "{args:?}: {stdout}"
+        );
+        if let Some(expected) = expected {
+            ensure!(lines.contains(&expected), "{args:?}: {stdout}");
+        }
+    }
+
+    // Multipart: the object's checksum is the checksum of the parts' checksums, with the
+    // number of parts; s3m prints the value it sends with CompleteMultipartUpload.
+    // base64(sha256(sha256(part 1) || sha256(part 2)))-2, computed with Python hashlib.
+    let composite = "/ccignrnlPRaGvTgvct+ud7nkKrCW+uQ+dKW805e/cA=-2";
+    let mut server = Server::new();
+    let payload = vec![7; 11 * MIB + 137];
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let init = initiate(&mut server).expect(1).create();
+    let parts: Vec<_> = payload
+        .chunks(10 * MIB)
+        .enumerate()
+        .map(|(i, bytes)| part_mock(&mut server, i + 1, bytes).expect(1).create())
+        .collect();
+    let done = complete(&mut server)
+        .match_header("x-amz-checksum-sha256", composite)
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .args(["-n", "1", "--checksum", "sha256"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    ensure!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    init.assert();
+    for part in parts {
+        part.assert();
+    }
+    done.assert();
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let blake3 = format!("blake3: {}", blake3::hash(&payload).to_hex());
+    ensure!(lines.contains(&blake3.as_str()), "{stdout}");
+    ensure!(lines.contains(&"ETag: done"), "{stdout}");
+    let expected = format!("sha256 (base64): {composite}");
+    ensure!(lines.contains(&expected.as_str()), "{stdout}");
+
+    // --quiet still prints nothing.
+    let mut server = Server::new();
+    let fixture = Fixture::new(&server.url(), b"hello world")?;
+    let put = server
+        .mock("PUT", "/bucket/key")
+        .with_header("etag", "\"single\"")
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .args(["-q", "--checksum", "sha256"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    put.assert();
+    ensure!(output.status.success(), "-q");
+    ensure!(
+        output.stdout.is_empty() && output.stderr.is_empty(),
+        "-q printed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 

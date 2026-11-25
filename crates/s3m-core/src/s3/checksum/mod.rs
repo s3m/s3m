@@ -83,6 +83,20 @@ impl Checksum {
         }
     }
 
+    /// The value as `<algorithm> (base64): <checksum>`, for example
+    /// `sha256 (base64): uU0nuZNN...`, comparable with the object's `x-amz-checksum-*`.
+    #[must_use]
+    pub fn report(&self) -> String {
+        let algorithm = match self.algorithm {
+            ChecksumAlgorithm::Crc32 => "crc32",
+            ChecksumAlgorithm::Crc32c => "crc32c",
+            ChecksumAlgorithm::Md5 => "md5",
+            ChecksumAlgorithm::Sha1 => "sha1",
+            ChecksumAlgorithm::Sha256 => "sha256",
+        };
+        format!("{algorithm} (base64): {}", self.checksum)
+    }
+
     #[must_use]
     pub fn hasher(&self) -> Box<dyn ChecksumHasher> {
         let hasher: Box<dyn ChecksumHasher> = match self.algorithm {
@@ -211,6 +225,23 @@ mod tests {
     use base64ct::{Base64, Encoding};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_report_names_the_algorithm() {
+        for (algorithm, name) in [
+            (ChecksumAlgorithm::Crc32, "crc32"),
+            (ChecksumAlgorithm::Crc32c, "crc32c"),
+            (ChecksumAlgorithm::Md5, "md5"),
+            (ChecksumAlgorithm::Sha1, "sha1"),
+            (ChecksumAlgorithm::Sha256, "sha256"),
+        ] {
+            let checksum = Checksum {
+                algorithm,
+                checksum: "value==".to_string(),
+            };
+            assert_eq!(format!("{name} (base64): value=="), checksum.report());
+        }
+    }
 
     #[tokio::test]
     async fn test_crc32() {

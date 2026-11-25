@@ -86,6 +86,55 @@ impl<'a> CompleteMultipartUpload<'a> {
         }
     }
 
+    /// The additional checksum of the whole object, if one was requested: the checksum
+    /// of the parts' checksums, followed by `-<number of parts>`.
+    ///
+    /// For example, consider an object uploaded with a multipart upload that has an
+    /// `ETag` of `C9A5A6878D97B48CC965C1E41859F034-14`. In this case,
+    /// `C9A5A6878D97B48CC965C1E41859F034` is the MD5 digest of all the digests
+    /// concatenated together. The `-14` indicates that there are 14 parts associated
+    /// with this object's multipart upload.
+    ///
+    /// If you've enabled additional checksum values for your multipart object, Amazon
+    /// S3 calculates the checksum for each individual part by using the specified
+    /// checksum algorithm. The checksum for the completed object is calculated in the
+    /// same way that Amazon S3 calculates the MD5 digest for the multipart upload.
+    /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html>
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if a part's checksum is not valid base64
+    pub fn checksum(&self) -> Result<Option<Checksum>, Error> {
+        let Some(additional_checksum) = &self.additional_checksum else {
+            return Ok(None);
+        };
+
+        // hash the checksums of the parts with the additional checksum algorithm
+        let mut hasher = additional_checksum.hasher();
+
+        // concatenate the checksums of the parts
+        for part in self.parts.values() {
+            if let Some(checksum) = &part.checksum {
+                let checksum_in_bytes = Base64::decode_vec(&checksum.checksum).map_err(|e| {
+                    Error::Other(format!(
+                        "could not decode checksum: {}, {}",
+                        checksum.checksum, e
+                    ))
+                })?;
+                hasher.update(&checksum_in_bytes);
+            }
+        }
+
+        Ok(Some(Checksum {
+            algorithm: additional_checksum.algorithm.clone(),
+            checksum: format!(
+                "{}-{}",
+                Base64::encode_string(&hasher.finalize()),
+                self.parts.len()
+            ),
+        }))
+    }
+
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
@@ -97,59 +146,11 @@ impl<'a> CompleteMultipartUpload<'a> {
 
         let digest = tools::sha256_digest(&body);
 
-        // add additional checksum to headers if provided
-        if let Some(additional_checksum) = &self.additional_checksum {
-            // get the amz header name
-            let amz_header = additional_checksum.algorithm.as_amz();
-
-            // For example, consider an object uploaded with a multipart
-            // upload that has an ETag of C9A5A6878D97B48CC965C1E41859F034-14. In this
-            // case, C9A5A6878D97B48CC965C1E41859F034 is the MD5 digest of all the digests
-            // concatenated together. The -14 indicates that there are 14 parts associated with
-            // this object's multipart upload.
-            //
-            // If you've enabled additional checksum values for your multipart object, Amazon
-            // S3 calculates the checksum for each individual part by using the specified
-            // checksum algorithm. The checksum for the completed object is calculated in the
-            // same way that Amazon S3 calculates the MD5 digest for the multipart upload. You
-            // can use this checksum to verify the integrity of the object.
-            // https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-
-            // hash the checksums of the parts with the additional checksum algorithm
-            let mut hasher = additional_checksum.clone().hasher();
-
-            // concatenate the checksums of the parts
-            for part in self.parts.values() {
-                if let Some(checksum) = &part.checksum {
-                    let checksum_in_bytes =
-                        Base64::decode_vec(&checksum.checksum).map_err(|e| {
-                            Error::Other(format!(
-                                "could not decode checksum: {}, {}",
-                                checksum.checksum, e
-                            ))
-                        })?;
-                    hasher.update(&checksum_in_bytes);
-                }
-            }
-
-            // base64 encode the checksum
-            let checksum = Base64::encode_string(&hasher.finalize());
-
-            // populate the headers map
-            if let Some(map) = self.headers.as_mut() {
-                map.insert(
-                    amz_header.to_string(),
-                    format!("{checksum}-{}", self.parts.len()),
-                );
-            } else {
-                let mut map = BTreeMap::new();
-                map.insert(
-                    amz_header.to_string(),
-                    format!("{checksum}-{}", self.parts.len()),
-                );
-
-                self.headers = Some(map);
-            }
+        // add the checksum of the whole object to the headers if requested
+        if let Some(checksum) = self.checksum()? {
+            self.headers
+                .get_or_insert_with(BTreeMap::new)
+                .insert(checksum.algorithm.as_amz().to_string(), checksum.checksum);
         }
 
         // sign the request
@@ -359,6 +360,70 @@ mod tests {
         let serialized = to_string(&action).unwrap();
         let expected = r"<CompleteMultipartUpload><Part><ChecksumSHA1>checksum</ChecksumSHA1><ETag>etag</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>";
         assert_eq!(expected, serialized);
+    }
+
+    fn sha256_parts(checksums: &[&str]) -> BTreeMap<u16, Part> {
+        (1..)
+            .zip(checksums)
+            .map(|(number, checksum)| {
+                (
+                    number,
+                    Part {
+                        etag: format!("etag{number}"),
+                        number,
+                        checksum: Some(Checksum {
+                            algorithm: ChecksumAlgorithm::Sha256,
+                            checksum: (*checksum).to_string(),
+                        }),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_checksum_is_composite_of_parts() {
+        // base64(sha256("part1")), base64(sha256("part2")) and
+        // base64(sha256(sha256("part1") || sha256("part2"))), computed with Python hashlib.
+        let parts = sha256_parts(&[
+            "WeCjzHoMRflnNb8fBjJduQtLt0LyV98StrGN89ISZJk=",
+            "R008mgtSt2i3xUr/ssOGqSGmszAHEJxwvntTbroXa7Q=",
+        ]);
+        let action = CompleteMultipartUpload::new(
+            "key",
+            "uid",
+            parts,
+            Some(Checksum::new(ChecksumAlgorithm::Sha256)),
+        );
+        let checksum = action.checksum().unwrap().unwrap();
+        assert_eq!(ChecksumAlgorithm::Sha256, checksum.algorithm);
+        assert_eq!(
+            "xheoOGWlJSrr1KooTDWywen6ft/oubM2FCHlVKEDMfM=-2",
+            checksum.checksum
+        );
+        assert_eq!(
+            "sha256 (base64): xheoOGWlJSrr1KooTDWywen6ft/oubM2FCHlVKEDMfM=-2",
+            checksum.report()
+        );
+    }
+
+    #[test]
+    fn test_checksum_without_additional_checksum() {
+        let parts = sha256_parts(&["WeCjzHoMRflnNb8fBjJduQtLt0LyV98StrGN89ISZJk="]);
+        let action = CompleteMultipartUpload::new("key", "uid", parts, None);
+        assert!(action.checksum().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_checksum_rejects_invalid_part_checksum() {
+        let parts = sha256_parts(&["not base64!"]);
+        let action = CompleteMultipartUpload::new(
+            "key",
+            "uid",
+            parts,
+            Some(Checksum::new(ChecksumAlgorithm::Sha256)),
+        );
+        assert!(action.checksum().is_err());
     }
 
     #[tokio::test]

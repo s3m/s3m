@@ -24,6 +24,12 @@ pub struct UploadRequest<'a> {
 pub async fn upload(request: UploadRequest<'_>) -> Result<String> {
     let progress_sender = setup_progress(request.quiet, request.file_size).await;
 
+    let checksum_report = request
+        .additional_checksum
+        .as_ref()
+        .filter(|checksum| !checksum.checksum.is_empty())
+        .map(Checksum::report);
+
     let action = actions::PutObject::new(
         request.key,
         request.file,
@@ -38,8 +44,15 @@ pub async fn upload(request: UploadRequest<'_>) -> Result<String> {
     let etag = &response.get("ETag").ok_or_else(|| anyhow!("no etag"))?;
     request.sdb.save_etag(etag)?;
 
-    Ok(response.iter().fold(String::new(), |mut output, (k, v)| {
+    let mut report = response.iter().fold(String::new(), |mut output, (k, v)| {
         let _ = writeln!(output, "{k}: {v}");
         output
-    }))
+    });
+
+    if let Some(checksum) = checksum_report {
+        log::info!("{checksum}");
+        let _ = writeln!(report, "{checksum}");
+    }
+
+    Ok(report)
 }
