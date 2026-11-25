@@ -299,6 +299,8 @@ fn multipart_upload_reports_response_headers_and_error_documents() -> Result<()>
     for line in ["ETag: done", expected.as_str(), "Version ID: 7e5dee92"] {
         ensure!(lines.contains(&line), "{line} not in {stdout}");
     }
+    // On Windows each fixture holds the shared profile lock until dropped.
+    drop(fixture);
 
     let mut server = Server::new();
     let fixture = Fixture::new(&server.url(), &payload)?;
