@@ -3,6 +3,7 @@
 
 use crate::s3::{
     S3,
+    checksum::ChecksumAlgorithm,
     error::{ApiError, Error, Result},
     responses::ErrorResponse,
     signature::Signature,
@@ -163,10 +164,30 @@ pub trait Action {
 
         let mut signature = Signature::new(s3, "s3", self.http_method()?)?;
 
-        let headers = signature.sign(&url, hash_payload, md5, content_length, self.headers());
+        let custom_headers = self.headers();
+
+        // An additional checksum replaces Content-MD5, as in the AWS SDKs:
+        // Cloudflare R2 rejects a request that carries both.
+        let md5 = if custom_headers.as_ref().is_some_and(has_additional_checksum) {
+            None
+        } else {
+            md5
+        };
+
+        let headers = signature.sign(&url, hash_payload, md5, content_length, custom_headers);
 
         Ok((url, headers?))
     }
+}
+
+/// Whether the headers carry an `x-amz-checksum-<algorithm>` value, for any
+/// algorithm `ChecksumAlgorithm` parses (so not `-algorithm`, `-mode` or `-type`).
+fn has_additional_checksum(headers: &BTreeMap<&str, &str>) -> bool {
+    headers.keys().any(|key| {
+        key.to_ascii_lowercase()
+            .strip_prefix("x-amz-checksum-")
+            .is_some_and(|algorithm| algorithm.parse::<ChecksumAlgorithm>().is_ok())
+    })
 }
 
 /// Build a structured [`Error::Api`] from a non-2xx S3 response.
@@ -234,4 +255,34 @@ pub async fn response_error(response: Response) -> Error {
         message,
         details,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_has_additional_checksum() {
+        for header in [
+            "x-amz-checksum-crc32",
+            "x-amz-checksum-crc32c",
+            "x-amz-checksum-sha1",
+            "x-amz-checksum-sha256",
+            "X-Amz-Checksum-SHA256",
+        ] {
+            let headers = BTreeMap::from([(header, "value")]);
+            assert!(has_additional_checksum(&headers), "{header}");
+        }
+
+        // Settings about checksums, not checksum values, keep Content-MD5.
+        for header in [
+            "x-amz-checksum-algorithm",
+            "x-amz-checksum-mode",
+            "x-amz-checksum-type",
+            "x-amz-acl",
+        ] {
+            let headers = BTreeMap::from([(header, "value")]);
+            assert!(!has_additional_checksum(&headers), "{header}");
+        }
+    }
 }

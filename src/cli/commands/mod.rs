@@ -141,7 +141,7 @@ fn add_transfer_args(cmd: Command, config_streams_path: &Path) -> Command {
         .arg(
             Arg::new("checksum")
             .help("Additional checksums algorithms")
-            .long_help("Request an additional object checksum.\n\nSupported values: crc32, crc32c, sha1, sha256.\nOnly applies to file uploads, not --pipe.")
+            .long_help("Request an additional object checksum.\n\nSupported values: crc32, crc32c, sha1, sha256.\nOnly applies to file uploads, not --pipe.\nThe checksum replaces Content-MD5 on the upload requests.")
             .long("checksum")
             .value_parser([
                 "crc32",

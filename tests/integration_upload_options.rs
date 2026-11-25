@@ -31,6 +31,7 @@ fn checksum_choices_send_known_digest_and_original_bytes() -> Result<()> {
         let put = server
             .mock("PUT", "/bucket/key")
             .match_header(format!("x-amz-checksum-{algorithm}").as_str(), digest)
+            .match_header("content-md5", Matcher::Missing)
             .match_body(b"hello world".to_vec())
             .with_header("etag", "digest-ok")
             .expect(1)
@@ -51,6 +52,90 @@ fn checksum_choices_send_known_digest_and_original_bytes() -> Result<()> {
             "checksum={algorithm} header={digest} transmitted=hello world exit={}",
             output.status
         );
+    }
+    Ok(())
+}
+
+// <https://github.com/s3m/s3m/issues/73>: Cloudflare R2 rejects Content-MD5 sent
+// together with x-amz-checksum-*, so --checksum must replace it on every upload request.
+#[test]
+fn checksum_replaces_content_md5_on_single_and_multipart_uploads() -> Result<()> {
+    let digest = "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=";
+    for (args, md5, checksum) in [
+        (
+            vec!["--checksum", "sha256"],
+            Matcher::Missing,
+            Matcher::Exact(digest.into()),
+        ),
+        (vec![], Matcher::Any, Matcher::Missing),
+    ] {
+        let mut server = Server::new();
+        let fixture = Fixture::new(&server.url(), b"hello world")?;
+        let put = server
+            .mock("PUT", "/bucket/key")
+            .match_header("content-md5", md5.clone())
+            .match_header("x-amz-checksum-sha256", checksum)
+            .match_body(b"hello world".to_vec())
+            .with_header("etag", "single")
+            .expect(1)
+            .create();
+        let output = fixture
+            .command()
+            .args(&args)
+            .arg(&fixture.source)
+            .arg("s3/bucket/key")
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "single {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        put.assert();
+
+        let mut server = Server::new();
+        let payload = vec![7; 11 * MIB + 137];
+        let fixture = Fixture::new(&server.url(), &payload)?;
+        let init = initiate(&mut server)
+            .match_header("content-md5", Matcher::Missing)
+            .expect(1)
+            .create();
+        let checksum = if args.is_empty() {
+            Matcher::Missing
+        } else {
+            Matcher::Any
+        };
+        let parts: Vec<_> = payload
+            .chunks(10 * MIB)
+            .enumerate()
+            .map(|(i, bytes)| {
+                part_mock(&mut server, i + 1, bytes)
+                    .match_header("content-md5", md5.clone())
+                    .match_header("x-amz-checksum-sha256", checksum.clone())
+                    .expect(1)
+                    .create()
+            })
+            .collect();
+        let done = complete(&mut server)
+            .match_header("content-md5", Matcher::Missing)
+            .expect(1)
+            .create();
+        let output = fixture
+            .command()
+            .args(["-n", "1"])
+            .args(&args)
+            .arg(&fixture.source)
+            .arg("s3/bucket/key")
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "multipart {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        init.assert();
+        for part in parts {
+            part.assert();
+        }
+        done.assert();
     }
     Ok(())
 }

@@ -231,6 +231,78 @@ mod tests {
         assert_eq!(headers.get("x-amz-object-lock-legal-hold"), Some(&"ON"));
     }
 
+    fn test_s3() -> S3 {
+        S3::new(
+            &Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            ),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_sign_sends_content_md5_without_additional_checksum() {
+        let action = PutObject::new("key", Path::new("/"), None, None, None, None, None);
+        let (_, headers) = action
+            .sign(
+                &test_s3(),
+                tools::sha256_digest("").as_ref(),
+                Some(b"0123456789abcdef"),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            Some(&"MDEyMzQ1Njc4OWFiY2RlZg==".to_string()),
+            headers.get("content-md5")
+        );
+        assert!(
+            headers
+                .get("authorization")
+                .unwrap()
+                .contains("content-md5;")
+        );
+    }
+
+    // <https://github.com/s3m/s3m/issues/73>: Cloudflare R2 rejects Content-MD5
+    // together with an x-amz-checksum-* header.
+    #[test]
+    fn test_sign_omits_content_md5_with_additional_checksum() {
+        use crate::s3::checksum::ChecksumAlgorithm;
+
+        let checksum = Checksum {
+            algorithm: ChecksumAlgorithm::Sha256,
+            checksum: "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=".to_string(),
+        };
+        let action = PutObject::new(
+            "key",
+            Path::new("/"),
+            None,
+            None,
+            None,
+            Some(checksum),
+            None,
+        );
+        let (_, headers) = action
+            .sign(
+                &test_s3(),
+                tools::sha256_digest("").as_ref(),
+                Some(b"0123456789abcdef"),
+                None,
+            )
+            .unwrap();
+        assert_eq!(None, headers.get("content-md5"));
+        assert_eq!(
+            Some(&"uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=".to_string()),
+            headers.get("x-amz-checksum-sha256")
+        );
+        let authorization = headers.get("authorization").unwrap();
+        assert!(!authorization.contains("content-md5"));
+        assert!(authorization.contains("x-amz-checksum-sha256"));
+    }
+
     #[test]
     fn test_sign() {
         let s3 = S3::new(
