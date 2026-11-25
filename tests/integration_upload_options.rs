@@ -232,6 +232,8 @@ fn upload_output_labels_blake3_and_additional_checksum() -> Result<()> {
     ensure!(lines.contains(&"ETag: done"), "{stdout}");
     let expected = format!("sha256 (base64): {composite}");
     ensure!(lines.contains(&expected.as_str()), "{stdout}");
+    // On Windows each fixture holds the shared profile lock until dropped.
+    drop(fixture);
 
     // --quiet still prints nothing.
     let mut server = Server::new();
