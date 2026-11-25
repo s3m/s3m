@@ -5,8 +5,8 @@
 
 use crate::s3::error::Error;
 use crate::{
-    s3::actions::{Action, response_error},
-    s3::responses::CompleteMultipartUploadResult,
+    s3::actions::{Action, api_error, response_error, upload_response_headers},
+    s3::responses::{CompleteMultipartUploadResult, ErrorResponse},
     s3::{S3, checksum::Checksum, request, tools},
 };
 use base64ct::{Base64, Encoding};
@@ -166,7 +166,18 @@ impl<'a> CompleteMultipartUpload<'a> {
         .await?;
 
         if response.status().is_success() {
-            let rs: CompleteMultipartUploadResult = from_str(&response.text().await?)?;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response.text().await?;
+
+            // S3 can answer 200 OK and still fail the upload, with an <Error> document
+            // in the body (the response is only sent once processing finished).
+            if from_str::<ErrorResponse>(&body).is_ok() {
+                return Err(api_error(status, &headers, Some(body)));
+            }
+
+            let mut rs: CompleteMultipartUploadResult = from_str(&body)?;
+            rs.headers = upload_response_headers(&headers)?;
             Ok(rs)
         } else {
             Err(response_error(response).await)
@@ -424,6 +435,128 @@ mod tests {
             Some(Checksum::new(ChecksumAlgorithm::Sha256)),
         );
         assert!(action.checksum().is_err());
+    }
+
+    async fn complete_against(
+        server: &mockito::ServerGuard,
+    ) -> Result<CompleteMultipartUploadResult, Error> {
+        let s3 = S3::new(
+            &Credentials::new("AKIA", &SecretString::new("secret".into())),
+            &Region::custom("us-east-1", server.url()),
+            Some("bucket".to_string()),
+            false,
+        );
+        let parts = BTreeMap::from([(
+            1,
+            Part {
+                etag: "\"etag1\"".to_string(),
+                number: 1,
+                checksum: None,
+            },
+        )]);
+        CompleteMultipartUpload::new("key", "uid", parts, None)
+            .request(&s3)
+            .await
+    }
+
+    const DONE: &str = "<CompleteMultipartUploadResult><Location>l</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>\"done-1\"</ETag></CompleteMultipartUploadResult>";
+
+    // <https://github.com/s3m/s3m/issues/75>: the response headers of
+    // CompleteMultipartUpload are reported like those of PutObject.
+    #[tokio::test]
+    async fn test_request_reads_response_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "uploadId".into(),
+                "uid".into(),
+            ))
+            .with_header("x-amz-version-id", "v1")
+            .with_header(
+                "x-amz-expiration",
+                "expiry-date=\"Sat, 09 Jan 2027 00:00:00 GMT\", rule-id=\"expire-45d\"",
+            )
+            .with_header("x-amz-server-side-encryption", "AES256")
+            .with_body(DONE)
+            .create_async()
+            .await;
+
+        let rs = complete_against(&server).await.unwrap();
+        complete.assert_async().await;
+        assert_eq!("\"done-1\"", rs.e_tag);
+        assert_eq!(
+            BTreeMap::from([
+                (
+                    "Expiration",
+                    "expiry-date=\"Sat, 09 Jan 2027 00:00:00 GMT\", rule-id=\"expire-45d\""
+                        .to_string()
+                ),
+                ("Server-side encryption", "AES256".to_string()),
+                ("Version ID", "v1".to_string()),
+            ]),
+            rs.headers
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_without_response_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let _complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(mockito::Matcher::Any)
+            .with_body(DONE)
+            .create_async()
+            .await;
+
+        let rs = complete_against(&server).await.unwrap();
+        assert!(rs.headers.is_empty());
+    }
+
+    // S3 can answer CompleteMultipartUpload with 200 OK and an <Error> document.
+    #[tokio::test]
+    async fn test_request_reports_error_document_with_200() {
+        let mut server = mockito::Server::new_async().await;
+        let _complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("x-amz-request-id", "req-1")
+            .with_body("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>InternalError</Code><Message>We encountered an internal error. Please try again.</Message><RequestId>req-1</RequestId></Error>")
+            .create_async()
+            .await;
+
+        let Err(Error::Api(error)) = complete_against(&server).await else {
+            panic!("expected an S3 API error");
+        };
+        assert_eq!(200, error.status);
+        assert_eq!(Some("InternalError".to_string()), error.code);
+        assert_eq!(
+            Some("We encountered an internal error. Please try again.".to_string()),
+            error.message
+        );
+        assert!(
+            error.details.contains("Request ID: req-1"),
+            "{}",
+            error.details
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_reports_error_document_without_message() {
+        let mut server = mockito::Server::new_async().await;
+        let _complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(mockito::Matcher::Any)
+            .with_body("<Error><Code>InternalError</Code><RequestId>r1</RequestId></Error>")
+            .create_async()
+            .await;
+
+        let Err(Error::Api(error)) = complete_against(&server).await else {
+            panic!("expected an S3 API error");
+        };
+        assert_eq!(200, error.status);
+        assert_eq!(Some("InternalError".to_string()), error.code);
     }
 
     #[tokio::test]

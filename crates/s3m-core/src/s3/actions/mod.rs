@@ -9,7 +9,7 @@ use crate::s3::{
     signature::Signature,
 };
 use quick_xml::de::from_str;
-use reqwest::{Method, Response};
+use reqwest::{Method, Response, StatusCode, header::HeaderMap};
 use std::{collections::BTreeMap, fmt::Write};
 use url::Url;
 
@@ -190,6 +190,29 @@ fn has_additional_checksum(headers: &BTreeMap<&str, &str>) -> bool {
     })
 }
 
+/// The response headers of an upload (`PutObject`, `CompleteMultipartUpload`) that
+/// s3m reports, labelled as it prints them.
+///
+/// # Errors
+///
+/// Will return `Err` if a header value is not visible ASCII
+pub(crate) fn upload_response_headers(
+    headers: &HeaderMap,
+) -> Result<BTreeMap<&'static str, String>> {
+    let mut report = BTreeMap::new();
+    for (header, label) in [
+        ("x-amz-version-id", "Version ID"),
+        ("x-amz-server-side-encryption", "Server-side encryption"),
+        ("x-amz-expiration", "Expiration"),
+        ("x-emc-previous-object-size", "Previous object size"),
+    ] {
+        if let Some(value) = headers.get(header) {
+            report.insert(label, value.to_str()?.to_string());
+        }
+    }
+    Ok(report)
+}
+
 /// Build a structured [`Error::Api`] from a non-2xx S3 response.
 ///
 /// Header reads are best-effort and never fail the conversion; the populated
@@ -198,21 +221,31 @@ fn has_additional_checksum(headers: &BTreeMap<&str, &str>) -> bool {
 /// matching.
 pub async fn response_error(response: Response) -> Error {
     let status = response.status();
+    let headers = response.headers().clone();
+
+    // Try to read the response body, but don't fail if we can't
+    let body = response
+        .text()
+        .await
+        .inspect_err(|e| log::warn!("Failed to read error response body: {e}"))
+        .ok();
+
+    api_error(status, &headers, body)
+}
+
+/// Build a structured [`Error::Api`] from a response's status, headers and body
+/// (`None` when the body could not be read). See [`response_error`].
+pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<String>) -> Error {
     let status_code = status.as_u16();
 
     let mut detail: BTreeMap<&str, String> = BTreeMap::new();
     detail.insert("HTTP Status Code", status.to_string());
 
-    if let Some(v) = response
-        .headers()
-        .get("x-amz-id-2")
-        .and_then(|h| h.to_str().ok())
-    {
+    if let Some(v) = headers.get("x-amz-id-2").and_then(|h| h.to_str().ok()) {
         detail.insert("x-amz-id-2", v.to_string());
     }
 
-    if let Some(v) = response
-        .headers()
+    if let Some(v) = headers
         .get("x-amz-request-id")
         .and_then(|h| h.to_str().ok())
     {
@@ -222,9 +255,8 @@ pub async fn response_error(response: Response) -> Error {
     let mut code = None;
     let mut message = None;
 
-    // Try to read the response body, but don't fail if we can't
-    match response.text().await {
-        Ok(body) => {
+    match body {
+        Some(body) => {
             if let Ok(e) = from_str::<ErrorResponse>(&body) {
                 code = Some(e.code.clone());
                 message = Some(e.message.clone());
@@ -234,9 +266,8 @@ pub async fn response_error(response: Response) -> Error {
                 detail.insert("Response", body);
             }
         }
-        Err(e) => {
+        None => {
             // If we can't read the body, still report what we know
-            log::warn!("Failed to read error response body: {e}");
             detail.insert(
                 "Note",
                 "Connection closed before response body could be read".to_string(),

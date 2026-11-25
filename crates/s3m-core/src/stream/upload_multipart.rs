@@ -1,7 +1,7 @@
 use crate::{
     progressbar::Bar,
     s3::RequestOptions,
-    s3::{S3, actions, checksum::Checksum},
+    s3::{S3, actions, checksum::Checksum, responses::CompleteMultipartUploadResult},
     stream::{db::Db, iterator::PartIterator, part::Part, retry::backoff_secs},
 };
 use anyhow::{Result, anyhow};
@@ -95,8 +95,10 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     log::debug!("upload_id: {upload_id}");
 
     // if db_parts is not empty it means that a previous upload did not finish successfully.
-    // skip creating the parts again and try to re-upload the pending ones
-    if db_parts.is_empty() {
+    // skip creating the parts again and try to re-upload the pending ones. If every part
+    // was uploaded but CompleteMultipartUpload failed (S3 can answer 200 OK with an
+    // <Error>), only the completion is retried.
+    if db_parts.is_empty() && db_uploaded.is_empty() {
         for (number, seek, chunk) in PartIterator::new(request.file_size, request.chunk_size) {
             request
                 .sdb
@@ -178,13 +180,20 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     // upload finished
     log::info!("Upload finished, ETag: {}", rs.e_tag);
 
-    Ok(upload_report(&rs.e_tag, checksum.as_ref()))
+    Ok(upload_report(rs, checksum.as_ref()))
 }
 
-/// The lines printed after the upload: the `ETag`, then the additional checksum of the
-/// whole object if one was requested.
-fn upload_report(etag: &str, checksum: Option<&Checksum>) -> String {
-    let mut report = format!("ETag: {etag}");
+/// The lines printed after the upload, like a single-part upload: the `ETag` and the
+/// response headers (`Version ID`, `Expiration`, ...), then the additional checksum of
+/// the whole object if one was requested.
+fn upload_report(rs: CompleteMultipartUploadResult, checksum: Option<&Checksum>) -> String {
+    let mut lines = rs.headers;
+    lines.insert("ETag", rs.e_tag);
+    let mut report = lines
+        .iter()
+        .map(|(label, value)| format!("{label}: {value}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     if let Some(checksum) = checksum {
         let checksum = checksum.report();
         log::info!("{checksum}");
@@ -425,6 +434,72 @@ mod tests {
                     b"<CompleteMultipartUploadResult><Location>l</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>\"done-2\"</ETag></CompleteMultipartUploadResult>".to_vec()
                 }
             })
+            .create_async()
+            .await;
+
+        let result = upload_multipart(MultipartUploadRequest {
+            s3: &s3,
+            key: "key",
+            file: file.path(),
+            file_size: 10,
+            chunk_size: 5,
+            sdb: &db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: None,
+            max_requests: 1,
+            globals: RequestOptions::default(),
+        })
+        .await;
+
+        parts.assert_async().await;
+        complete.assert_async().await;
+        assert_eq!(result.unwrap(), "ETag: \"done-2\"");
+    }
+
+    // When every part was uploaded but CompleteMultipartUpload failed (for example a
+    // 200 OK with an <Error> document), the next run only retries the completion.
+    #[tokio::test]
+    async fn completion_retry_does_not_upload_parts_again() {
+        let mut server = Server::new_async().await;
+        let s3 = S3::new(
+            &Credentials::new("AKIA", &SecretString::new("secret".into())),
+            &Region::custom("us-east-1", server.url()),
+            Some("bucket".to_string()),
+            false,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        for (number, seek) in [(1_u16, 0), (2, 5)] {
+            let part = Part::new(number, seek, 5, None).set_etag(format!("\"p{number}\""));
+            db.db_uploaded()
+                .unwrap()
+                .insert(
+                    number.to_be_bytes(),
+                    to_bytes::<RkyvError>(&part).unwrap().as_slice(),
+                )
+                .unwrap();
+        }
+
+        let parts = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .match_body(Matcher::Regex(
+                "<ETag>\"p1\"</ETag><PartNumber>1</PartNumber>.*<ETag>\"p2\"</ETag><PartNumber>2</PartNumber>".into(),
+            ))
+            .with_body("<CompleteMultipartUploadResult><Location>l</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>\"done-2\"</ETag></CompleteMultipartUploadResult>")
+            .expect(1)
             .create_async()
             .await;
 

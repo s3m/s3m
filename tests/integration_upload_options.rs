@@ -256,6 +256,85 @@ fn upload_output_labels_blake3_and_additional_checksum() -> Result<()> {
     Ok(())
 }
 
+// <https://github.com/s3m/s3m/issues/75>: a multipart upload prints the version id and
+// lifecycle expiration of the CompleteMultipartUpload response, like a single-part upload,
+// and a 200 OK response with an <Error> document fails the upload with the S3 error.
+#[test]
+fn multipart_upload_reports_response_headers_and_error_documents() -> Result<()> {
+    let expiration = "expiry-date=\"Sat, 09 Jan 2027 06:39:10 GMT\", rule-id=\"expire-45d\"";
+    let payload = vec![9; 11 * MIB + 137];
+
+    let mut server = Server::new();
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let _init = initiate(&mut server).expect(1).create();
+    let _parts: Vec<_> = payload
+        .chunks(10 * MIB)
+        .enumerate()
+        .map(|(i, bytes)| part_mock(&mut server, i + 1, bytes).expect(1).create())
+        .collect();
+    let done = complete(&mut server)
+        .with_header("x-amz-version-id", "7e5dee92")
+        .with_header("x-amz-expiration", expiration)
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .args(["-n", "1"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    ensure!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    done.assert();
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let expected = format!("Expiration: {expiration}");
+    for line in ["ETag: done", expected.as_str(), "Version ID: 7e5dee92"] {
+        ensure!(lines.contains(&line), "{line} not in {stdout}");
+    }
+
+    let mut server = Server::new();
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let _init = initiate(&mut server).expect(1).create();
+    let _parts: Vec<_> = payload
+        .chunks(10 * MIB)
+        .enumerate()
+        .map(|(i, bytes)| part_mock(&mut server, i + 1, bytes).expect(1).create())
+        .collect();
+    let failed = server
+        .mock("POST", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "UP1".into()))
+        .with_status(200)
+        .with_body("<Error><Code>InternalError</Code><Message>We encountered an internal error. Please try again.</Message><RequestId>R1</RequestId></Error>")
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .args(["-n", "1"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    failed.assert();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        !output.status.success(),
+        "200 <Error> reported success: {stdout}"
+    );
+    ensure!(!stdout.contains("ETag:"), "{stdout}");
+    for text in [
+        "HTTP Status Code: 200 OK",
+        "Code: InternalError",
+        "Message: We encountered an internal error. Please try again.",
+    ] {
+        ensure!(stderr.contains(text), "{text} not in {stderr}");
+    }
+    Ok(())
+}
+
 #[test]
 fn all_canned_acls_and_semicolon_metadata_reach_wire() -> Result<()> {
     for (index, acl) in [

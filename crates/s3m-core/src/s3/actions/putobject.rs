@@ -1,7 +1,7 @@
 use crate::s3::error::Result;
 use crate::s3::{
     S3,
-    actions::{Action, response_error},
+    actions::{Action, response_error, upload_response_headers},
     checksum::{Checksum, sha256_md5_digest},
     object_lock::ObjectLock,
     options::RequestOptions,
@@ -74,21 +74,9 @@ impl<'a> PutObject<'a> {
         .await?;
 
         if response.status().is_success() {
-            let mut h: BTreeMap<&str, String> = BTreeMap::new();
+            let mut h: BTreeMap<&str, String> = upload_response_headers(response.headers())?;
             if let Some(etag) = response.headers().get("ETag") {
                 h.insert("ETag", etag.to_str()?.to_string());
-            }
-            if let Some(vid) = response.headers().get("x-amz-version-id") {
-                h.insert("Version ID", vid.to_str()?.to_string());
-            }
-            if let Some(sse) = response.headers().get("x-amz-server-side-encryption") {
-                h.insert("Server-side encryption", sse.to_str()?.to_string());
-            }
-            if let Some(exp) = response.headers().get("x-amz-expiration") {
-                h.insert("Expiration", exp.to_str()?.to_string());
-            }
-            if let Some(pos) = response.headers().get("x-emc-previous-object-size") {
-                h.insert("Previous object size", pos.to_str()?.to_string());
             }
             Ok(h)
         } else {

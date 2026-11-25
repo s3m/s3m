@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::de::{Deserializer, Error};
+use std::collections::BTreeMap;
 
 /// # Errors
 ///
@@ -153,6 +154,7 @@ pub struct ErrorResponse {
     #[serde(rename = "Code")]
     pub code: String,
     #[serde(rename = "Message")]
+    #[serde(default)]
     pub message: String,
     #[serde(rename = "Resource")]
     pub resource: Option<String>,
@@ -189,6 +191,11 @@ pub struct CompleteMultipartUploadResult {
     pub checksum_sha1: Option<String>,
     #[serde(rename = "ChecksumSHA256")]
     pub checksum_sha256: Option<String>,
+    /// Response headers worth reporting, labelled as s3m prints them, like the
+    /// map `PutObject::request` returns: `Version ID`, `Expiration`,
+    /// `Server-side encryption`, `Previous object size`.
+    #[serde(skip)]
+    pub headers: BTreeMap<&'static str, String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
