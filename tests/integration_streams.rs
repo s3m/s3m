@@ -555,10 +555,11 @@ fn test_streams_resume_warns_about_ignored_host_bucket() {
     let home = tempdir().unwrap();
     let config_dir = home.path().join(".config").join("s3m");
     fs::create_dir_all(&config_dir).unwrap();
-    // Nothing listens on port 1, so the resume fails right after loading the host.
+    // No endpoint or region: the resume fails right after loading the host, before
+    // any request.
     fs::write(
         config_dir.join("config.yml"),
-        "---\nhosts:\n  s3:\n    endpoint: http://127.0.0.1:1\n    region: us-east-1\n    access_key: XXX\n    secret_key: YYY\n    bucket: ignored\n",
+        "---\nhosts:\n  s3:\n    access_key: XXX\n    secret_key: YYY\n    bucket: ignored\n",
     )
     .unwrap();
     create_valid_resumable_state(home.path(), "good-id");
