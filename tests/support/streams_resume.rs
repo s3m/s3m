@@ -52,6 +52,8 @@ fn create_three_part_state(home: &Path, id: &str) {
         },
     )
     .unwrap();
+    drop(db);
+    wait_for_state_lock(home, id);
 }
 
 #[tokio::test]

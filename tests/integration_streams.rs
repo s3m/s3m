@@ -99,8 +99,29 @@ fn minio_s3(minio: &MinioContext, bucket: &str) -> S3 {
     )
 }
 
+/// sled can keep a state's file lock for a moment after its handle is dropped in this
+/// process. An `s3m` started right away would list that state as locked (active), so
+/// wait until the lock is free before running it.
+fn wait_for_state_lock(home: &Path, id: &str) {
+    let path = state_dir(&s3m_dir(home), id).join("db");
+    let file = fs::File::options()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    for _ in 0..500 {
+        // Released again when `file` is dropped.
+        if file.try_lock().is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("the state lock of {id} was not released");
+}
+
 /// Write a file-multipart stream state with one pending part; `upload_id` is
-/// `None` for a state whose upload was never created.
+/// `None` for a state whose upload was never created. The caller owns the handle:
+/// after dropping it, call [`wait_for_state_lock`] before running `s3m`.
 fn create_state(home: &Path, id: &str, upload_id: Option<&str>) -> (StreamMetadata, Db) {
     let s3m_dir = home.join(".config").join("s3m");
     let source = home.join("source.bin");
@@ -147,7 +168,13 @@ fn create_state(home: &Path, id: &str, upload_id: Option<&str>) -> (StreamMetada
 }
 
 fn create_resumable_state(home: &Path, id: &str) {
-    create_state(home, id, Some("upload-1"));
+    drop(create_state(home, id, Some("upload-1")));
+    wait_for_state_lock(home, id);
+}
+
+fn create_state_without_upload_id(home: &Path, id: &str) {
+    drop(create_state(home, id, None));
+    wait_for_state_lock(home, id);
 }
 
 fn create_valid_resumable_state(home: &Path, id: &str) -> PathBuf {
@@ -195,6 +222,8 @@ fn create_valid_resumable_state(home: &Path, id: &str) -> PathBuf {
     )
     .unwrap();
 
+    drop(db);
+    wait_for_state_lock(home, id);
     source
 }
 
@@ -276,6 +305,8 @@ async fn create_live_resumable_state(
     )
     .unwrap();
 
+    drop(db);
+    wait_for_state_lock(home, id);
     source
 }
 
@@ -368,6 +399,8 @@ async fn create_partially_uploaded_live_resumable_state(
     )
     .unwrap();
 
+    drop(db);
+    wait_for_state_lock(home, id);
     source
 }
 
@@ -599,7 +632,7 @@ fn test_streams_resume_refuses_unusable_state_and_keeps_it() {
     let home = tempdir().unwrap();
     write_config(home.path());
     create_broken_state(home.path(), "broken-id");
-    create_state(home.path(), "no-upload-id", None);
+    create_state_without_upload_id(home.path(), "no-upload-id");
     create_valid_resumable_state(home.path(), "good-id");
 
     assert_resume_fails_and_state_survives(
@@ -661,7 +694,7 @@ fn test_streams_default_verb_matches_ls() {
     write_config(home.path());
     // Both entries carry metadata timestamps, so listing order and rendered
     // times do not depend on when the directories were last touched.
-    create_state(home.path(), "no-upload-id", None);
+    create_state_without_upload_id(home.path(), "no-upload-id");
     create_resumable_state(home.path(), "good-id");
 
     let default = run_streams(home.path(), &["streams"]);
@@ -698,7 +731,7 @@ fn test_streams_json_flag_placement_is_equivalent() {
     write_config(home.path());
     // Both entries carry metadata timestamps, so listing order and rendered
     // times do not depend on when the directories were last touched.
-    create_state(home.path(), "no-upload-id", None);
+    create_state_without_upload_id(home.path(), "no-upload-id");
     create_resumable_state(home.path(), "good-id");
 
     let reference = run_streams(home.path(), &["streams", "ls", "--json"]);
@@ -892,9 +925,11 @@ fn test_streams_clean_keeps_unfinished_states_byte_for_byte() {
         ("resumable-id", "upload-2", 2 * day),
         ("stale-id", "upload-3", 30 * day),
     ] {
-        let (mut metadata, _db) = create_state(home.path(), id, Some(upload_id));
+        let (mut metadata, db) = create_state(home.path(), id, Some(upload_id));
         metadata.updated_at = Some(metadata.created_at - age);
         write_metadata(&base, &metadata).unwrap();
+        drop(db);
+        wait_for_state_lock(home.path(), id);
     }
     // A finished upload (etag recorded) is removable.
     // Reuse the creating handle: reopening races sled's file lock release.
@@ -902,6 +937,7 @@ fn test_streams_clean_keeps_unfinished_states_byte_for_byte() {
     db.save_etag("\"etag-done\"").unwrap();
     db.flush().unwrap();
     drop(db);
+    wait_for_state_lock(home.path(), "complete-id");
 
     let kept = ["active-id", "resumable-id", "stale-id"];
     let state_bytes: Vec<Vec<u8>> = kept
