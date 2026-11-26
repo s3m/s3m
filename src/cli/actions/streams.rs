@@ -94,8 +94,19 @@ pub async fn handle(action: Action, globals: GlobalArgs) -> Result<()> {
                     print!("{}", render_stream_show(&entry));
                 }
             }
-            StreamCommand::Resume { id } => {
-                resume_stream(&config_file, &s3m_dir, &id, number, globals).await?;
+            StreamCommand::Resume {
+                id,
+                no_sign_request,
+            } => {
+                resume_stream(
+                    &config_file,
+                    &s3m_dir,
+                    &id,
+                    number,
+                    no_sign_request,
+                    globals,
+                )
+                .await?;
             }
             StreamCommand::Clean => {
                 let summary = clean_streams(&s3m_dir)?;
@@ -426,6 +437,7 @@ async fn resume_stream(
     streams_dir: &Path,
     id: &str,
     number: u8,
+    no_sign_request: bool,
     globals: GlobalArgs,
 ) -> Result<()> {
     let entry = find_entry(streams_dir, id)?;
@@ -443,12 +455,12 @@ async fn resume_stream(
     )?;
     let host = get_host(&config, config_dir(config_file), &location)?;
     let region = host.get_region()?;
-    let credentials = host.credentials(&location.host, false)?;
+    let credentials = host.credentials(&location.host, no_sign_request)?;
     let s3 = S3::new(
         &credentials,
         &region,
         Some(stream_metadata.bucket.clone()),
-        false,
+        no_sign_request,
     );
 
     let db = validate_resume_db(&entry, &stream_metadata, id)?;
@@ -834,6 +846,7 @@ mod tests {
                 dir.path(),
                 "missing",
                 4,
+                false,
                 GlobalArgs::new(),
             ))
             .unwrap_err()

@@ -43,7 +43,7 @@ pub struct DeleteGroup {
 pub enum StreamCommand {
     List,
     Show { id: String },
-    Resume { id: String },
+    Resume { id: String, no_sign_request: bool },
     Clean,
 }
 

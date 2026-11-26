@@ -46,6 +46,10 @@ pub fn dispatch_streams(
                 .get_one::<String>("id")
                 .cloned()
                 .context("id missing")?,
+            no_sign_request: matches
+                .get_one::<bool>("no-sign-request")
+                .copied()
+                .unwrap_or(false),
         },
         Some(("clean", _)) => StreamCommand::Clean,
         Some((other, _)) => return Err(anyhow!("unsupported streams subcommand: {other}")),
@@ -2607,7 +2611,11 @@ hosts:
         let action = dispatch_streams(&matches, tmp_dir.path().to_path_buf(), config_path).unwrap();
         match action {
             Action::Streams {
-                command: StreamCommand::Resume { id },
+                command:
+                    StreamCommand::Resume {
+                        id,
+                        no_sign_request: false,
+                    },
                 number,
                 ..
             } => {

@@ -548,6 +548,52 @@ fn test_streams_resume_fails_when_source_file_changed() {
     );
 }
 
+// A host without keys can't sign: resume reports it before any request, unless
+// --no-sign-request is given, which resume honours like every other command.
+#[test]
+fn test_streams_resume_checks_keys_unless_unsigned() {
+    let home = tempdir().unwrap();
+    let config_dir = home.path().join(".config").join("s3m");
+    fs::create_dir_all(&config_dir).unwrap();
+    // Nothing listens on port 1: an unsigned resume fails at the connection.
+    fs::write(
+        config_dir.join("config.yml"),
+        "---\nhosts:\n  s3:\n    endpoint: http://127.0.0.1:1\n    region: us-east-1\n",
+    )
+    .unwrap();
+    create_valid_resumable_state(home.path(), "good-id");
+    let run = |args: &[&str]| {
+        Command::new(get_s3m_binary())
+            .env("HOME", home.path())
+            .env_remove("AWS_ACCESS_KEY_ID")
+            .env_remove("AWS_SECRET_ACCESS_KEY")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+
+    let output = run(&["streams", "resume", "good-id"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("hosts.s3 has no access_key and secret_key in the config"),
+        "{stderr}"
+    );
+
+    let output = run(&[
+        "-r",
+        "1",
+        "--no-sign-request",
+        "streams",
+        "resume",
+        "good-id",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("has no access_key"), "{stderr}");
+    assert!(stderr.contains("127.0.0.1:1"), "{stderr}");
+}
+
 #[test]
 fn test_streams_resume_refuses_unusable_state_and_keeps_it() {
     let home = tempdir().unwrap();

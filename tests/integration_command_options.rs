@@ -265,6 +265,32 @@ fn missing_host_keys_fail_before_any_request() -> Result<()> {
     let stdout = expect_exit(&output, 0, &args)?;
     assert_eq!(stdout, format!("{policy}\n"));
     get.assert();
+
+    // A presigned URL is always signed: share needs the keys, with or without
+    // --no-sign-request, and doesn't suggest it.
+    for (args, message) in [
+        (
+            &["share", OBJECT][..],
+            "hosts.s3 has no access_key in the config; set it\n",
+        ),
+        (
+            &["--no-sign-request", "share", OBJECT][..],
+            "share signs the URL with the host's keys, so it can't be used with --no-sign-request\n",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_s3m"))
+            .env("HOME", cli.home.path())
+            .env_remove("AWS_ACCESS_KEY_ID")
+            .env_remove("AWS_SECRET_ACCESS_KEY")
+            .current_dir(&cli.work)
+            .arg("--config")
+            .arg(&cli.config)
+            .args(args)
+            .output()?;
+        expect_exit(&output, 1, args)?;
+        let stderr = text(&output.stderr);
+        ensure!(stderr.ends_with(message), "{args:?}: {stderr}");
+    }
     Ok(())
 }
 

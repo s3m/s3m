@@ -168,6 +168,60 @@ impl Config {
     }
 }
 
+fn check_keys(name: &str, credentials: &Credentials, suggest_unsigned: bool) -> Result<()> {
+    let set = |var: &str| std::env::var_os(var).is_some();
+    let message = missing_keys_message(
+        name,
+        (credentials.aws_access_key_id(), set("AWS_ACCESS_KEY_ID")),
+        (
+            credentials.aws_secret_access_key(),
+            set("AWS_SECRET_ACCESS_KEY"),
+        ),
+        suggest_unsigned,
+    );
+    match message {
+        Some(message) => bail!(message),
+        None => Ok(()),
+    }
+}
+
+/// The error for missing keys, if any. Each key is `(effective value, whether its
+/// environment variable is set)`: a set but empty `AWS_*` variable replaces the
+/// config's key, so the message names it instead of blaming the config.
+fn missing_keys_message(
+    name: &str,
+    access: (&str, bool),
+    secret: (&str, bool),
+    suggest_unsigned: bool,
+) -> Option<String> {
+    let missing: Vec<String> = [
+        (access, "access_key", "AWS_ACCESS_KEY_ID"),
+        (secret, "secret_key", "AWS_SECRET_ACCESS_KEY"),
+    ]
+    .into_iter()
+    .filter(|((value, _), _, _)| value.is_empty())
+    .map(|((_, from_env), key, var)| {
+        if from_env {
+            format!("{key} ({var} is set but empty)")
+        } else {
+            key.to_string()
+        }
+    })
+    .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let fix = if suggest_unsigned {
+        "set it, or use --no-sign-request for a public bucket"
+    } else {
+        "set it"
+    };
+    Some(format!(
+        "hosts.{name} has no {} in the config; {fix}",
+        missing.join(" and ")
+    ))
+}
+
 impl Host {
     /// The credentials to sign the host's requests with: `AWS_ACCESS_KEY_ID` and
     /// `AWS_SECRET_ACCESS_KEY` when set, otherwise `access_key` and `secret_key`.
@@ -178,22 +232,20 @@ impl Host {
     /// reported before any request instead of failing as a signature error.
     pub fn credentials(&self, name: &str, no_sign_request: bool) -> Result<Credentials> {
         let credentials = Credentials::new(&self.access_key, &self.secret_key);
-        if no_sign_request {
-            return Ok(credentials);
+        if !no_sign_request {
+            check_keys(name, &credentials, true)?;
         }
-        let missing: Vec<&str> = [
-            (credentials.aws_access_key_id(), "access_key"),
-            (credentials.aws_secret_access_key(), "secret_key"),
-        ]
-        .into_iter()
-        .filter_map(|(value, key)| value.is_empty().then_some(key))
-        .collect();
-        if !missing.is_empty() {
-            bail!(
-                "hosts.{name} has no {} in the config; set it, or use --no-sign-request for a public bucket",
-                missing.join(" and ")
-            );
-        }
+        Ok(credentials)
+    }
+
+    /// The credentials for a presigned URL (`share`), which is always signed: like
+    /// [`Host::credentials`] without `--no-sign-request`.
+    ///
+    /// # Errors
+    /// Will return an error if a key is missing.
+    pub fn presign_credentials(&self, name: &str) -> Result<Credentials> {
+        let credentials = Credentials::new(&self.access_key, &self.secret_key);
+        check_keys(name, &credentials, false)?;
         Ok(credentials)
     }
 
@@ -373,41 +425,52 @@ hosts:
     }
 
     #[test]
-    fn test_credentials_report_missing_keys() {
-        // AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY replace the config's keys.
-        if std::env::var_os("AWS_ACCESS_KEY_ID").is_some()
-            || std::env::var_os("AWS_SECRET_ACCESS_KEY").is_some()
-        {
-            return;
-        }
-        let parse = |yaml: &str| {
-            let mut tmp_file = NamedTempFile::new().unwrap();
-            tmp_file.write_all(yaml.as_bytes()).unwrap();
-            Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap()
-        };
-
-        let c = parse("hosts:\n  h:\n    region: us-east-1\n    acess_key: A\n    secret_key: B\n");
-        let host = c.get_host("h").unwrap();
+    fn test_missing_keys_message() {
+        let unsigned = "set it, or use --no-sign-request for a public bucket";
         assert_eq!(
-            host.credentials("h", false).unwrap_err().to_string(),
-            "hosts.h has no access_key in the config; set it, or use --no-sign-request for a public bucket"
+            missing_keys_message("h", ("A", false), ("B", false), true),
+            None
         );
-        assert!(host.credentials("h", true).is_ok());
-
-        let c = parse("hosts:\n  h:\n    region: us-east-1\n");
         assert_eq!(
-            c.get_host("h")
-                .unwrap()
-                .credentials("h", false)
-                .unwrap_err()
-                .to_string(),
-            "hosts.h has no access_key and secret_key in the config; set it, or use --no-sign-request for a public bucket"
+            missing_keys_message("h", ("", false), ("B", false), true).as_deref(),
+            Some(format!("hosts.h has no access_key in the config; {unsigned}").as_str())
         );
+        assert_eq!(
+            missing_keys_message("h", ("A", false), ("", false), true).as_deref(),
+            Some(format!("hosts.h has no secret_key in the config; {unsigned}").as_str())
+        );
+        assert_eq!(
+            missing_keys_message("h", ("", false), ("", false), true).as_deref(),
+            Some(
+                format!("hosts.h has no access_key and secret_key in the config; {unsigned}")
+                    .as_str()
+            )
+        );
+        // A set but empty AWS_* variable replaces the config's key: name it.
+        assert_eq!(
+            missing_keys_message("h", ("", true), ("B", true), true).as_deref(),
+            Some(
+                format!(
+                    "hosts.h has no access_key (AWS_ACCESS_KEY_ID is set but empty) in the config; {unsigned}"
+                )
+                .as_str()
+            )
+        );
+        // Presigned URLs (share) are always signed: no --no-sign-request hint.
+        assert_eq!(
+            missing_keys_message("h", ("", false), ("B", false), false).as_deref(),
+            Some("hosts.h has no access_key in the config; set it")
+        );
+    }
 
-        let c =
-            parse("hosts:\n  h:\n    region: us-east-1\n    access_key: A\n    secret_key: B\n");
-        let credentials = c.get_host("h").unwrap().credentials("h", false).unwrap();
-        assert_eq!(credentials.aws_access_key_id(), "A");
+    #[test]
+    fn test_credentials_skip_the_check_for_unsigned_requests() {
+        let mut tmp_file = NamedTempFile::new().unwrap();
+        tmp_file
+            .write_all(b"hosts:\n  h:\n    region: us-east-1\n")
+            .unwrap();
+        let c = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap();
+        assert!(c.get_host("h").unwrap().credentials("h", true).is_ok());
     }
 
     #[test]
