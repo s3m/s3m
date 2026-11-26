@@ -22,7 +22,6 @@ pub struct CompleteMultipartUpload<'a> {
     upload_id: &'a str,
     parts: BTreeMap<u16, Part>,
     additional_checksum: Option<Checksum>,
-    headers: Option<BTreeMap<String, String>>,
 }
 
 impl Serialize for CompleteMultipartUpload<'_> {
@@ -82,7 +81,6 @@ impl<'a> CompleteMultipartUpload<'a> {
             upload_id,
             parts,
             additional_checksum,
-            headers: None,
         }
     }
 
@@ -100,6 +98,9 @@ impl<'a> CompleteMultipartUpload<'a> {
     /// checksum algorithm. The checksum for the completed object is calculated in the
     /// same way that Amazon S3 calculates the MD5 digest for the multipart upload.
     /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html>
+    ///
+    /// The value is for reporting: the request does not send it, and the server derives
+    /// the same value from the parts' checksums.
     ///
     /// # Errors
     ///
@@ -141,17 +142,14 @@ impl<'a> CompleteMultipartUpload<'a> {
     // Explicit `Result<T, Error>`, not the `s3::error::Result` alias: importing
     // that alias would shadow `std::result::Result` and break `#[derive(Serialize)]`
     // in this file.
-    pub async fn request(mut self, s3: &S3) -> Result<CompleteMultipartUploadResult, Error> {
+    pub async fn request(self, s3: &S3) -> Result<CompleteMultipartUploadResult, Error> {
         let body = to_string(&self)?;
 
         let digest = tools::sha256_digest(&body);
 
-        // add the checksum of the whole object to the headers if requested
-        if let Some(checksum) = self.checksum()? {
-            self.headers
-                .get_or_insert_with(BTreeMap::new)
-                .insert(checksum.algorithm.as_amz().to_string(), checksum.checksum);
-        }
+        // The parts' checksums go in the body; the object's composite checksum is not sent
+        // as an x-amz-checksum-* header. It is optional, S3 derives it from the parts, and
+        // Cloudflare R2 rejects the request with InvalidDigest when it is present.
 
         // sign the request
         let (url, headers) = &self.sign(s3, digest.as_ref(), None, Some(body.len()))?;
@@ -192,10 +190,7 @@ impl Action for CompleteMultipartUpload<'_> {
     }
 
     fn headers(&self) -> Option<BTreeMap<&str, &str>> {
-        self.headers.as_ref().map(|map| {
-            // Convert the headers to a new map with borrowed references
-            map.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
-        })
+        None
     }
 
     // URL query_pairs

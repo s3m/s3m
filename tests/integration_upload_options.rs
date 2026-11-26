@@ -125,8 +125,17 @@ fn checksum_replaces_content_md5_on_single_and_multipart_uploads() -> Result<()>
                     .create()
             })
             .collect();
+        // The parts' checksums travel in the body; R2 rejects the composite checksum
+        // as an x-amz-checksum-* header on CompleteMultipartUpload (InvalidDigest).
+        let part_checksums = if args.is_empty() {
+            Matcher::Any
+        } else {
+            Matcher::Regex("<ChecksumSHA256>".into())
+        };
         let done = complete(&mut server)
             .match_header("content-md5", Matcher::Missing)
+            .match_header("x-amz-checksum-sha256", Matcher::Missing)
+            .match_body(part_checksums)
             .expect(1)
             .create();
         let output = fixture
@@ -193,7 +202,7 @@ fn upload_output_labels_blake3_and_additional_checksum() -> Result<()> {
     }
 
     // Multipart: the object's checksum is the checksum of the parts' checksums, with the
-    // number of parts; s3m prints the value it sends with CompleteMultipartUpload.
+    // number of parts; s3m prints the value the server derives from the parts.
     // base64(sha256(sha256(part 1) || sha256(part 2)))-2, computed with Python hashlib.
     let composite = "/ccignrnlPRaGvTgvct+ud7nkKrCW+uQ+dKW805e/cA=-2";
     let mut server = Server::new();
@@ -205,10 +214,7 @@ fn upload_output_labels_blake3_and_additional_checksum() -> Result<()> {
         .enumerate()
         .map(|(i, bytes)| part_mock(&mut server, i + 1, bytes).expect(1).create())
         .collect();
-    let done = complete(&mut server)
-        .match_header("x-amz-checksum-sha256", composite)
-        .expect(1)
-        .create();
+    let done = complete(&mut server).expect(1).create();
     let output = fixture
         .command()
         .args(["-n", "1", "--checksum", "sha256"])
