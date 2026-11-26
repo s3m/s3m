@@ -124,7 +124,7 @@ pub struct Host {
     pub secret_key: SecretString,
 
     /// Not used: the bucket always comes from the path (`host/bucket/key`). Still
-    /// accepted so existing configs parse; see [`Host::ignored_bucket_warning`].
+    /// accepted, and ignored, so existing configs keep working.
     pub bucket: Option<String>,
 
     #[serde(default)]
@@ -169,19 +169,6 @@ impl Config {
 }
 
 impl Host {
-    /// A warning when the host sets `bucket`, which s3m ignores: there is no default
-    /// bucket. Commands take the bucket from their path (`host/bucket/key`), and
-    /// `monitor` from `buckets`.
-    #[must_use]
-    pub fn ignored_bucket_warning(&self, name: &str) -> Option<String> {
-        self.bucket.as_ref().map(|bucket| {
-            format!(
-                "hosts.{name}.bucket ({bucket}) in the config is ignored, \
-                 there is no default bucket; remove the setting"
-            )
-        })
-    }
-
     /// Get the region for the host
     /// # Errors
     /// Will return an error if the region is not found
@@ -355,30 +342,6 @@ hosts:
             c.hosts.get("s3").unwrap().region,
             Some("xx-region-y.foo".to_string())
         );
-    }
-
-    #[test]
-    fn test_ignored_bucket_warning() {
-        let mut tmp_file = NamedTempFile::new().unwrap();
-        tmp_file.write_all(CONF.as_bytes()).unwrap();
-        let c = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap();
-        assert_eq!(
-            c.get_host("s3")
-                .unwrap()
-                .ignored_bucket_warning("s3")
-                .as_deref(),
-            Some(
-                "hosts.s3.bucket (my-bucket) in the config is ignored, \
-                 there is no default bucket; remove the setting"
-            )
-        );
-
-        let mut tmp_file = NamedTempFile::new().unwrap();
-        tmp_file
-            .write_all(b"hosts:\n  s3:\n    region: us-east-1\n")
-            .unwrap();
-        let c = Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap();
-        assert_eq!(c.get_host("s3").unwrap().ignored_bucket_warning("s3"), None);
     }
 
     #[test]

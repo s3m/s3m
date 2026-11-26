@@ -13,11 +13,9 @@ use clap::ArgMatches;
 use colored::Colorize;
 use secrecy::{ExposeSecret, SecretString};
 use std::{
-    collections::BTreeSet,
     ffi::OsString,
     path::{Path, PathBuf},
     process::exit,
-    sync::Mutex,
 };
 
 fn legacy_clean(config_path: &Path) -> Result<()> {
@@ -246,31 +244,14 @@ pub fn get_host<'a>(
         ));
     }
 
-    let host = config.get_host(&hbk.host).map_err(|host_name| {
+    config.get_host(&hbk.host).map_err(|host_name| {
         anyhow!(
             "Could not find host: \"{}\". Check config file {}/config.yml, For more information try {}",
             host_name.to_string().red(),
             config_path.display(),
             "--help".green()
         )
-    })?;
-    warn_ignored_bucket(host, &hbk.host);
-    Ok(host)
-}
-
-/// Every command that loads a host does it through [`get_host`] (`rm` with several
-/// targets and `streams resume` included), so each host's warning is printed here, once.
-fn warn_ignored_bucket(host: &Host, name: &str) {
-    static WARNED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-    let Some(warning) = host.ignored_bucket_warning(name) else {
-        return;
-    };
-    let first = WARNED
-        .lock()
-        .map_or(true, |mut warned| warned.insert(name.to_string()));
-    if first {
-        eprintln!("warning: {warning}");
-    }
+    })
 }
 
 #[cfg(test)]

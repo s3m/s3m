@@ -174,10 +174,11 @@ fn list_mock(server: &mut ServerGuard, query: &[(&str, &str)], body: String) -> 
         .create()
 }
 
-// `bucket` in a host's config was documented as a default bucket but never used:
-// the bucket always comes from the path. s3m now says so instead of ignoring it.
+// `bucket` in a host's config was documented as a default bucket but is not used:
+// the bucket always comes from the path. It and any other unknown key are ignored,
+// so existing configs keep working.
 #[test]
-fn host_bucket_setting_is_ignored_with_a_warning() -> Result<()> {
+fn host_bucket_and_unknown_config_keys_are_ignored() -> Result<()> {
     let mut server = Server::new();
     let policy = "<AccessControlPolicy/>";
     let get = server
@@ -193,7 +194,7 @@ fn host_bucket_setting_is_ignored_with_a_warning() -> Result<()> {
         .create();
     let cli = Cli::new(&server.url())?;
     let mut config = fs::read_to_string(&cli.config)?;
-    config.push_str("\n    bucket: default-bucket\n");
+    config.push_str("\n    bucket: default-bucket\n    bucket_foo: x\nsettings:\n  anything: 1\n");
     fs::write(&cli.config, config)?;
 
     let args = ["acl", OBJECT];
@@ -201,52 +202,9 @@ fn host_bucket_setting_is_ignored_with_a_warning() -> Result<()> {
     let stdout = expect_exit(&output, 0, &args)?;
 
     assert_eq!(stdout, format!("{policy}\n"));
-    assert_eq!(
-        text(&output.stderr),
-        "warning: hosts.s3.bucket (default-bucket) in the config is ignored, \
-         there is no default bucket; remove the setting\n"
-    );
+    assert_eq!(text(&output.stderr), "");
     get.assert();
     elsewhere.assert();
-    Ok(())
-}
-
-// `rm` loads every host it deletes from, not only the first: each host that sets
-// `bucket` is reported, once.
-#[test]
-fn rm_warns_once_for_each_host_that_sets_bucket() -> Result<()> {
-    let mut server = Server::new();
-    let deletes: Vec<_> = ["/bucket-a", "/bucket-b", "/bucket-c"]
-        .into_iter()
-        .map(|path| {
-            server
-                .mock("POST", path)
-                .match_query(Matcher::Any)
-                .match_request(exact_query(&[("delete", "")]))
-                .with_body("<DeleteResult></DeleteResult>")
-                .expect(1)
-                .create()
-        })
-        .collect();
-    let cli = Cli::new(&server.url())?;
-    let url = server.url();
-    fs::write(
-        &cli.config,
-        format!(
-            "---\nhosts:\n  a:\n    endpoint: {url}\n    region: {REGION}\n    access_key: {ACCESS_KEY}\n    secret_key: {SECRET_KEY}\n  b:\n    endpoint: {url}\n    region: {REGION}\n    access_key: {ACCESS_KEY}\n    secret_key: {SECRET_KEY}\n    bucket: ignored-b\n"
-        ),
-    )?;
-
-    let args = ["rm", "a/bucket-a/k1", "b/bucket-b/k2", "b/bucket-c/k3"];
-    let output = cli.run(&args)?;
-    expect_exit(&output, 0, &args)?;
-
-    assert_eq!(
-        text(&output.stderr),
-        "warning: hosts.b.bucket (ignored-b) in the config is ignored, \
-         there is no default bucket; remove the setting\n"
-    );
-    assert_all(&deletes);
     Ok(())
 }
 
