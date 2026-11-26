@@ -1,7 +1,11 @@
 use crate::{
     progressbar::Bar,
     s3::RequestOptions,
-    s3::{S3, actions, checksum::Checksum, responses::CompleteMultipartUploadResult},
+    s3::{
+        S3, actions,
+        checksum::{Checksum, ChecksumAlgorithm},
+        responses::CompleteMultipartUploadResult,
+    },
     stream::{db::Db, iterator::PartIterator, part::Part, retry::backoff_secs},
 };
 use anyhow::{Result, anyhow};
@@ -67,30 +71,19 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     let db_parts = request.sdb.db_parts()?;
     let db_uploaded = request.sdb.db_uploaded()?;
 
-    let upload_id = if let Some(uid) = request.sdb.upload_id()? {
-        uid
-    } else {
-        // Initiate Multipart Upload - request an Upload ID
-        let action = actions::CreateMultipartUpload::new(
+    let (upload_id, additional_checksum) = start_or_resume_upload(
+        request.s3,
+        request.sdb,
+        actions::CreateMultipartUpload::new(
             request.key,
             request.acl,
             request.meta,
             request.additional_checksum.clone(),
             request.globals.object_lock.clone(),
-        );
-
-        let response = action.request(request.s3).await?;
-
-        // A new upload id starts from nothing. The part trees are shared by every upload of
-        // the same content, so parts left by an interrupted upload (another key, or this key
-        // before the file was touched) would otherwise be planned or completed again; a stale
-        // part in CompleteMultipartUpload fails it with InvalidPart.
-        db_parts.clear()?;
-        db_uploaded.clear()?;
-        // save the upload_id to resume if required
-        request.sdb.save_upload_id(&response.upload_id)?;
-        response.upload_id
-    };
+        ),
+        request.additional_checksum,
+    )
+    .await?;
 
     log::debug!("upload_id: {upload_id}");
 
@@ -102,7 +95,7 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
         for (number, seek, chunk) in PartIterator::new(request.file_size, request.chunk_size) {
             request
                 .sdb
-                .create_part(number, seek, chunk, request.additional_checksum.clone())?;
+                .create_part(number, seek, chunk, additional_checksum.clone())?;
         }
         db_parts.flush()?;
     }
@@ -166,7 +159,7 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
         request.key,
         &upload_id,
         uploaded,
-        request.additional_checksum,
+        additional_checksum,
     );
     let checksum = action.checksum()?;
     let rs = action.request(request.s3).await?;
@@ -181,6 +174,64 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     log::info!("Upload finished, ETag: {}", rs.e_tag);
 
     Ok(upload_report(rs, checksum.as_ref()))
+}
+
+/// The upload id to send parts to, and the additional checksum to send them with.
+///
+/// An upload in progress keeps the algorithm it was created with (or none), whatever
+/// this run was given: its parts and its completion must use the same one. Otherwise
+/// the multipart upload is initiated, and its id and algorithm are recorded for a
+/// resume.
+async fn start_or_resume_upload(
+    s3: &S3,
+    db: &Db,
+    create: actions::CreateMultipartUpload<'_>,
+    additional_checksum: Option<Checksum>,
+) -> Result<(String, Option<Checksum>)> {
+    if let Some(upload_id) = db.upload_id()? {
+        return Ok((upload_id, resumed_checksum(db, additional_checksum)?));
+    }
+
+    let response = create.request(s3).await?;
+
+    // A new upload id starts from nothing. The part trees are shared by every upload of
+    // the same content, so parts left by an interrupted upload (another key, or this key
+    // before the file was touched) would otherwise be planned or completed again; a stale
+    // part in CompleteMultipartUpload fails it with InvalidPart.
+    db.db_parts()?.clear()?;
+    db.db_uploaded()?.clear()?;
+    // Recorded before the upload id, so a resume always finds the algorithm of the
+    // upload id it finds.
+    db.save_upload_checksum(
+        additional_checksum
+            .as_ref()
+            .map(|checksum| &checksum.algorithm),
+    )?;
+    // save the upload_id to resume if required
+    db.save_upload_id(&response.upload_id)?;
+    Ok((response.upload_id, additional_checksum))
+}
+
+/// The additional checksum of a multipart upload that is being resumed: the one
+/// recorded when the upload was created. A state from an older s3m has no record:
+/// then what this run asked for, or the algorithm of the parts already recorded
+/// (`streams resume` doesn't know the original `--checksum`).
+fn resumed_checksum(db: &Db, requested: Option<Checksum>) -> Result<Option<Checksum>> {
+    let Some(saved) = db.upload_checksum()? else {
+        return Ok(match requested {
+            Some(checksum) => Some(checksum),
+            None => db.parts_checksum_algorithm()?.map(Checksum::new),
+        });
+    };
+    let requested = requested.map(|checksum| checksum.algorithm);
+    if requested.is_some() && requested != saved {
+        log::warn!(
+            "Resuming with the checksum the upload was created with ({}), not {}",
+            saved.as_ref().map_or("none", ChecksumAlgorithm::name),
+            requested.as_ref().map_or("none", ChecksumAlgorithm::name)
+        );
+    }
+    Ok(saved.map(Checksum::new))
 }
 
 /// The lines printed after the upload, like a single-part upload: the `ETag` and the
@@ -374,7 +425,10 @@ async fn try_upload_part(request: UploadPartRequest<'_>) -> Result<String> {
 mod tests {
     use super::{MultipartUploadRequest, upload_multipart};
     use crate::{
-        s3::{Credentials, Region, RequestOptions, S3},
+        s3::{
+            Credentials, Region, RequestOptions, S3,
+            checksum::{Checksum, ChecksumAlgorithm},
+        },
         stream::{db::Db, part::Part},
     };
     use mockito::{Matcher, Server};
@@ -522,5 +576,246 @@ mod tests {
         parts.assert_async().await;
         complete.assert_async().await;
         assert_eq!(result.unwrap(), "ETag: \"done-2\"");
+    }
+
+    const SHA256_PART_1: &str = "xWX+A8qbYkLgHf3e/pu6PZiycOGc0C/YXOr3XislvxI=";
+    const SHA256_PART_2: &str = "92BDp07DO2rvuyiQUPr3qo1IIJVHc5fj5jNFEl1J9Sc=";
+    // base64(sha256(sha256("01234") || sha256("56789")))-2
+    const SHA256_COMPOSITE: &str = "N7HU4sCX924sGwPEjjVrehEoVZGWFs9+jec8UebzU+k=-2";
+
+    fn sha256(checksum: &str) -> Checksum {
+        Checksum {
+            algorithm: ChecksumAlgorithm::Sha256,
+            checksum: checksum.to_string(),
+        }
+    }
+
+    fn checksum_s3(server: &Server) -> S3 {
+        S3::new(
+            &Credentials::new("AKIA", &SecretString::new("secret".into())),
+            &Region::custom("us-east-1", server.url()),
+            Some("bucket".to_string()),
+            false,
+        )
+    }
+
+    async fn resume_without_checksum(s3: &S3, db: &Db, file: &std::path::Path) -> String {
+        upload_multipart(MultipartUploadRequest {
+            s3,
+            key: "key",
+            file,
+            file_size: 10,
+            chunk_size: 5,
+            sdb: db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: None,
+            max_requests: 1,
+            globals: RequestOptions::default(),
+        })
+        .await
+        .unwrap()
+    }
+
+    // <https://github.com/s3m/s3m/issues/77>: `streams resume` doesn't know the
+    // --checksum of the original upload. A state written before the algorithm was
+    // saved still has it on its parts: the pending part is sent with its checksum, and
+    // the report has the checksum line like the original upload.
+    #[tokio::test]
+    async fn resume_recovers_the_checksum_algorithm_from_the_parts() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        let uploaded = Part::new(1, 0, 5, Some(sha256(SHA256_PART_1))).set_etag("\"p1\"".into());
+        db.db_uploaded()
+            .unwrap()
+            .insert(
+                1_u16.to_be_bytes(),
+                to_bytes::<RkyvError>(&uploaded).unwrap().as_slice(),
+            )
+            .unwrap();
+        db.create_part(2, 5, 5, Some(Checksum::new(ChecksumAlgorithm::Sha256)))
+            .unwrap();
+
+        let part = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+            .match_header("x-amz-checksum-sha256", SHA256_PART_2)
+            .match_header("content-md5", Matcher::Missing)
+            .with_header("etag", "\"p2\"")
+            .expect(1)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .match_body(Matcher::Regex(format!(
+                "<ChecksumSHA256>{}</ChecksumSHA256>.*<ChecksumSHA256>{}</ChecksumSHA256>",
+                regex_escape(SHA256_PART_1),
+                regex_escape(SHA256_PART_2)
+            )))
+            .with_body("<CompleteMultipartUploadResult><Location>l</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>\"done-2\"</ETag></CompleteMultipartUploadResult>")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let report = resume_without_checksum(&s3, &db, file.path()).await;
+
+        part.assert_async().await;
+        complete.assert_async().await;
+        assert_eq!(
+            report,
+            format!("ETag: \"done-2\"\nsha256 (base64): {SHA256_COMPOSITE}")
+        );
+    }
+
+    fn regex_escape(text: &str) -> String {
+        text.replace('+', "\\+")
+    }
+
+    const COMPLETED: &str = "<CompleteMultipartUploadResult><Location>l</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>\"done-2\"</ETag></CompleteMultipartUploadResult>";
+
+    // #77: the upload id is saved but s3m stopped before recording the parts. The
+    // resume creates them with the algorithm the upload was created with; without it
+    // the parts would carry Content-MD5 and S3 would reject the completion.
+    #[tokio::test]
+    async fn resume_creates_parts_with_the_saved_checksum_algorithm() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_checksum(Some(&ChecksumAlgorithm::Sha256))
+            .unwrap();
+        db.save_upload_id("uid").unwrap();
+
+        let mut parts = Vec::new();
+        for (number, checksum) in [("1", SHA256_PART_1), ("2", SHA256_PART_2)] {
+            parts.push(
+                server
+                    .mock("PUT", "/bucket/key")
+                    .match_query(Matcher::UrlEncoded("partNumber".into(), number.into()))
+                    .match_header("x-amz-checksum-sha256", checksum)
+                    .match_header("content-md5", Matcher::Missing)
+                    .with_header("etag", format!("\"p{number}\"").as_str())
+                    .expect(1)
+                    .create_async()
+                    .await,
+            );
+        }
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .match_body(Matcher::Regex("<ChecksumSHA256>".into()))
+            .with_body(COMPLETED)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let report = resume_without_checksum(&s3, &db, file.path()).await;
+
+        for part in parts {
+            part.assert_async().await;
+        }
+        complete.assert_async().await;
+        assert_eq!(
+            report,
+            format!("ETag: \"done-2\"\nsha256 (base64): {SHA256_COMPOSITE}")
+        );
+    }
+
+    // A new upload records its algorithm (or that it has none), and a resume keeps
+    // that choice even when it is run with another --checksum: the server's upload
+    // was created without one, so its parts can't carry one.
+    #[tokio::test]
+    async fn upload_records_its_checksum_algorithm_and_resume_keeps_it() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        assert_eq!(db.upload_checksum().unwrap(), None);
+
+        // First run: created without a checksum, part 2 fails.
+        let create = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Regex("uploads".into()))
+            .match_header("x-amz-checksum-algorithm", Matcher::Missing)
+            .with_body("<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>uid</UploadId></InitiateMultipartUploadResult>")
+            .expect(1)
+            .create_async()
+            .await;
+        let part_1 = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "1".into()))
+            .match_header("x-amz-checksum-sha256", Matcher::Missing)
+            .with_header("etag", "\"p1\"")
+            .expect(1)
+            .create_async()
+            .await;
+        let part_2_fails = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+            .with_status(403)
+            .with_body("<Error><Code>AccessDenied</Code><Message>no</Message></Error>")
+            .create_async()
+            .await;
+        let request = |checksum: Option<Checksum>| MultipartUploadRequest {
+            s3: &s3,
+            key: "key",
+            file: file.path(),
+            file_size: 10,
+            chunk_size: 5,
+            sdb: &db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: checksum,
+            max_requests: 1,
+            globals: RequestOptions {
+                retries: 1,
+                ..RequestOptions::default()
+            },
+        };
+        assert!(upload_multipart(request(None)).await.is_err());
+        create.assert_async().await;
+        part_1.assert_async().await;
+        assert_eq!(db.upload_checksum().unwrap(), Some(None));
+        part_2_fails.remove_async().await;
+
+        // Second run asks for sha256: the pending part still goes without it.
+        let part_2 = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+            .match_header("x-amz-checksum-sha256", Matcher::Missing)
+            .match_header("content-md5", Matcher::Any)
+            .with_header("etag", "\"p2\"")
+            .expect(1)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_body(COMPLETED)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let report = upload_multipart(request(Some(Checksum::new(ChecksumAlgorithm::Sha256))))
+            .await
+            .unwrap();
+
+        part_2.assert_async().await;
+        complete.assert_async().await;
+        assert_eq!(report, "ETag: \"done-2\"");
     }
 }

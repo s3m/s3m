@@ -1,5 +1,8 @@
 use crate::{
-    s3::{S3, actions, checksum::Checksum},
+    s3::{
+        S3, actions,
+        checksum::{Checksum, ChecksumAlgorithm},
+    },
     stream::{part::Part, state},
 };
 use anyhow::Result;
@@ -153,6 +156,8 @@ impl Db {
     pub fn forget_upload(&self) -> Result<()> {
         self.storage
             .remove(format!("etag {}", self.key).as_bytes())?;
+        self.storage
+            .remove(format!("checksum {}", self.key).as_bytes())?;
         self.storage.remove(&self.key)?;
         self.storage.flush()?;
         state::touch_metadata(&self.state_dir)?;
@@ -193,6 +198,63 @@ impl Db {
         self.storage.flush()?;
         state::touch_metadata(&self.state_dir)?;
         Ok(previous)
+    }
+
+    /// Record the additional checksum algorithm the multipart upload is created with
+    /// (`None`: no additional checksum), so a resume uses the same one.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not update the db
+    pub fn save_upload_checksum(&self, algorithm: Option<&ChecksumAlgorithm>) -> Result<()> {
+        self.storage.insert(
+            format!("checksum {}", self.key).as_bytes(),
+            algorithm.map_or("", ChecksumAlgorithm::name),
+        )?;
+        self.storage.flush()?;
+        Ok(())
+    }
+
+    /// The additional checksum algorithm recorded for the multipart upload in
+    /// progress. The outer `None` means nothing was recorded (a state written by an
+    /// older s3m); `Some(None)` means the upload has no additional checksum.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not query the db, or if the record is not a known
+    /// algorithm
+    pub fn upload_checksum(&self) -> Result<Option<Option<ChecksumAlgorithm>>> {
+        let Some(saved) = self
+            .storage
+            .get(format!("checksum {}", self.key).as_bytes())?
+        else {
+            return Ok(None);
+        };
+        let name = String::from_utf8(saved.to_vec())?;
+        if name.is_empty() {
+            return Ok(Some(None));
+        }
+        name.parse::<ChecksumAlgorithm>()
+            .map(|algorithm| Some(Some(algorithm)))
+            .map_err(|()| anyhow::anyhow!("unknown checksum algorithm in the upload state: {name}"))
+    }
+
+    /// The checksum algorithm of the recorded parts, pending or uploaded, if they
+    /// have one: what a state without [`Db::upload_checksum`] still knows.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not read the parts
+    pub fn parts_checksum_algorithm(&self) -> Result<Option<ChecksumAlgorithm>> {
+        for tree in [self.db_uploaded()?, self.db_parts()?] {
+            for part in tree.iter().values() {
+                let part = from_bytes::<Part, RkyvError>(&part?)?;
+                if let Some(checksum) = part.get_checksum() {
+                    return Ok(Some(checksum.algorithm));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// # Errors
@@ -319,6 +381,31 @@ mod tests {
         let error = open_state_once(dir.path()).unwrap_err().to_string();
         assert!(is_lock_error(&error), "{error}");
         drop(held);
+    }
+
+    // <https://github.com/s3m/s3m/issues/77>: the algorithm of the upload in progress
+    // is recorded with it, and forgotten with it.
+    #[test]
+    fn test_upload_checksum_is_saved_and_forgotten() {
+        let dir = tempdir().unwrap();
+        let db = Db::new(&test_s3(), "key", "checksum", 1, dir.path()).unwrap();
+        assert_eq!(db.upload_checksum().unwrap(), None);
+
+        db.save_upload_checksum(None).unwrap();
+        assert_eq!(db.upload_checksum().unwrap(), Some(None));
+
+        for algorithm in [
+            ChecksumAlgorithm::Crc32,
+            ChecksumAlgorithm::Crc32c,
+            ChecksumAlgorithm::Sha1,
+            ChecksumAlgorithm::Sha256,
+        ] {
+            db.save_upload_checksum(Some(&algorithm)).unwrap();
+            assert_eq!(db.upload_checksum().unwrap(), Some(Some(algorithm)));
+        }
+
+        db.forget_upload().unwrap();
+        assert_eq!(db.upload_checksum().unwrap(), None);
     }
 
     fn test_s3() -> S3 {

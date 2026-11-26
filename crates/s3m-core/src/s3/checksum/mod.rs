@@ -39,6 +39,18 @@ impl ChecksumAlgorithm {
         }
     }
 
+    /// The lowercase name, as given to `--checksum` (`sha256`, `crc32c`, ...).
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Crc32 => "crc32",
+            Self::Crc32c => "crc32c",
+            Self::Md5 => "md5",
+            Self::Sha1 => "sha1",
+            Self::Sha256 => "sha256",
+        }
+    }
+
     #[must_use]
     pub const fn as_algorithm(&self) -> &'static str {
         match self {
@@ -87,14 +99,7 @@ impl Checksum {
     /// `sha256 (base64): uU0nuZNN...`, comparable with the object's `x-amz-checksum-*`.
     #[must_use]
     pub fn report(&self) -> String {
-        let algorithm = match self.algorithm {
-            ChecksumAlgorithm::Crc32 => "crc32",
-            ChecksumAlgorithm::Crc32c => "crc32c",
-            ChecksumAlgorithm::Md5 => "md5",
-            ChecksumAlgorithm::Sha1 => "sha1",
-            ChecksumAlgorithm::Sha256 => "sha256",
-        };
-        format!("{algorithm} (base64): {}", self.checksum)
+        format!("{} (base64): {}", self.algorithm.name(), self.checksum)
     }
 
     #[must_use]
