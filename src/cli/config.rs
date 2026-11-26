@@ -169,7 +169,8 @@ impl Config {
 }
 
 fn check_keys(name: &str, credentials: &Credentials, suggest_unsigned: bool) -> Result<()> {
-    let set = |var: &str| std::env::var_os(var).is_some();
+    // Same reading as `Credentials::new`: a variable that isn't valid UTF-8 is ignored.
+    let set = |var: &str| std::env::var(var).is_ok();
     let message = missing_keys_message(
         name,
         (credentials.aws_access_key_id(), set("AWS_ACCESS_KEY_ID")),
