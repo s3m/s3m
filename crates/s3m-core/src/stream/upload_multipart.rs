@@ -370,6 +370,13 @@ async fn upload_part(
             }
 
             Err(e) => {
+                if let Some(checksum) = additional_checksum
+                    .as_ref()
+                    .filter(|_| is_not_implemented(&e))
+                {
+                    return Err(abort_unsupported_checksum(s3, key, uid, db, checksum, &e).await);
+                }
+
                 log::error!(
                     "Error uploading part: {}, attempt {}/{} failed: {}",
                     part.get_number(),
@@ -402,6 +409,43 @@ async fn upload_part(
         })?;
 
     db.flush()
+}
+
+/// A 501 `NotImplemented` answer: the server doesn't support what the request asked
+/// for, so sending it again can't succeed.
+fn is_not_implemented(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<crate::s3::error::Error>()
+        .is_some_and(|error| error.status() == Some(501))
+}
+
+/// The server rejected a part's additional checksum as not implemented (Cloudflare R2
+/// does for SHA-1 and SHA-256). Neither a retry nor a resume can succeed, and the
+/// upload in progress would keep its algorithm, so it is aborted and forgotten: the
+/// next run starts a new upload. Returns the error to report.
+async fn abort_unsupported_checksum(
+    s3: &S3,
+    key: &str,
+    upload_id: &str,
+    db: &Db,
+    checksum: &Checksum,
+    error: &anyhow::Error,
+) -> anyhow::Error {
+    if let Err(abort) = actions::AbortMultipartUpload::new(key, upload_id)
+        .request(s3)
+        .await
+    {
+        log::warn!("Could not abort the multipart upload: {abort}");
+    }
+    if let Err(forget) = db.forget_upload() {
+        log::warn!("Could not forget the multipart upload: {forget}");
+    }
+    anyhow!(
+        "the server doesn't support {} checksums on the parts of a multipart upload, \
+         and the upload was aborted. Use --checksum crc32c, or a --buffer larger than \
+         the file to upload it as a single part.\n{error}",
+        checksum.algorithm.name()
+    )
 }
 
 async fn try_upload_part(request: UploadPartRequest<'_>) -> Result<String> {
@@ -730,6 +774,75 @@ mod tests {
             report,
             format!("ETag: \"done-2\"\nsha256 (base64): {SHA256_COMPOSITE}")
         );
+    }
+
+    // <https://github.com/s3m/s3m/issues/80>: Cloudflare R2 answers 501 NotImplemented
+    // to a part that carries a SHA checksum. No retry can succeed, and neither can a
+    // resume: the upload is aborted and forgotten, and the error says what to do.
+    #[tokio::test]
+    async fn part_checksum_not_implemented_aborts_the_upload_without_retrying() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+
+        let create = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Regex("uploads".into()))
+            .match_header("x-amz-checksum-algorithm", "SHA256")
+            .with_body("<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>uid</UploadId></InitiateMultipartUploadResult>")
+            .expect(1)
+            .create_async()
+            .await;
+        let part = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(501)
+            .with_body(r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NotImplemented</Code><Message>Header 'x-amz-checksum-sha256' with value 'xWX+A8qbYkLgHf3e/pu6PZiycOGc0C/YXOr3XislvxI=' not implemented</Message></Error>"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(204)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(MultipartUploadRequest {
+            s3: &s3,
+            key: "key",
+            file: file.path(),
+            file_size: 10,
+            chunk_size: 5,
+            sdb: &db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: Some(Checksum::new(ChecksumAlgorithm::Sha256)),
+            max_requests: 1,
+            globals: RequestOptions {
+                retries: 3,
+                ..RequestOptions::default()
+            },
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+
+        create.assert_async().await;
+        part.assert_async().await;
+        abort.assert_async().await;
+        assert!(
+            error.contains("doesn't support sha256 checksums on the parts of a multipart upload"),
+            "{error}"
+        );
+        assert!(error.contains("--checksum crc32c"), "{error}");
+        assert_eq!(db.upload_id().unwrap(), None);
+        assert_eq!(db.upload_checksum().unwrap(), None);
     }
 
     // A new upload records its algorithm (or that it has none), and a resume keeps
