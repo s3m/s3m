@@ -237,6 +237,97 @@ fn ls_buckets_falls_back_when_max_buckets_is_not_implemented() -> Result<()> {
     Ok(())
 }
 
+// #79: after the fallback the listing stays without `max-buckets` on every later
+// page and follows the continuation token; `--json` output is unaffected.
+#[test]
+fn ls_buckets_fallback_keeps_paginating_without_max_buckets() -> Result<()> {
+    let bucket = |name: &str| {
+        format!(
+            "<Bucket><Name>{name}</Name><CreationDate>2026-03-14T08:00:00.000Z</CreationDate></Bucket>"
+        )
+    };
+    let mut server = Server::new();
+    let rejected = server
+        .mock("GET", "/")
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&[("max-buckets", "10000")]))
+        .with_status(501)
+        .with_body("<Error><Code>NotImplemented</Code><Message>max-buckets</Message></Error>")
+        .expect(1)
+        .create();
+    let page_1 = server
+        .mock("GET", "/")
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&[]))
+        .with_body(format!(
+            "<ListAllMyBucketsResult><Buckets>{}{}</Buckets><ContinuationToken>t2</ContinuationToken></ListAllMyBucketsResult>",
+            bucket("b-1"),
+            bucket("b-2")
+        ))
+        .expect(1)
+        .create();
+    let page_2 = server
+        .mock("GET", "/")
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&[("continuation-token", "t2")]))
+        .with_body(format!(
+            "<ListAllMyBucketsResult><Buckets>{}</Buckets></ListAllMyBucketsResult>",
+            bucket("b-3")
+        ))
+        .expect(1)
+        .create();
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["ls", "s3", "--json"];
+    let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
+
+    let json: Value = serde_json::from_str(&stdout)?;
+    let names: Vec<&str> = json["buckets"]
+        .as_array()
+        .context("buckets array")?
+        .iter()
+        .filter_map(|bucket| bucket["name"].as_str())
+        .collect();
+    assert_eq!(names, ["b-1", "b-2", "b-3"]);
+    assert_all(&[rejected, page_1, page_2]);
+    Ok(())
+}
+
+// #79: the fallback is tried once. When the request without `max-buckets` fails too
+// (a key that can't list buckets, as on R2), that error is the one reported.
+#[test]
+fn ls_buckets_fallback_reports_the_error_of_the_second_request() -> Result<()> {
+    let mut server = Server::new();
+    let rejected = server
+        .mock("GET", "/")
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&[("max-buckets", "10000")]))
+        .with_status(501)
+        .with_body("<Error><Code>NotImplemented</Code><Message>max-buckets</Message></Error>")
+        .expect(1)
+        .create();
+    let denied = server
+        .mock("GET", "/")
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&[]))
+        .with_status(403)
+        .with_body("<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>")
+        .expect(1)
+        .create();
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["ls", "s3"];
+    let output = cli.run(&args)?;
+    let stdout = expect_exit(&output, 1, &args)?;
+
+    assert_eq!(stdout, "");
+    let stderr = text(&output.stderr);
+    ensure!(stderr.contains("Code: AccessDenied"), "{stderr}");
+    ensure!(!stderr.contains("NotImplemented"), "{stderr}");
+    assert_all(&[rejected, denied]);
+    Ok(())
+}
+
 // `bucket` in a host's config was documented as a default bucket but is not used:
 // the bucket always comes from the path. It and any other unknown key are ignored,
 // so existing configs keep working.
