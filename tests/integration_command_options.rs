@@ -195,6 +195,48 @@ fn ls_accepts_a_listing_without_a_prefix_element() -> Result<()> {
     Ok(())
 }
 
+// <https://github.com/s3m/s3m/issues/79>: Cloudflare R2 doesn't implement the
+// `max-buckets` parameter of ListBuckets and answers 501, so `ls <host>` failed there.
+// s3m asks again without it; `--number` is enforced by s3m, so it still limits the list.
+#[test]
+fn ls_buckets_falls_back_when_max_buckets_is_not_implemented() -> Result<()> {
+    let not_implemented = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NotImplemented</Code><Message>ListBuckets search parameter max-buckets not implemented</Message></Error>"#;
+    let buckets = r#"<?xml version="1.0" encoding="UTF-8"?><ListAllMyBucketsResult><Buckets><Bucket><Name>b-1</Name><CreationDate>2026-03-14T08:00:00.000Z</CreationDate></Bucket><Bucket><Name>b-2</Name><CreationDate>2026-03-14T08:00:00.000Z</CreationDate></Bucket></Buckets></ListAllMyBucketsResult>"#;
+    for (args, max_buckets, listed) in [
+        (&["ls", "s3"][..], "10000", &["b-1", "b-2"][..]),
+        (&["ls", "s3", "--number", "1"][..], "1", &["b-1"][..]),
+    ] {
+        let mut server = Server::new();
+        let rejected = server
+            .mock("GET", "/")
+            .match_query(Matcher::Any)
+            .match_request(exact_query(&[("max-buckets", max_buckets)]))
+            .with_status(501)
+            .with_body(not_implemented)
+            .expect(1)
+            .create();
+        let plain = server
+            .mock("GET", "/")
+            .match_query(Matcher::Any)
+            .match_request(exact_query(&[]))
+            .with_body(buckets)
+            .expect(1)
+            .create();
+        let cli = Cli::new(&server.url())?;
+
+        let stdout = expect_exit(&cli.run(args)?, 0, args)?;
+
+        let names: Vec<&str> = stdout
+            .lines()
+            .filter_map(|line| line.split_whitespace().last())
+            .collect();
+        ensure!(names == listed, "{args:?}: {stdout}");
+        rejected.assert();
+        plain.assert();
+    }
+    Ok(())
+}
+
 // `bucket` in a host's config was documented as a default bucket but is not used:
 // the bucket always comes from the path. It and any other unknown key are ignored,
 // so existing configs keep working.

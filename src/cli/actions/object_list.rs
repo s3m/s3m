@@ -376,12 +376,26 @@ where
     let mut limit = limit;
     let mut continuation_token: Option<String> = None;
     let mut seen_tokens = HashSet::new();
+    // `max-buckets` only sizes the pages; the limit is enforced here. Cloudflare R2
+    // doesn't implement it and answers 501, so the listing goes on without it.
+    let mut page_size_supported = true;
 
     while !limit.is_exhausted() {
-        let mut action =
-            actions::ListBuckets::new(Some(limit.page_size(BUCKETS_PAGE_CAP).to_string()));
-        action.continuation_token = continuation_token.take();
-        let page = action.request(s3).await?;
+        let max_buckets =
+            page_size_supported.then(|| limit.page_size(BUCKETS_PAGE_CAP).to_string());
+        let mut action = actions::ListBuckets::new(max_buckets);
+        action.continuation_token.clone_from(&continuation_token);
+        let page = match action.request(s3).await {
+            Err(error)
+                if page_size_supported
+                    && (error.status() == Some(501) || error.code() == Some("NotImplemented")) =>
+            {
+                log::info!("ListBuckets max-buckets is not implemented, listing without it");
+                page_size_supported = false;
+                continue;
+            }
+            page => page?,
+        };
 
         for bucket in page.buckets.bucket {
             if limit.is_exhausted() {
