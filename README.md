@@ -552,6 +552,9 @@ just test-integration     # run MinIO-backed e2e tests against that MinIO
 just container test-integration
 # full suite (fmt + clippy + unit + integration)
 just test
+# hunt a flaky test: run a target many times, failed runs are kept in target/stress/
+just test-stress                        # the streams tests, 100 times
+just test-stress 300 --workspace --lib  # the unit tests, 300 times
 # stop/clean the container
 podman rm -f s3m-test-minio
 ```

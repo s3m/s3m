@@ -102,6 +102,34 @@ test-integration *args:
   echo "🧪 Running e2e tests with RustFS..."
   cargo test --tests {{args}} -- --test-threads=1
 
+# `just test-stress` runs the streams tests 100 times; `just test-stress 300
+# --workspace --lib` runs the unit tests 300 times. The output of each failed run
+# is kept in target/stress/.
+# Run a test target many times to catch a flaky test
+test-stress runs='100' *args='--test integration_streams':
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  # Build once, so a compile error stops here and the runs below only run tests.
+  cargo test --no-run {{args}}
+
+  out=target/stress
+  rm -rf "$out"
+  mkdir -p "$out"
+  failed=0
+  for run in $(seq 1 {{runs}}); do
+    if ! cargo test {{args}} >"$out/run.log" 2>&1; then
+      failed=$((failed + 1))
+      mv "$out/run.log" "$out/failed-$run.log"
+      echo "run $run failed: $out/failed-$run.log"
+      grep -E '^---- .* stdout ----$' "$out/failed-$run.log" || true
+    fi
+  done
+  rm -f "$out/run.log"
+
+  echo "$failed of {{runs}} runs failed"
+  [ "$failed" -eq 0 ]
+
 clippy:
   cargo clippy --workspace --all-targets --all-features
 
