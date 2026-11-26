@@ -3,7 +3,8 @@ name: R2 Upload Checks
 
 # Uploads a few MiB to a dedicated Cloudflare R2 test bucket and deletes them
 # again (scripts/r2-check.sh). Runs only where the R2_* secrets exist, so pull
-# requests from forks never reach it.
+# requests from forks never reach it. The secrets are given only to the steps
+# that use them, never to checkout, the build or third-party actions.
 on:
   push:
     branches:
@@ -24,15 +25,15 @@ jobs:
     name: R2 Upload Checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-      R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
-      R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
 
     steps:
       - name: Check for R2 credentials
         id: secrets
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           if [[ -n "$R2_ENDPOINT" && -n "$R2_ACCESS_KEY" && -n "$R2_SECRET_KEY" && -n "$R2_BUCKET" ]]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
@@ -40,45 +41,51 @@ jobs:
             echo "::notice::R2_* secrets are not set; skipping the R2 checks"
           fi
 
-      - name: Checkout code
+      - name: Checkout
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         if: steps.secrets.outputs.present == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: ./.github/actions/rust-toolchain
 
-      - name: Cache cargo build
+      # Dependency sources only: compiled artifacts depend on the floating stable
+      # compiler, which this key does not capture.
+      - name: Cache cargo registry
         if: steps.secrets.outputs.present == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-r2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-r2-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-r2-
+            ${{ runner.os }}-r2-cargo-
 
       - name: Build s3m
         if: steps.secrets.outputs.present == 'true'
         run: cargo build --locked --bin s3m
 
+      # JSON strings are valid YAML, so any character in a secret survives intact.
       - name: Write the s3m config
         if: steps.secrets.outputs.present == 'true'
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
         run: |
           umask 077
-          cat > "$RUNNER_TEMP/s3m-r2.yml" <<EOF
-          hosts:
-            r2:
-              endpoint: "$R2_ENDPOINT"
-              region: auto
-              access_key: "$R2_ACCESS_KEY"
-              secret_key: "$R2_SECRET_KEY"
-          EOF
+          config="$RUNNER_TEMP/s3m-r2.yml"
+          rm -f "$config"
+          jq -n '{hosts: {r2: {endpoint: env.R2_ENDPOINT, region: "auto",
+            access_key: env.R2_ACCESS_KEY, secret_key: env.R2_SECRET_KEY}}}' > "$config"
 
       - name: Run the R2 checks
         if: steps.secrets.outputs.present == 'true'
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: scripts/r2-check.sh target/debug/s3m "$RUNNER_TEMP/s3m-r2.yml" r2 "$R2_BUCKET"
 
       - name: Remove the s3m config

@@ -3,37 +3,65 @@
 #
 #   scripts/r2-check.sh <s3m binary> <config.yml> <host> <bucket>
 #
-# Uploads a few MiB under ci/<unique prefix>/ and deletes every object it created.
-# Use a dedicated test bucket and an API token limited to it.
+# Uploads a few MiB under ci/<unique prefix>/ and deletes every object it created,
+# and aborts any multipart upload it left unfinished. Use a dedicated test bucket
+# and an API token limited to it. Needs jq.
 #
 # Known R2 limitation, not checked here: multipart uploads with --checksum sha1 or
-# sha256 (R2 answers 501 for per-part SHA checksums).
+# sha256 (R2 answers 501 for per-part SHA checksums, #80).
 set -euo pipefail
 
 if [[ $# -ne 4 ]]; then
   echo "usage: $0 <s3m binary> <config.yml> <host> <bucket>" >&2
   exit 2
 fi
+command -v jq >/dev/null || {
+  echo "jq is required" >&2
+  exit 2
+}
+
+# The checks parse s3m's output; keep it free of color codes.
+export NO_COLOR=1
+unset CLICOLOR_FORCE
 
 bin=$(realpath "$1")
 config=$(realpath "$2")
+host=$3
 target="$3/$4"
 prefix="ci/$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID:-local}-$RANDOM"
 
 work=$(mktemp -d)
+# Upload state of this run only, so cleanup finds the uploads it left unfinished.
 export S3M_HOME="$work/home"
 created=()
 
 s3m() { "$bin" --config "$config" "$@"; }
 
 cleanup() {
-  status=$?
-  for key in "${created[@]}"; do
+  local status=$? failed=0 key destination upload_id
+  trap - EXIT
+  for key in ${created[@]+"${created[@]}"}; do
     s3m rm "$target/$key" >/dev/null 2>&1 || {
-      echo "warning: could not delete $target/$key" >&2
+      echo "cleanup: could not delete $target/$key" >&2
+      failed=1
     }
   done
+  # A failed or interrupted multipart upload keeps its parts until aborted.
+  if [[ -d "$S3M_HOME" ]]; then
+    while IFS=$'\t' read -r destination upload_id; do
+      [[ -n "$upload_id" ]] || continue
+      s3m rm "$host/$destination" --abort "$upload_id" >/dev/null 2>&1 || {
+        echo "cleanup: could not abort the upload of $host/$destination" >&2
+        failed=1
+      }
+    done < <(s3m streams --json ls 2>/dev/null |
+      jq -r '.streams[]? | select(.etag == null and .upload_id != null) | [.destination, .upload_id] | @tsv')
+  fi
   rm -rf "$work"
+  # Leftovers in the bucket fail an otherwise green run.
+  if [[ $status -eq 0 && $failed -ne 0 ]]; then
+    status=1
+  fi
   exit "$status"
 }
 trap cleanup EXIT
