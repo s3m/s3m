@@ -134,8 +134,9 @@ grep -q '^ETag: ".*-3"$' <<<"$output" || fail "big-plain.bin: no multipart ETag 
 check_download big-plain.bin "$work/big.bin"
 
 # Listing without a prefix: R2 leaves <Prefix> out of the response (#78).
-listing=$(s3m ls "$target") || fail "ls $target: $listing"
-grep -q " $prefix/big-plain.bin\$" <<<"$listing" || fail "ls $target doesn't list $prefix/big-plain.bin"
+listing=$(s3m ls "$target" 2>&1) || fail "ls $target: $listing"
+awk -v key="$prefix/big-plain.bin" '$NF == key { found = 1 } END { exit !found }' <<<"$listing" ||
+  fail "ls $target doesn't list $prefix/big-plain.bin"
 echo "ok  ls without a prefix"
 
 # Single-part with --checksum: R2 rejects Content-MD5 next to x-amz-checksum-* (#73).
