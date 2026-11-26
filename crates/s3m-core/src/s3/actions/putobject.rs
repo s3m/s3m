@@ -254,6 +254,49 @@ mod tests {
         );
     }
 
+    // --no-sign-request sends no authorization, but the request still needs its
+    // Content-Length (S3 rejects a chunked upload), its integrity header and the
+    // action's own headers.
+    #[test]
+    fn test_unsigned_request_keeps_body_and_action_headers() {
+        let s3 = S3::new(
+            &Credentials::new("", &SecretString::new("".into())),
+            &"us-west-1".parse::<Region>().unwrap(),
+            Some("awsexamplebucket1".to_string()),
+            true,
+        );
+        let meta = BTreeMap::from([("x-amz-meta-owner".to_string(), "me".to_string())]);
+        let action = PutObject::new(
+            "key",
+            Path::new("/"),
+            Some("public-read".to_string()),
+            Some(meta),
+            None,
+            None,
+            None,
+        );
+        let (_, headers) = action
+            .sign(
+                &s3,
+                tools::sha256_digest("").as_ref(),
+                Some(b"0123456789abcdef"),
+                Some(11),
+            )
+            .unwrap();
+        assert_eq!(
+            headers,
+            BTreeMap::from([
+                (
+                    "Content-MD5".to_string(),
+                    "MDEyMzQ1Njc4OWFiY2RlZg==".to_string()
+                ),
+                ("content-length".to_string(), "11".to_string()),
+                ("x-amz-acl".to_string(), "public-read".to_string()),
+                ("x-amz-meta-owner".to_string(), "me".to_string()),
+            ])
+        );
+    }
+
     // <https://github.com/s3m/s3m/issues/73>: Cloudflare R2 rejects Content-MD5
     // together with an x-amz-checksum-* header.
     #[test]

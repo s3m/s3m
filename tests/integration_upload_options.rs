@@ -159,6 +159,85 @@ fn checksum_replaces_content_md5_on_single_and_multipart_uploads() -> Result<()>
     Ok(())
 }
 
+// --no-sign-request dropped every request header, not only the authorization: an
+// upload went out chunked, without Content-Length, integrity header or metadata, and
+// S3 rejected it. Unsigned uploads keep all of them.
+#[test]
+fn unsigned_uploads_keep_content_length_and_action_headers() -> Result<()> {
+    let mut server = Server::new();
+    let fixture = Fixture::new(&server.url(), b"hello world")?;
+    let put = server
+        .mock("PUT", "/bucket/key")
+        .match_header("authorization", Matcher::Missing)
+        .match_header("transfer-encoding", Matcher::Missing)
+        .match_header("content-length", "11")
+        .match_header("content-md5", "XrY7u+Ae7tCTyyK7j1rNww==")
+        .match_header("x-amz-meta-owner", "me")
+        .match_body(b"hello world".to_vec())
+        .with_header("etag", "single")
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .args(["--no-sign-request", "--meta", "owner=me"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "single: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    put.assert();
+    // On Windows each fixture holds the shared profile lock until dropped.
+    drop(fixture);
+
+    let mut server = Server::new();
+    let payload = vec![7; 11 * MIB + 137];
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let init = initiate(&mut server)
+        .match_header("authorization", Matcher::Missing)
+        .match_header("x-amz-checksum-algorithm", "SHA256")
+        .expect(1)
+        .create();
+    let parts: Vec<_> = payload
+        .chunks(10 * MIB)
+        .enumerate()
+        .map(|(i, bytes)| {
+            part_mock(&mut server, i + 1, bytes)
+                .match_header("authorization", Matcher::Missing)
+                .match_header("transfer-encoding", Matcher::Missing)
+                .match_header("content-length", bytes.len().to_string().as_str())
+                .match_header("content-md5", Matcher::Missing)
+                .match_header("x-amz-checksum-sha256", Matcher::Any)
+                .expect(1)
+                .create()
+        })
+        .collect();
+    let done = complete(&mut server)
+        .match_header("authorization", Matcher::Missing)
+        .match_body(Matcher::Regex("<ChecksumSHA256>".into()))
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .args(["--no-sign-request", "-n", "1", "--checksum", "sha256"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "multipart: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    init.assert();
+    for part in parts {
+        part.assert();
+    }
+    done.assert();
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/74>: the BLAKE3 hash s3m prints is labelled as such,
 // and the --checksum value is printed with its algorithm, comparable with x-amz-checksum-*.
 #[test]

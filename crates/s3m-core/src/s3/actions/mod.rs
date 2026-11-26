@@ -8,6 +8,7 @@ use crate::s3::{
     responses::ErrorResponse,
     signature::Signature,
 };
+use base64ct::{Base64, Encoding};
 use quick_xml::de::from_str;
 use reqwest::{Method, Response, StatusCode, header::HeaderMap};
 use std::{collections::BTreeMap, fmt::Write};
@@ -155,15 +156,6 @@ pub trait Action {
             }
         }
 
-        // --no-sign-request
-        if s3.no_sign_request {
-            return Ok((url, BTreeMap::new()));
-        }
-
-        log::info!("URL to sign: {url}");
-
-        let mut signature = Signature::new(s3, "s3", self.http_method()?)?;
-
         let custom_headers = self.headers();
 
         // An additional checksum replaces Content-MD5, as in the AWS SDKs:
@@ -173,6 +165,27 @@ pub trait Action {
         } else {
             md5
         };
+
+        // --no-sign-request: no authorization, but the request still needs what
+        // describes its body and the action's own headers (ACL, metadata, checksum).
+        // Without Content-Length an upload is sent chunked, which S3 rejects.
+        if s3.no_sign_request {
+            let mut headers = BTreeMap::new();
+            if let Some(length) = content_length {
+                headers.insert("content-length".to_string(), length.to_string());
+            }
+            if let Some(md5) = md5 {
+                headers.insert("Content-MD5".to_string(), Base64::encode_string(md5));
+            }
+            for (key, value) in custom_headers.into_iter().flatten() {
+                headers.insert(key.to_string(), value.to_string());
+            }
+            return Ok((url, headers));
+        }
+
+        log::info!("URL to sign: {url}");
+
+        let mut signature = Signature::new(s3, "s3", self.http_method()?)?;
 
         let headers = signature.sign(&url, hash_payload, md5, content_length, custom_headers);
 
