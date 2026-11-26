@@ -268,14 +268,15 @@ fn missing_host_keys_fail_before_any_request() -> Result<()> {
 
     // A presigned URL is always signed: share needs the keys, with or without
     // --no-sign-request, and doesn't suggest it.
+    // The first stderr line: with RUST_BACKTRACE set a stack trace follows it.
     for (args, message) in [
         (
             &["share", OBJECT][..],
-            "hosts.s3 has no access_key in the config; set it\n",
+            "Error: hosts.s3 has no access_key in the config; set it",
         ),
         (
             &["--no-sign-request", "share", OBJECT][..],
-            "share signs the URL with the host's keys, so it can't be used with --no-sign-request\n",
+            "Error: share signs the URL with the host's keys, so it can't be used with --no-sign-request",
         ),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_s3m"))
@@ -289,7 +290,7 @@ fn missing_host_keys_fail_before_any_request() -> Result<()> {
             .output()?;
         expect_exit(&output, 1, args)?;
         let stderr = text(&output.stderr);
-        ensure!(stderr.ends_with(message), "{args:?}: {stderr}");
+        ensure!(stderr.lines().next() == Some(message), "{args:?}: {stderr}");
     }
     Ok(())
 }
