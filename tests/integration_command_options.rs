@@ -282,11 +282,12 @@ fn ls_buckets_fallback_keeps_paginating_without_max_buckets() -> Result<()> {
     let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
 
     let json: Value = serde_json::from_str(&stdout)?;
-    let names: Vec<&str> = json["buckets"]
-        .as_array()
+    let names: Vec<&str> = json
+        .get("buckets")
+        .and_then(Value::as_array)
         .context("buckets array")?
         .iter()
-        .filter_map(|bucket| bucket["name"].as_str())
+        .filter_map(|bucket| bucket.get("name").and_then(Value::as_str))
         .collect();
     assert_eq!(names, ["b-1", "b-2", "b-3"]);
     assert_all(&[rejected, page_1, page_2]);
