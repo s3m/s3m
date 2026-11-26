@@ -174,6 +174,27 @@ fn list_mock(server: &mut ServerGuard, query: &[(&str, &str)], body: String) -> 
         .create()
 }
 
+// <https://github.com/s3m/s3m/issues/78>: Cloudflare R2 leaves out <Prefix> when the
+// listing has no prefix, and `ls` on a bucket failed with "missing field `Prefix`".
+#[test]
+fn ls_accepts_a_listing_without_a_prefix_element() -> Result<()> {
+    let mut server = Server::new();
+    let body = r#"<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Contents><Key>probe78/a.txt</Key><Size>6</Size><LastModified>2026-11-26T23:37:12.345Z</LastModified><ETag>"b1946ac92492d2347c6235b8d2611184"</ETag><StorageClass>STANDARD</StorageClass></Contents><IsTruncated>false</IsTruncated><MaxKeys>1000</MaxKeys><KeyCount>1</KeyCount></ListBucketResult>"#;
+    let list = list_mock(
+        &mut server,
+        &[("list-type", "2"), ("max-keys", "1000")],
+        body.to_string(),
+    );
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["ls", "s3/bucket"];
+    let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
+
+    ensure!(stdout.trim_end().ends_with("6 B probe78/a.txt"), "{stdout}");
+    list.assert();
+    Ok(())
+}
+
 // `bucket` in a host's config was documented as a default bucket but is not used:
 // the bucket always comes from the path. It and any other unknown key are ignored,
 // so existing configs keep working.

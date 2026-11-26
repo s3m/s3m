@@ -81,8 +81,10 @@ pub struct ListBucketResult {
     #[serde(rename = "MaxKeys")]
     /// Sets the maximum number of keys returned in the response body.
     pub max_keys: i32,
-    #[serde(rename = "Prefix")]
-    /// Limits the response to keys that begin with the specified prefix.
+    #[serde(rename = "Prefix", default)]
+    /// Limits the response to keys that begin with the specified prefix. Empty when
+    /// the response has no `<Prefix>`: Cloudflare R2 leaves the element out when the
+    /// request has no prefix.
     pub prefix: String,
     #[serde(rename = "Marker")]
     /// Indicates where in the bucket listing begins. Marker is included in the response if
@@ -471,6 +473,24 @@ NextContinuationToken: null
         assert!(!parsed.is_truncated);
         assert_eq!(parsed.max_keys, 1000);
         assert_eq!(parsed.contents.len(), 0);
+    }
+
+    // <https://github.com/s3m/s3m/issues/78>: Cloudflare R2 leaves out <Prefix> when
+    // the request has none (AWS S3 sends an empty element). These are R2's responses
+    // for a bucket with one object and for an empty bucket.
+    #[test]
+    fn test_list_bucket_result_without_prefix() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>s3m-test</Name><Contents><Key>probe78/a.txt</Key><Size>6</Size><LastModified>2026-11-26T23:37:12.345Z</LastModified><ETag>"b1946ac92492d2347c6235b8d2611184"</ETag><StorageClass>STANDARD</StorageClass></Contents><IsTruncated>false</IsTruncated><MaxKeys>1000</MaxKeys><KeyCount>1</KeyCount></ListBucketResult>"#;
+        let parsed: ListBucketResult = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(parsed.name, "s3m-test");
+        assert_eq!(parsed.prefix, "");
+        assert_eq!(parsed.contents.len(), 1);
+        assert_eq!(parsed.contents[0].key, "probe78/a.txt");
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>s3m-test</Name><IsTruncated>false</IsTruncated><MaxKeys>1000</MaxKeys><KeyCount>0</KeyCount></ListBucketResult>"#;
+        let parsed: ListBucketResult = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(parsed.prefix, "");
+        assert!(parsed.contents.is_empty());
     }
 
     #[test]
