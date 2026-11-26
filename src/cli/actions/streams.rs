@@ -833,7 +833,7 @@ mod tests {
         let err = validate_resume_db(&entry, &metadata, &entry.id)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("has no saved upload id"));
+        assert!(err.contains("has no saved upload id"), "{err}");
     }
 
     #[test]

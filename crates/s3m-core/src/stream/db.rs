@@ -8,10 +8,47 @@ use std::{
     collections::BTreeMap,
     convert::Into,
     path::{Path, PathBuf},
+    thread::sleep,
+    time::Duration,
 };
 
 pub const DB_PARTS: &str = "parts";
 pub const DB_UPLOADED: &str = "uploaded parts";
+
+/// How long to wait for the state lock before reporting it as held: sled can keep
+/// the lock for a moment after a handle to the same state is dropped in this
+/// process (a background flush still owns the file). A lock held by another s3m
+/// that is uploading outlasts the wait and is still reported.
+const LOCK_ATTEMPTS: u32 = 10;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(25);
+
+pub(crate) fn is_lock_error(error: &str) -> bool {
+    error.contains("could not acquire lock")
+}
+
+/// Open the sled database holding an upload's state.
+///
+/// # Errors
+///
+/// Will return `Err` if the database can not be opened, or if its lock is still
+/// held after a short wait
+pub(crate) fn open_state(path: &Path) -> sled::Result<sled::Db> {
+    let mut attempt = 1;
+    loop {
+        let result = sled::Config::new()
+            .path(path)
+            .use_compression(false)
+            .mode(sled::Mode::LowSpace)
+            .open();
+        match result {
+            Err(error) if attempt < LOCK_ATTEMPTS && is_lock_error(&error.to_string()) => {
+                attempt += 1;
+                sleep(LOCK_RETRY_DELAY);
+            }
+            result => return result,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Db {
@@ -35,11 +72,7 @@ impl Db {
 
         log::debug!("db key: [{}], path: {}", key, path.display());
 
-        let storage = sled::Config::new()
-            .path(&state_dir)
-            .use_compression(false)
-            .mode(sled::Mode::LowSpace)
-            .open()?;
+        let storage = open_state(&state_dir)?;
         Ok(Self {
             storage,
             key,
@@ -51,11 +84,7 @@ impl Db {
     ///
     /// Will return `Err` if can not open an existing db
     pub fn open_existing(path: &Path, key: String) -> Result<Self> {
-        let storage = sled::Config::new()
-            .path(path)
-            .use_compression(false)
-            .mode(sled::Mode::LowSpace)
-            .open()?;
+        let storage = open_state(path)?;
         Ok(Self {
             storage,
             key,
@@ -245,6 +274,35 @@ mod tests {
     use secrecy::SecretString;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    // sled can keep the lock for a moment after a handle is dropped in this process;
+    // opening the same state again waits for it instead of failing.
+    #[test]
+    fn test_open_state_waits_for_a_lock_that_is_being_released() {
+        let dir = tempdir().unwrap();
+        let held = open_state(dir.path()).unwrap();
+        let release = std::thread::spawn(move || {
+            sleep(LOCK_RETRY_DELAY * 2);
+            drop(held);
+        });
+
+        let reopened = open_state(dir.path());
+
+        release.join().unwrap();
+        assert!(reopened.is_ok(), "{:?}", reopened.err());
+    }
+
+    // A lock that stays held (another s3m is uploading) is still reported.
+    #[test]
+    fn test_open_state_reports_a_lock_that_stays_held() {
+        let dir = tempdir().unwrap();
+        let held = open_state(dir.path()).unwrap();
+
+        let error = open_state(dir.path()).unwrap_err().to_string();
+
+        assert!(is_lock_error(&error), "{error}");
+        drop(held);
+    }
 
     fn test_s3() -> S3 {
         S3::new(

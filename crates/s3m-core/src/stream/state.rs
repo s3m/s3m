@@ -1,5 +1,5 @@
 use crate::stream::{
-    db::{DB_PARTS, DB_UPLOADED},
+    db::{DB_PARTS, DB_UPLOADED, is_lock_error, open_state},
     part::Part,
 };
 use anyhow::{Context, Result};
@@ -214,7 +214,7 @@ fn load_entry(id: &str, state_dir: &Path) -> StreamEntry {
         }
         Err(error) => {
             let error_message = metadata_error.unwrap_or_else(|| error.to_string());
-            let status = if metadata.is_some() && is_db_lock_error(&error_message) {
+            let status = if metadata.is_some() && is_lock_error(&error_message) {
                 StreamStatus::Active
             } else {
                 StreamStatus::Broken
@@ -258,11 +258,7 @@ fn determine_status(updated_at: Option<u64>, timestamp_trust: TimestampTrust) ->
 }
 
 fn inspect_db(state_dir: &Path, metadata: Option<&StreamMetadata>) -> Result<DbSnapshot> {
-    let db = sled::Config::new()
-        .path(state_dir)
-        .use_compression(false)
-        .mode(sled::Mode::LowSpace)
-        .open()?;
+    let db = open_state(state_dir)?;
 
     let db_key = metadata
         .map(|metadata| metadata.db_key.clone())
@@ -331,10 +327,6 @@ fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or_default(|duration| duration.as_secs())
-}
-
-fn is_db_lock_error(error: &str) -> bool {
-    error.contains("could not acquire lock")
 }
 
 /// # Errors
