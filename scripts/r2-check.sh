@@ -46,16 +46,24 @@ cleanup() {
       failed=1
     }
   done
-  # A failed or interrupted multipart upload keeps its parts until aborted.
+  # A failed or interrupted multipart upload keeps its parts until aborted. If this
+  # script alone is killed while an s3m child still runs, the child holds the state
+  # lock and its upload can't be seen here; the bucket's lifecycle rule for
+  # incomplete multipart uploads is the backstop for that case.
   if [[ -d "$S3M_HOME" ]]; then
-    while IFS=$'\t' read -r destination upload_id; do
-      [[ -n "$upload_id" ]] || continue
-      s3m rm "$host/$destination" --abort "$upload_id" >/dev/null 2>&1 || {
-        echo "cleanup: could not abort the upload of $host/$destination" >&2
-        failed=1
-      }
-    done < <(s3m streams --json ls 2>/dev/null |
-      jq -r '.streams[]? | select(.etag == null and .upload_id != null) | [.destination, .upload_id] | @tsv')
+    local streams
+    if streams=$(s3m streams --json ls 2>/dev/null); then
+      while IFS=$'\t' read -r destination upload_id; do
+        [[ -n "$upload_id" ]] || continue
+        s3m rm "$host/$destination" --abort "$upload_id" >/dev/null 2>&1 || {
+          echo "cleanup: could not abort the upload of $host/$destination" >&2
+          failed=1
+        }
+      done < <(jq -r '.streams[]? | select(.etag == null and .upload_id != null) | [.destination, .upload_id] | @tsv' <<<"$streams")
+    else
+      echo "cleanup: could not read the upload state in $S3M_HOME" >&2
+      failed=1
+    fi
   fi
   rm -rf "$work"
   # Leftovers in the bucket fail an otherwise green run.
