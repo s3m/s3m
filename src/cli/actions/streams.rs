@@ -6,7 +6,7 @@ use crate::{
         start::get_host,
         time,
     },
-    s3::{Credentials, S3},
+    s3::S3,
     stream::{
         db::Db,
         state::{
@@ -443,7 +443,7 @@ async fn resume_stream(
     )?;
     let host = get_host(&config, config_dir(config_file), &location)?;
     let region = host.get_region()?;
-    let credentials = Credentials::new(&host.access_key, &host.secret_key);
+    let credentials = host.credentials(&location.host, false)?;
     let s3 = S3::new(
         &credentials,
         &region,

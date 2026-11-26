@@ -11,7 +11,7 @@ use crate::{
         start::get_host,
         time,
     },
-    s3::{Credentials, ObjectLock, ObjectLockMode, S3, actions::ObjectIdentifier},
+    s3::{ObjectLock, ObjectLockMode, S3, actions::ObjectIdentifier},
 };
 use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
@@ -822,7 +822,7 @@ fn build_delete_groups(
 
         let host = get_host(config, config_path, &location)?;
         let region = host.get_region()?;
-        let credentials = Credentials::new(&host.access_key, &host.secret_key);
+        let credentials = host.credentials(&location.host, no_sign_request)?;
 
         groups.insert(
             group_key,

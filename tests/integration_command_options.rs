@@ -208,6 +208,66 @@ fn host_bucket_and_unknown_config_keys_are_ignored() -> Result<()> {
     Ok(())
 }
 
+// A missing or misspelled key used to be sent as an empty credential and fail as a
+// signature error from the server. It is now reported before any request, unless
+// the requests are unsigned (--no-sign-request, for public buckets).
+#[test]
+fn missing_host_keys_fail_before_any_request() -> Result<()> {
+    let mut server = Server::new();
+    let cli = Cli::new(&server.url())?;
+    let url = server.url();
+    fs::write(
+        &cli.config,
+        format!(
+            "---\nhosts:\n  s3:\n    endpoint: {url}\n    region: {REGION}\n    acess_key: {ACCESS_KEY}\n    secret_key: {SECRET_KEY}\n"
+        ),
+    )?;
+    let forbidden = forbid_requests(&mut server);
+    let args = ["acl", OBJECT];
+    let output = Command::new(env!("CARGO_BIN_EXE_s3m"))
+        .env("HOME", cli.home.path())
+        .env_remove("AWS_ACCESS_KEY_ID")
+        .env_remove("AWS_SECRET_ACCESS_KEY")
+        .current_dir(&cli.work)
+        .arg("--config")
+        .arg(&cli.config)
+        .args(args)
+        .output()?;
+    expect_exit(&output, 1, &args)?;
+    let stderr = text(&output.stderr);
+    ensure!(
+        stderr.contains(
+            "hosts.s3 has no access_key in the config; set it, or use --no-sign-request for a public bucket"
+        ),
+        "{stderr}"
+    );
+    assert_all(&forbidden);
+
+    // Unsigned requests need no keys.
+    let policy = "<AccessControlPolicy/>";
+    let get = server
+        .mock("GET", OBJECT_PATH)
+        .match_query(Matcher::Any)
+        .match_header("authorization", Matcher::Missing)
+        .with_body(policy)
+        .expect(1)
+        .create();
+    let args = ["--no-sign-request", "acl", OBJECT];
+    let output = Command::new(env!("CARGO_BIN_EXE_s3m"))
+        .env("HOME", cli.home.path())
+        .env_remove("AWS_ACCESS_KEY_ID")
+        .env_remove("AWS_SECRET_ACCESS_KEY")
+        .current_dir(&cli.work)
+        .arg("--config")
+        .arg(&cli.config)
+        .args(args)
+        .output()?;
+    let stdout = expect_exit(&output, 0, &args)?;
+    assert_eq!(stdout, format!("{policy}\n"));
+    get.assert();
+    Ok(())
+}
+
 #[test]
 fn acl_without_flag_prints_the_current_policy_document() -> Result<()> {
     let mut server = Server::new();

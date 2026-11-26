@@ -141,13 +141,13 @@ fn apply_host_defaults(host: &Host, global_args: &mut GlobalArgs) -> Result<()> 
     Ok(())
 }
 
-fn build_s3(matches: &ArgMatches, host: &Host, bucket: Option<String>) -> Result<S3> {
+fn build_s3(matches: &ArgMatches, name: &str, host: &Host, bucket: Option<String>) -> Result<S3> {
     let region = host.get_region()?;
-    let credentials = Credentials::new(&host.access_key, &host.secret_key);
     let no_sign_request = matches
         .get_one::<bool>("no-sign-request")
         .copied()
         .unwrap_or(false);
+    let credentials = host.credentials(name, no_sign_request)?;
 
     Ok(S3::new(&credentials, &region, bucket, no_sign_request))
 }
@@ -166,7 +166,7 @@ fn resolve_s3_and_action(
     log::debug!("host: {host:#?}");
 
     apply_host_defaults(host, global_args)?;
-    let s3 = build_s3(matches, host, s3_location.bucket.clone())?;
+    let s3 = build_s3(matches, &s3_location.host, host, s3_location.bucket.clone())?;
     log::debug!("S3:\n{s3}");
 
     let action = dispatch::dispatch(&s3_location, buf_size, config_path, matches, global_args)?;

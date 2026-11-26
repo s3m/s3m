@@ -1,5 +1,5 @@
-use crate::s3::Region;
-use anyhow::{Context, Result};
+use crate::s3::{Credentials, Region};
+use anyhow::{Context, Result, bail};
 use secrecy::SecretString;
 use serde::{Deserialize, Deserializer, de::Error};
 use std::{collections::BTreeMap, fs::File, path::PathBuf};
@@ -169,6 +169,34 @@ impl Config {
 }
 
 impl Host {
+    /// The credentials to sign the host's requests with: `AWS_ACCESS_KEY_ID` and
+    /// `AWS_SECRET_ACCESS_KEY` when set, otherwise `access_key` and `secret_key`.
+    ///
+    /// # Errors
+    /// Will return an error if a key is missing, unless the requests are unsigned
+    /// (`--no-sign-request`, for public buckets), so a missing or misspelled key is
+    /// reported before any request instead of failing as a signature error.
+    pub fn credentials(&self, name: &str, no_sign_request: bool) -> Result<Credentials> {
+        let credentials = Credentials::new(&self.access_key, &self.secret_key);
+        if no_sign_request {
+            return Ok(credentials);
+        }
+        let missing: Vec<&str> = [
+            (credentials.aws_access_key_id(), "access_key"),
+            (credentials.aws_secret_access_key(), "secret_key"),
+        ]
+        .into_iter()
+        .filter_map(|(value, key)| value.is_empty().then_some(key))
+        .collect();
+        if !missing.is_empty() {
+            bail!(
+                "hosts.{name} has no {} in the config; set it, or use --no-sign-request for a public bucket",
+                missing.join(" and ")
+            );
+        }
+        Ok(credentials)
+    }
+
     /// Get the region for the host
     /// # Errors
     /// Will return an error if the region is not found
@@ -342,6 +370,44 @@ hosts:
             c.hosts.get("s3").unwrap().region,
             Some("xx-region-y.foo".to_string())
         );
+    }
+
+    #[test]
+    fn test_credentials_report_missing_keys() {
+        // AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY replace the config's keys.
+        if std::env::var_os("AWS_ACCESS_KEY_ID").is_some()
+            || std::env::var_os("AWS_SECRET_ACCESS_KEY").is_some()
+        {
+            return;
+        }
+        let parse = |yaml: &str| {
+            let mut tmp_file = NamedTempFile::new().unwrap();
+            tmp_file.write_all(yaml.as_bytes()).unwrap();
+            Config::new(tmp_file.into_temp_path().to_path_buf()).unwrap()
+        };
+
+        let c = parse("hosts:\n  h:\n    region: us-east-1\n    acess_key: A\n    secret_key: B\n");
+        let host = c.get_host("h").unwrap();
+        assert_eq!(
+            host.credentials("h", false).unwrap_err().to_string(),
+            "hosts.h has no access_key in the config; set it, or use --no-sign-request for a public bucket"
+        );
+        assert!(host.credentials("h", true).is_ok());
+
+        let c = parse("hosts:\n  h:\n    region: us-east-1\n");
+        assert_eq!(
+            c.get_host("h")
+                .unwrap()
+                .credentials("h", false)
+                .unwrap_err()
+                .to_string(),
+            "hosts.h has no access_key and secret_key in the config; set it, or use --no-sign-request for a public bucket"
+        );
+
+        let c =
+            parse("hosts:\n  h:\n    region: us-east-1\n    access_key: A\n    secret_key: B\n");
+        let credentials = c.get_host("h").unwrap().credentials("h", false).unwrap();
+        assert_eq!(credentials.aws_access_key_id(), "A");
     }
 
     #[test]

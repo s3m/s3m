@@ -1,4 +1,5 @@
 ## Unreleased
+* **Missing keys are reported before any request**: a host without `access_key` or `secret_key` (or with a misspelled one, such as `acess_key:`) used to send requests with an empty credential, which the server rejected with a signature error that didn't name the cause. s3m now stops first with `hosts.<host> has no access_key in the config; set it, or use --no-sign-request for a public bucket` (exit 1). `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` still replace the config's keys, and `--no-sign-request` still needs no keys. Unknown keys in the config are still ignored.
 * **`bucket` in a host's config is not a default bucket**: the README showed `bucket: my-bucket  # optional default bucket`, but s3m never used the setting. The bucket always comes from the path (`host/bucket/key`), so for example `s3m ls r2` lists the buckets, not the objects of a default bucket. The README no longer shows it. Configs that set it keep working, and the setting is still ignored.
 
 ## 0.24.0 🐳 (2026-11-24)
