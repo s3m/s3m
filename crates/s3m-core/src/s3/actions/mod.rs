@@ -169,16 +169,18 @@ pub trait Action {
         // --no-sign-request: no authorization, but the request still needs what
         // describes its body and the action's own headers (ACL, metadata, checksum).
         // Without Content-Length an upload is sent chunked, which S3 rejects.
+        // Names are lowercased and values trimmed as for signed requests
+        // (`Signature::add_header`), so names differing only in case stay one header.
         if s3.no_sign_request {
             let mut headers = BTreeMap::new();
             if let Some(length) = content_length {
                 headers.insert("content-length".to_string(), length.to_string());
             }
             if let Some(md5) = md5 {
-                headers.insert("Content-MD5".to_string(), Base64::encode_string(md5));
+                headers.insert("content-md5".to_string(), Base64::encode_string(md5));
             }
             for (key, value) in custom_headers.into_iter().flatten() {
-                headers.insert(key.to_string(), value.to_string());
+                headers.insert(key.to_ascii_lowercase(), value.trim().to_string());
             }
             return Ok((url, headers));
         }

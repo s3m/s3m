@@ -1,5 +1,5 @@
 use crate::stream::{
-    db::{DB_PARTS, DB_UPLOADED, is_lock_error, open_state},
+    db::{DB_PARTS, DB_UPLOADED, is_lock_error, open_state_once},
     part::Part,
 };
 use anyhow::{Context, Result};
@@ -258,7 +258,7 @@ fn determine_status(updated_at: Option<u64>, timestamp_trust: TimestampTrust) ->
 }
 
 fn inspect_db(state_dir: &Path, metadata: Option<&StreamMetadata>) -> Result<DbSnapshot> {
-    let db = open_state(state_dir)?;
+    let db = open_state_once(state_dir)?;
 
     let db_key = metadata
         .map(|metadata| metadata.db_key.clone())
@@ -358,10 +358,17 @@ mod tests {
     use super::*;
     use crate::{
         s3::{Credentials, Region, S3},
-        stream::db::Db,
+        stream::db::{Db, open_state},
     };
     use secrecy::SecretString;
     use tempfile::tempdir;
+
+    // sled can keep the state lock for a moment after a handle is dropped. Listing
+    // doesn't wait for a lock (it means another s3m is uploading), so a test that
+    // lists right after dropping its own handle waits here first.
+    fn wait_for_state_lock(state_dir: &Path) {
+        drop(open_state(state_dir).unwrap());
+    }
 
     fn test_s3() -> S3 {
         S3::new(
@@ -407,6 +414,7 @@ mod tests {
         )
         .unwrap();
         drop(db);
+        wait_for_state_lock(&state_dir(dir.path(), "stream-1"));
 
         let entries = scan_streams(dir.path()).unwrap();
         assert_eq!(entries.len(), 1);
@@ -697,6 +705,7 @@ mod tests {
         db.create_part(1, 0, 10, None).unwrap();
         db.flush().unwrap();
         drop(db);
+        wait_for_state_lock(&state_dir(dir.path(), "legacy"));
 
         let legacy_dir = state_dir(dir.path(), "legacy");
         fs::write(

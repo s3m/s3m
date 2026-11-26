@@ -26,13 +26,28 @@ pub(crate) fn is_lock_error(error: &str) -> bool {
     error.contains("could not acquire lock")
 }
 
-/// Open the sled database holding an upload's state.
+/// Open the sled database holding an upload's state, waiting briefly for its lock.
 ///
 /// # Errors
 ///
 /// Will return `Err` if the database can not be opened, or if its lock is still
 /// held after a short wait
 pub(crate) fn open_state(path: &Path) -> sled::Result<sled::Db> {
+    open_state_with(path, LOCK_ATTEMPTS, LOCK_RETRY_DELAY)
+}
+
+/// Open an upload's state without waiting for its lock: for listing the states,
+/// where a held lock means another s3m is uploading and waiting would only slow
+/// the listing down.
+///
+/// # Errors
+///
+/// Will return `Err` if the database can not be opened or its lock is held
+pub(crate) fn open_state_once(path: &Path) -> sled::Result<sled::Db> {
+    open_state_with(path, 1, Duration::ZERO)
+}
+
+fn open_state_with(path: &Path, attempts: u32, delay: Duration) -> sled::Result<sled::Db> {
     let mut attempt = 1;
     loop {
         let result = sled::Config::new()
@@ -41,9 +56,9 @@ pub(crate) fn open_state(path: &Path) -> sled::Result<sled::Db> {
             .mode(sled::Mode::LowSpace)
             .open();
         match result {
-            Err(error) if attempt < LOCK_ATTEMPTS && is_lock_error(&error.to_string()) => {
+            Err(error) if attempt < attempts && is_lock_error(&error.to_string()) => {
                 attempt += 1;
-                sleep(LOCK_RETRY_DELAY);
+                sleep(delay);
             }
             result => return result,
         }
@@ -282,11 +297,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let held = open_state(dir.path()).unwrap();
         let release = std::thread::spawn(move || {
-            sleep(LOCK_RETRY_DELAY * 2);
+            sleep(Duration::from_millis(50));
             drop(held);
         });
 
-        let reopened = open_state(dir.path());
+        // A budget of several seconds, so a slow machine can't run out of attempts.
+        let reopened = open_state_with(dir.path(), 500, Duration::from_millis(10));
 
         release.join().unwrap();
         assert!(reopened.is_ok(), "{:?}", reopened.err());
@@ -299,7 +315,8 @@ mod tests {
         let held = open_state(dir.path()).unwrap();
 
         let error = open_state(dir.path()).unwrap_err().to_string();
-
+        assert!(is_lock_error(&error), "{error}");
+        let error = open_state_once(dir.path()).unwrap_err().to_string();
         assert!(is_lock_error(&error), "{error}");
         drop(held);
     }

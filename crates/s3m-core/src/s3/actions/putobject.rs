@@ -265,7 +265,12 @@ mod tests {
             Some("awsexamplebucket1".to_string()),
             true,
         );
-        let meta = BTreeMap::from([("x-amz-meta-owner".to_string(), "me".to_string())]);
+        // Names that differ only in case are one header, as when signed; the map's
+        // order decides which value is kept.
+        let meta = BTreeMap::from([
+            ("x-amz-meta-Owner".to_string(), "other".to_string()),
+            ("x-amz-meta-owner".to_string(), " me ".to_string()),
+        ]);
         let action = PutObject::new(
             "key",
             Path::new("/"),
@@ -286,11 +291,11 @@ mod tests {
         assert_eq!(
             headers,
             BTreeMap::from([
+                ("content-length".to_string(), "11".to_string()),
                 (
-                    "Content-MD5".to_string(),
+                    "content-md5".to_string(),
                     "MDEyMzQ1Njc4OWFiY2RlZg==".to_string()
                 ),
-                ("content-length".to_string(), "11".to_string()),
                 ("x-amz-acl".to_string(), "public-read".to_string()),
                 ("x-amz-meta-owner".to_string(), "me".to_string()),
             ])
