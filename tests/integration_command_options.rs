@@ -174,6 +174,43 @@ fn list_mock(server: &mut ServerGuard, query: &[(&str, &str)], body: String) -> 
         .create()
 }
 
+// `bucket` in a host's config was documented as a default bucket but never used:
+// the bucket always comes from the path. s3m now says so instead of ignoring it.
+#[test]
+fn host_bucket_setting_is_ignored_with_a_warning() -> Result<()> {
+    let mut server = Server::new();
+    let policy = "<AccessControlPolicy/>";
+    let get = server
+        .mock("GET", OBJECT_PATH)
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&[("acl", "")]))
+        .with_body(policy)
+        .expect(1)
+        .create();
+    let elsewhere = server
+        .mock("GET", Matcher::Regex("^/default-bucket".into()))
+        .expect(0)
+        .create();
+    let cli = Cli::new(&server.url())?;
+    let mut config = fs::read_to_string(&cli.config)?;
+    config.push_str("\n    bucket: default-bucket\n");
+    fs::write(&cli.config, config)?;
+
+    let args = ["acl", OBJECT];
+    let output = cli.run(&args)?;
+    let stdout = expect_exit(&output, 0, &args)?;
+
+    assert_eq!(stdout, format!("{policy}\n"));
+    assert_eq!(
+        text(&output.stderr),
+        "warning: hosts.s3.bucket (default-bucket) in the config is ignored; \
+         give the bucket in the path: s3/<bucket>/<key>\n"
+    );
+    get.assert();
+    elsewhere.assert();
+    Ok(())
+}
+
 #[test]
 fn acl_without_flag_prints_the_current_policy_document() -> Result<()> {
     let mut server = Server::new();

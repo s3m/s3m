@@ -57,8 +57,9 @@ hosts:
     endpoint: s3.us-west-2.amazonaws.com
     access_key: YOUR_ACCESS_KEY
     secret_key: YOUR_SECRET_KEY
-    bucket: my-bucket  # optional default bucket
 ```
+
+The bucket is always part of the path (`s3/my-bucket/file`); a host has no default bucket.
 
 ### Multiple Providers
 
@@ -275,7 +276,6 @@ hosts:
     endpoint: s3.us-west-2.amazonaws.com
     access_key: YOUR_ACCESS_KEY
     secret_key: YOUR_SECRET_KEY
-    bucket: my-bucket
     enc_key: 0123456789abcdef0123456789abcdef
 ```
 

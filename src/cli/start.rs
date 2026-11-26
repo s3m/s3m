@@ -164,6 +164,9 @@ fn resolve_s3_and_action(
 
     let host = get_host(config, config_path, &s3_location)?;
     log::debug!("host: {host:#?}");
+    if let Some(warning) = host.ignored_bucket_warning(&s3_location.host) {
+        eprintln!("warning: {warning}");
+    }
 
     apply_host_defaults(host, global_args)?;
     let s3 = build_s3(matches, host, s3_location.bucket.clone())?;
