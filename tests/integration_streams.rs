@@ -548,6 +548,36 @@ fn test_streams_resume_fails_when_source_file_changed() {
     );
 }
 
+// `streams resume` loads the host from the config, so it reports an ignored `bucket`
+// like every other command that uses a host.
+#[test]
+fn test_streams_resume_warns_about_ignored_host_bucket() {
+    let home = tempdir().unwrap();
+    let config_dir = home.path().join(".config").join("s3m");
+    fs::create_dir_all(&config_dir).unwrap();
+    // Nothing listens on port 1, so the resume fails right after loading the host.
+    fs::write(
+        config_dir.join("config.yml"),
+        "---\nhosts:\n  s3:\n    endpoint: http://127.0.0.1:1\n    region: us-east-1\n    access_key: XXX\n    secret_key: YYY\n    bucket: ignored\n",
+    )
+    .unwrap();
+    create_valid_resumable_state(home.path(), "good-id");
+
+    let output = run_streams(home.path(), &["streams", "resume", "good-id"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr
+            .matches(
+                "warning: hosts.s3.bucket (ignored) in the config is ignored, \
+                 there is no default bucket; remove the setting\n"
+            )
+            .count(),
+        1,
+        "{stderr}"
+    );
+}
+
 #[test]
 fn test_streams_resume_refuses_unusable_state_and_keeps_it() {
     let home = tempdir().unwrap();

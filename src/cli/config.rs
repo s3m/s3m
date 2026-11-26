@@ -169,14 +169,15 @@ impl Config {
 }
 
 impl Host {
-    /// A warning when the host sets `bucket`, which s3m ignores: every command takes
-    /// the bucket from its path (`host/bucket/key`).
+    /// A warning when the host sets `bucket`, which s3m ignores: there is no default
+    /// bucket. Commands take the bucket from their path (`host/bucket/key`), and
+    /// `monitor` from `buckets`.
     #[must_use]
     pub fn ignored_bucket_warning(&self, name: &str) -> Option<String> {
         self.bucket.as_ref().map(|bucket| {
             format!(
-                "hosts.{name}.bucket ({bucket}) in the config is ignored; \
-                 give the bucket in the path: {name}/<bucket>/<key>"
+                "hosts.{name}.bucket ({bucket}) in the config is ignored, \
+                 there is no default bucket; remove the setting"
             )
         })
     }
@@ -367,8 +368,8 @@ hosts:
                 .ignored_bucket_warning("s3")
                 .as_deref(),
             Some(
-                "hosts.s3.bucket (my-bucket) in the config is ignored; \
-                 give the bucket in the path: s3/<bucket>/<key>"
+                "hosts.s3.bucket (my-bucket) in the config is ignored, \
+                 there is no default bucket; remove the setting"
             )
         );
 
