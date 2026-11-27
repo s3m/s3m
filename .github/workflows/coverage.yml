@@ -81,16 +81,26 @@ jobs:
         run: grcov . --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing
           --ignore '../**' --ignore '/*' -o coverage.lcov
 
+      # grcov merged the raw profiles into coverage.lcov. Left in place, the uploaders
+      # find them: one per test process, several GB in all (#94).
+      - name: Remove raw coverage profiles
+        run: find . -name '*.profraw' -not -path './target/*' -delete
+
       - name: Stop RustFS
         if: always()
         run: docker rm -f s3m-coverage-rustfs 2>/dev/null || true
 
+      # Only coverage.lcov: without disable_search the action also uploads every
+      # coverage-like file it finds, and plugins: noop skips its gcov search (#94).
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v7
+        timeout-minutes: 10
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: coverage.lcov
+          disable_search: true
+          plugins: noop
           flags: rust
 
       - name: Coveralls GitHub Action
