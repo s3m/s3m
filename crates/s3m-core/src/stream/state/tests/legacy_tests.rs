@@ -101,6 +101,25 @@ impl Fixture {
 }
 
 #[test]
+fn open_existing_rejects_each_owner_of_a_shared_legacy_upload() {
+    let fixture = Fixture::new();
+    fixture.multipart("first", 1, true, false);
+    fixture.multipart("second", 2, true, false);
+    let path = fixture.dir();
+    wait_for_state_lock(&path);
+
+    for (object, mtime) in [("first", 1), ("second", 2)] {
+        let Err(error) = Db::open_existing(&path, fixture.key(object, mtime)) else {
+            panic!("open_existing accepted shared legacy multipart parts for {object}");
+        };
+        assert!(
+            error.to_string().contains("parts cannot be attributed"),
+            "{object} should be rejected as an owner of shared parts: {error}"
+        );
+    }
+}
+
+#[test]
 fn completed_legacy_single_puts_are_removable_and_rerunnable() {
     let f = Fixture::new();
     let storage = open_state(&f.dir()).unwrap();
