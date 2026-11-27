@@ -155,11 +155,27 @@ impl Db {
     pub fn forget_upload(&self) -> Result<()> {
         self.storage
             .remove(format!("etag {}", self.key).as_bytes())?;
+        self.remove_multipart_records()?;
+        self.flush()?;
+        Ok(())
+    }
+
+    /// Clear the multipart upload id and parts while keeping the saved `ETag`.
+    ///
+    /// # Errors
+    /// Returns an error if the saved state cannot be updated.
+    pub fn forget_multipart_upload(&self) -> Result<()> {
+        self.db_parts()?.clear()?;
+        self.db_uploaded()?.clear()?;
+        self.remove_multipart_records()?;
+        self.flush()?;
+        Ok(())
+    }
+
+    fn remove_multipart_records(&self) -> Result<()> {
         self.storage
             .remove(format!("checksum {}", self.key).as_bytes())?;
         self.storage.remove(&self.key)?;
-        self.storage.flush()?;
-        state::touch_metadata(&self.state_dir)?;
         Ok(())
     }
 

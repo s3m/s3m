@@ -2,10 +2,9 @@ use crate::{
     s3::RequestOptions,
     s3::S3,
     stream::{
-        InitialStreamParams, STDIN_BUFFER_SIZE, Stream, complete_multipart_upload, compress_chunk,
-        create_initial_stream, create_nonce_header, encrypt_chunk, get_key, init_encryption,
-        initiate_multipart_upload, maybe_upload_part, setup_stream_progress, upload_final_part,
-        write_to_stream,
+        InitialStreamParams, STDIN_BUFFER_SIZE, Stream, compress_chunk, create_initial_stream,
+        create_nonce_header, encrypt_chunk, finish_stream_upload, get_key, init_encryption,
+        maybe_upload_part, setup_stream_progress, with_multipart_upload, write_to_stream,
     },
 };
 use aead_stream::EncryptorBE32;
@@ -46,64 +45,61 @@ pub async fn stream_stdin_compressed_encrypted(
         "application/vnd.s3m.encrypted".to_string(),
     );
 
-    // S3 setup
-    let upload_id =
-        initiate_multipart_upload(s3, &key, acl, meta, globals.object_lock.clone()).await?;
-
-    let progress_sender = setup_stream_progress(quiet).await;
-
-    // Initialize encryption
-    let (cipher, nonce_bytes) = init_encryption(encryption_key)?;
-    let encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
-
-    let nonce_header = create_nonce_header(&nonce_bytes);
-
-    // Create initial stream
-    let first_stream: Stream = create_initial_stream(InitialStreamParams {
-        upload_id: &upload_id,
-        tmp_dir: &tmp_dir,
-        key: &key,
+    with_multipart_upload(
         s3,
-        progress_sender,
-        globals: &globals,
-        header_data: Some(&nonce_header),
-    })?;
+        &key,
+        acl,
+        meta,
+        globals.object_lock.clone(),
+        async |upload_id| {
+            let progress_sender = setup_stream_progress(quiet).await;
 
-    let mut stream = FramedRead::new(stdin(), BytesCodec::new())
-        .map_err(|e| anyhow!("Error reading STDIN chunk: {e}"))
-        .try_fold(
-            (first_stream, encryptor), // Initial accumulator tuple (encryptor is moved here)
-            |(mut current_upload_state_acc, mut current_encryptor_acc), chunk| async move {
-                // Compress the current chunk
-                let compress_data = compress_chunk(chunk).await?;
+            // Initialize encryption
+            let (cipher, nonce_bytes) = init_encryption(encryption_key)?;
+            let encryptor = EncryptorBE32::from_aead(cipher, (&nonce_bytes).into());
 
-                // Encrypt the current chunk
-                let encrypted_data = encrypt_chunk(&mut current_encryptor_acc, &compress_data)
-                    .map_err(|e| anyhow!("Failed to encrypt chunk: {e}"))?;
+            let nonce_header = create_nonce_header(&nonce_bytes);
 
-                // Write the encrypted chunk to our internal buffer/temp file
-                write_to_stream(&mut current_upload_state_acc, &encrypted_data).map_err(|e| {
-                    anyhow!("Failed to write encrypted chunk to upload stream: {e}")
-                })?;
+            // Create initial stream
+            let first_stream: Stream = create_initial_stream(InitialStreamParams {
+                upload_id,
+                tmp_dir: &tmp_dir,
+                key: &key,
+                s3,
+                progress_sender,
+                globals: &globals,
+                header_data: Some(&nonce_header),
+            })?;
 
-                // Check if a part needs to be uploaded to S3
-                maybe_upload_part(&mut current_upload_state_acc, STDIN_BUFFER_SIZE).await?;
+            let stream = FramedRead::new(stdin(), BytesCodec::new())
+                .map_err(|e| anyhow!("Error reading STDIN chunk: {e}"))
+                .try_fold(
+                    (first_stream, encryptor), // Initial accumulator tuple (encryptor is moved here)
+                    |(mut current_upload_state_acc, mut current_encryptor_acc), chunk| async move {
+                        // Compress the current chunk
+                        let compress_data = compress_chunk(chunk).await?;
 
-                Ok((current_upload_state_acc, current_encryptor_acc)) // Return updated accumulator
-            },
-        )
-        .await // This results in Result<(UploadStream, EncryptorBE32), Error>
-        .map(|(final_stream_state, _)| final_stream_state)?; // Extract only UploadStream from Ok variant
+                        // Encrypt the current chunk
+                        let encrypted_data =
+                            encrypt_chunk(&mut current_encryptor_acc, &compress_data)
+                                .map_err(|e| anyhow!("Failed to encrypt chunk: {e}"))?;
 
-    // Upload final part and complete multipart upload
-    let final_etag = upload_final_part(&stream).await?;
+                        // Write the encrypted chunk to our internal buffer/temp file
+                        write_to_stream(&mut current_upload_state_acc, &encrypted_data).map_err(
+                            |e| anyhow!("Failed to write encrypted chunk to upload stream: {e}"),
+                        )?;
 
-    stream.etags.push(final_etag);
+                        // Check if a part needs to be uploaded to S3
+                        maybe_upload_part(&mut current_upload_state_acc, STDIN_BUFFER_SIZE).await?;
 
-    // Close channel if it exists
-    if let Some(sender) = stream.channel.take() {
-        drop(sender);
-    }
+                        Ok((current_upload_state_acc, current_encryptor_acc)) // Return updated accumulator
+                    },
+                )
+                .await // This results in Result<(UploadStream, EncryptorBE32), Error>
+                .map(|(final_stream_state, _)| final_stream_state)?; // Extract only UploadStream from Ok variant
 
-    complete_multipart_upload(s3, &key, &upload_id, stream.etags).await
+            finish_stream_upload(stream).await
+        },
+    )
+    .await
 }

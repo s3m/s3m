@@ -239,17 +239,70 @@ pub fn init_decryption(
     Ok(DecryptorBE32::from_aead(cipher, nonce.into()))
 }
 
-/// Initialize multipart upload
-async fn initiate_multipart_upload(
+/// Run a streamed upload without saved state and try to abort on any error
+/// after receiving its upload id.
+async fn with_multipart_upload(
     s3: &S3,
     key: &str,
     acl: Option<String>,
     meta: BTreeMap<String, String>,
     object_lock: Option<ObjectLock>,
+    upload: impl AsyncFnOnce(&str) -> Result<String>,
 ) -> Result<String> {
     let action = actions::CreateMultipartUpload::new(key, acl, Some(meta), None, object_lock);
-    let response = action.request(s3).await?;
-    Ok(response.upload_id)
+    let upload_id = action.request(s3).await?.upload_id;
+    match upload(&upload_id).await {
+        Ok(report) => Ok(report),
+        Err(error) => match actions::AbortMultipartUpload::new(key, &upload_id)
+            .request_if_open(s3)
+            .await
+        {
+            Ok(()) => Err(error),
+            Err(abort) => Err(error.context(StreamAbortFailed {
+                endpoint: s3.endpoint().map_or_else(
+                    |_| "<host>".into(),
+                    |url| url.origin().ascii_serialization(),
+                ),
+                host: None,
+                bucket: s3.bucket().unwrap_or_default().to_owned(),
+                key: key.to_owned(),
+                upload_id,
+                abort,
+            })),
+        },
+    }
+}
+
+/// Error context when a failed streamed upload could not be aborted.
+#[derive(Debug)]
+pub struct StreamAbortFailed {
+    endpoint: String,
+    host: Option<String>,
+    bucket: String,
+    key: String,
+    upload_id: String,
+    abort: crate::s3::Error,
+}
+
+impl StreamAbortFailed {
+    /// Set the configured host name to include it in the manual abort command.
+    pub fn set_host_alias(&mut self, host: String) {
+        self.host = Some(host);
+    }
+}
+
+impl std::fmt::Display for StreamAbortFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let destination = self.host.as_deref().unwrap_or(&self.endpoint);
+        let host = self.host.as_deref().unwrap_or("<host>");
+        let command = actions::AbortMultipartUpload::new(&self.key, &self.upload_id)
+            .command(host, &self.bucket);
+        write!(
+            f,
+            "could not abort multipart upload {} for {destination}/{}/{} ({}). Abort it with `{command}`",
+            self.upload_id, self.bucket, self.key, self.abort
+        )
+    }
 }
 
 async fn setup_progress(quiet: bool, size: u64) -> Option<UnboundedSender<usize>> {
@@ -559,6 +612,13 @@ pub async fn maybe_upload_part(stream: &mut Stream<'_>, buffer_size: usize) -> R
     Ok(())
 }
 
+async fn finish_stream_upload(mut stream: Stream<'_>) -> Result<String> {
+    let final_etag = upload_final_part(&stream).await?;
+    stream.etags.push(final_etag);
+    drop(stream.channel.take());
+    complete_multipart_upload(stream.s3, stream.key, stream.upload_id, stream.etags).await
+}
+
 /// Complete the multipart upload and return its report (see [`upload_report`]).
 async fn complete_multipart_upload(
     s3: &S3,
@@ -578,8 +638,7 @@ async fn complete_multipart_upload(
         return Err(anyhow!(
             "Upload failed: {part_count} parts created, but S3 allows maximum 10,000 parts. \
             This is a bug in s3m - please report at https://github.com/s3m/s3m/issues with file size and buffer settings. \
-            The incomplete multipart upload (ID: {upload_id}) may need manual cleanup using: \
-            s3m rm {key} --abort {upload_id}"
+            Upload ID: {upload_id}, Key: {key}"
         ));
     }
 
@@ -762,7 +821,7 @@ mod tests {
                 "AKIAIOSFODNN7EXAMPLE",
                 &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
             ),
-            &"us-west-1".parse::<Region>().unwrap(),
+            &Region::custom("us-west-1", "http://127.0.0.1:0"),
             Some("awsexamplebucket1".to_string()),
             false,
         );
@@ -1306,15 +1365,45 @@ mod tests {
 
     #[tokio::test]
     async fn test_complete_multipart_upload_10001_parts_returns_error() {
-        let s3 = create_test_s3();
+        let mut server = Server::new_async().await;
+        let s3 = create_mock_s3(server.url(), Some("bucket"));
         let etags: Vec<String> = (1..=10_001).map(|i| format!("etag{i}")).collect();
+        let initiate = server.mock("POST", "/bucket/test-key")
+            .match_query(Matcher::UrlEncoded("uploads".into(), String::new()))
+            .with_body("<InitiateMultipartUploadResult><UploadId>upload-123</UploadId></InitiateMultipartUploadResult>")
+            .create_async().await;
+        let upload_query = Matcher::UrlEncoded("uploadId".into(), "upload-123".into());
+        let complete = server
+            .mock("POST", "/bucket/test-key")
+            .match_query(upload_query.clone())
+            .expect(0)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/test-key")
+            .match_query(upload_query)
+            .with_status(403)
+            .with_body("<Error><Code>AccessDenied</Code></Error>")
+            .create_async()
+            .await;
 
-        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
+        let result = with_multipart_upload(
+            &s3,
+            "test-key",
+            None,
+            BTreeMap::new(),
+            None,
+            async |upload_id| complete_multipart_upload(&s3, "test-key", upload_id, etags).await,
+        )
+        .await;
+        for mock in [initiate, complete, abort] {
+            mock.assert_async().await;
+        }
 
         // Should return error, not panic
         assert!(result.is_err(), "Expected error for exceeding 10,000 parts");
 
-        let err_msg = result.unwrap_err().to_string();
+        let err_msg = format!("{:#}", result.unwrap_err());
         assert!(
             err_msg.contains("10001 parts created"),
             "Error message should mention part count. Got: {err_msg}"

@@ -1,7 +1,13 @@
 //! Upload options through Cargo's binary and independent wire/byte oracles.
 use anyhow::{Context, Result, ensure};
 use mockito::{Matcher, Server};
-use std::fs;
+use std::{
+    fs,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 #[path = "support/upload_fixture.rs"]
 mod upload_fixture;
 #[cfg(target_os = "linux")]
@@ -16,6 +22,133 @@ mod upload_wire;
 const INIT: &str = "<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>UP1</UploadId></InitiateMultipartUploadResult>";
 const DONE: &str = "<CompleteMultipartUploadResult><Location>loc</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>done</ETag></CompleteMultipartUploadResult>";
 const MIB: usize = 1024 * 1024;
+
+fn leave_interrupted_multipart_upload(
+    server: &mut mockito::ServerGuard,
+    fixture: &Fixture,
+    payload: &[u8],
+) -> Result<()> {
+    let (head, tail) = payload
+        .split_at_checked(5 * MIB)
+        .context("multipart payload")?;
+    let init = initiate(server).expect(1).create();
+    let first = part_mock(server, 1, head).expect(1).create();
+    let fail = part_mock(server, 2, tail)
+        .with_status(500)
+        .with_body("<Error><Code>InternalError</Code></Error>")
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .args(["-r", "1", "-n", "1", "-b", "5242880"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    ensure!(
+        !output.status.success(),
+        "multipart upload should be interrupted"
+    );
+    for mock in [init, first, fail] {
+        mock.assert();
+    }
+    let state = fixture.home.entries()?;
+    let entry = state.first().context("interrupted upload state")?;
+    assert_eq!(
+        (
+            entry.upload_id.as_deref(),
+            entry.parts_uploaded,
+            entry.parts_pending
+        ),
+        (Some("UP1"), 1, 1)
+    );
+    Ok(())
+}
+
+fn single_put_after_interrupted_multipart(abort_status: usize) -> Result<()> {
+    let mut server = Server::new();
+    let payload = vec![42; 5 * MIB + 1];
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    leave_interrupted_multipart_upload(&mut server, &fixture, &payload)?;
+
+    let put_received = Arc::new(AtomicBool::new(false));
+    let on_put = Arc::clone(&put_received);
+    let put = server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::Missing)
+        .match_body(payload)
+        .with_header("etag", "single")
+        .with_body_from_request(move |_| {
+            on_put.store(true, Ordering::SeqCst);
+            Vec::new()
+        })
+        .expect(1)
+        .create();
+    let abort = server
+        .mock("DELETE", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "UP1".into()))
+        .match_request(move |_| put_received.load(Ordering::SeqCst))
+        .with_status(abort_status)
+        .with_body(if abort_status == 403 {
+            "<Error><Code>AccessDenied</Code></Error>"
+        } else {
+            ""
+        })
+        .expect(1)
+        .create();
+
+    let output = fixture
+        .command()
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(output.status.code() == Some(0), "{stderr}");
+    ensure!(String::from_utf8_lossy(&output.stdout).contains("ETag: single"));
+    put.assert();
+
+    let state = fixture.home.entries()?;
+    let entry = state.first().context("single-part upload state")?;
+    assert_eq!(entry.etag.as_deref(), Some("single"));
+    if abort_status == 403 {
+        ensure!(
+            stderr.contains("warning:") && stderr.contains("AccessDenied"),
+            "{stderr}"
+        );
+        ensure!(
+            stderr.contains("s3m rm s3/bucket/key --abort UP1"),
+            "{stderr}"
+        );
+        assert_eq!(
+            (
+                entry.upload_id.as_deref(),
+                entry.parts_uploaded,
+                entry.parts_pending
+            ),
+            (Some("UP1"), 1, 1)
+        );
+    } else {
+        assert_eq!(
+            (
+                entry.upload_id.as_deref(),
+                entry.parts_uploaded,
+                entry.parts_pending
+            ),
+            (None, 0, 0)
+        );
+    }
+    abort.assert();
+    Ok(())
+}
+
+#[test]
+fn single_put_aborts_the_interrupted_multipart_upload_after_success() -> Result<()> {
+    single_put_after_interrupted_multipart(204)
+}
+
+#[test]
+fn single_put_warns_when_the_interrupted_multipart_upload_cannot_be_aborted() -> Result<()> {
+    single_put_after_interrupted_multipart(403)
+}
 
 #[test]
 fn checksum_choices_send_known_digest_and_original_bytes() -> Result<()> {
@@ -374,6 +507,12 @@ fn single_part_rerun_after_an_interrupted_multipart_does_not_warn() -> Result<()
         .with_header("etag", "single")
         .expect(1)
         .create();
+    let abort = server
+        .mock("DELETE", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "UP1".into()))
+        .with_status(204)
+        .expect(1)
+        .create();
     let second = fixture
         .command()
         .args(["--buffer", "20971520", "--checksum", "sha256"])
@@ -384,6 +523,7 @@ fn single_part_rerun_after_an_interrupted_multipart_does_not_warn() -> Result<()
     let stderr = String::from_utf8_lossy(&second.stderr);
     ensure!(second.status.success(), "{stdout}{stderr}");
     put.assert();
+    abort.assert();
     ensure!(!stderr.contains("warning:"), "{stderr}");
     ensure!(stdout.contains("sha256 (base64): "), "{stdout}");
     Ok(())

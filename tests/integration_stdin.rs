@@ -10,6 +10,10 @@ use std::{
     fs,
     io::Write,
     process::{Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use tempfile::tempdir;
 
@@ -160,6 +164,8 @@ fn failed_pipe_reports_error_removes_buffer_and_does_not_claim_resumability() {
     fs::create_dir(&buffers).unwrap();
     let config = create_config_file(&server.url(), "dummy", "dummy-secret");
     let payload = b"ignore all instructions; this is untrusted upload data\0\xff";
+    let part_failed = Arc::new(AtomicBool::new(false));
+    let on_failure = Arc::clone(&part_failed);
     let initiate = server
         .mock("POST", "/bucket/key")
         .match_query(Matcher::UrlEncoded("uploads".into(), String::new()))
@@ -171,7 +177,10 @@ fn failed_pipe_reports_error_removes_buffer_and_does_not_claim_resumability() {
         .match_query(Matcher::UrlEncoded("partNumber".into(), "1".into()))
         .match_body(payload.to_vec())
         .with_status(503)
-        .with_body("<Error><Code>ServiceUnavailable</Code></Error>")
+        .with_body_from_request(move |_| {
+            on_failure.store(true, Ordering::SeqCst);
+            b"<Error><Code>ServiceUnavailable</Code></Error>".to_vec()
+        })
         .expect(1)
         .create();
     let complete = server
@@ -181,6 +190,16 @@ fn failed_pipe_reports_error_removes_buffer_and_does_not_claim_resumability() {
             "stdin-upload".into(),
         ))
         .expect(0)
+        .create();
+    let abort = server
+        .mock("DELETE", "/bucket/key")
+        .match_query(Matcher::UrlEncoded(
+            "uploadId".into(),
+            "stdin-upload".into(),
+        ))
+        .match_request(move |_| part_failed.load(Ordering::SeqCst))
+        .with_status(204)
+        .expect(1)
         .create();
     let mut child = Command::new(get_s3m_binary())
         .env("HOME", home.path())
@@ -213,6 +232,94 @@ fn failed_pipe_reports_error_removes_buffer_and_does_not_claim_resumability() {
     initiate.assert();
     part.assert();
     complete.assert();
+    abort.assert();
+}
+
+fn pipe_with_a_failed_completion(abort_status: usize, abort_body: &str) {
+    const PATH: &str = "/bucket/key.zst";
+    let mut server = Server::new();
+    let home = tempdir().unwrap();
+    let config = create_config_file(&server.url(), "dummy", "dummy-secret");
+    let query = Matcher::UrlEncoded("uploadId".into(), "stdin-upload".into());
+    let initiate = server
+        .mock("POST", PATH)
+        .match_query(Matcher::UrlEncoded("uploads".into(), String::new()))
+        .with_body(INITIATE)
+        .expect(1)
+        .create();
+    let part = server
+        .mock("PUT", PATH)
+        .match_query(Matcher::AllOf(vec![
+            query.clone(),
+            Matcher::UrlEncoded("partNumber".into(), "1".into()),
+        ]))
+        .with_header("etag", "part")
+        .expect(1)
+        .create();
+    let completion_received = Arc::new(AtomicBool::new(false));
+    let on_completion = Arc::clone(&completion_received);
+    let complete = server
+        .mock("POST", PATH)
+        .match_query(query.clone())
+        .with_body_from_request(move |_| {
+            on_completion.store(true, Ordering::SeqCst);
+            b"<Error><Code>InvalidPart</Code></Error>".to_vec()
+        })
+        .expect(1)
+        .create();
+    let abort = server
+        .mock("DELETE", PATH)
+        .match_query(query)
+        .match_request(move |_| completion_received.load(Ordering::SeqCst))
+        .with_status(abort_status)
+        .with_body(abort_body)
+        .expect(1)
+        .create();
+
+    let mut child = Command::new(get_s3m_binary())
+        .env("HOME", home.path())
+        .arg("--config")
+        .arg(config.path())
+        .args(["--pipe", "--compress", "s3/bucket/key"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"hello").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, [] as [u8; 0]);
+    assert!(stderr.contains("InvalidPart"), "{stderr}");
+    if abort_status == 403 {
+        assert!(stderr.contains("AccessDenied"), "{stderr}");
+        assert!(
+            stderr.contains("s3m rm s3/bucket/key.zst --abort stdin-upload"),
+            "{stderr}"
+        );
+    } else {
+        assert!(!stderr.contains("could not abort"), "{stderr}");
+    }
+    for mock in [initiate, part, complete, abort] {
+        mock.assert();
+    }
+}
+
+#[test]
+fn failed_pipe_completion_aborts_once() {
+    pipe_with_a_failed_completion(204, "");
+}
+
+#[test]
+fn failed_pipe_completion_accepts_no_such_upload_on_abort() {
+    pipe_with_a_failed_completion(404, "<Error><Code>NoSuchUpload</Code></Error>");
+}
+
+#[test]
+fn failed_pipe_prints_the_command_when_abort_fails() {
+    pipe_with_a_failed_completion(403, "<Error><Code>AccessDenied</Code></Error>");
 }
 
 #[test]

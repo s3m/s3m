@@ -7,7 +7,7 @@ use crate::{
         tools,
     },
     stream::{
-        FileStreamUpload,
+        FileStreamUpload, StreamAbortFailed,
         db::Db,
         state::{StreamMetadata, StreamMode, write_metadata},
         upload_compressed::stream_compressed,
@@ -77,7 +77,7 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
                 meta,
                 buf_size,
                 file,
-                host,
+                host: host.clone(),
                 key,
                 pipe,
                 s3m_dir,
@@ -89,7 +89,12 @@ pub async fn handle(s3: &S3, action: Action, globals: GlobalArgs) -> Result<()> 
             globals,
         )
         .await
-        .map_err(|e| augment_object_lock_error(e, has_object_lock));
+        .map_err(|mut error| {
+            if let Some(abort) = error.downcast_mut::<StreamAbortFailed>() {
+                abort.set_host_alias(host);
+            }
+            augment_object_lock_error(error, has_object_lock)
+        });
     }
 
     Ok(())
@@ -317,7 +322,31 @@ async fn handle_standard_file_upload(
     })
     .await?;
 
+    abort_replaced_multipart_upload(s3, &request.host, &request.key, &db).await;
+
     Ok(etag)
+}
+
+async fn abort_replaced_multipart_upload(s3: &S3, host: &str, key: &str, db: &Db) {
+    let upload_id = match db.upload_id() {
+        Ok(Some(upload_id)) => upload_id,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("warning: could not read the previous multipart upload id ({error})");
+            return;
+        }
+    };
+    let abort = actions::AbortMultipartUpload::new(key, &upload_id);
+    if let Err(error) = abort.request_if_open(s3).await {
+        let command = abort.command(host, s3.bucket().unwrap_or_default());
+        eprintln!(
+            "warning: could not abort the previous multipart upload ({error}). Abort it with `{command}`"
+        );
+    } else if let Err(error) = db.forget_multipart_upload() {
+        eprintln!(
+            "warning: could not clear the state of aborted multipart upload {upload_id} ({error})"
+        );
+    }
 }
 
 /// The local state only records that this file was once uploaded to this key. Before

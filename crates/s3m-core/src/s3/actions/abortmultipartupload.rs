@@ -23,6 +23,31 @@ impl<'a> AbortMultipartUpload<'a> {
         Self { key, upload_id }
     }
 
+    /// The CLI command to abort this upload using the configured host name.
+    #[must_use]
+    pub fn command(&self, host: &str, bucket: &str) -> String {
+        let destination = format!("{host}/{bucket}/{}", self.key);
+        format!(
+            "s3m rm {} --abort {}",
+            shell_argument(&destination),
+            shell_argument(self.upload_id)
+        )
+    }
+
+    /// Abort the upload. An S3 `404 NoSuchUpload` also counts as success.
+    ///
+    /// # Errors
+    /// Returns the request error if the abort fails for another reason.
+    pub async fn request_if_open(&self, s3: &S3) -> Result<()> {
+        match self.request(s3).await {
+            Ok(_) => Ok(()),
+            Err(error) if error.status() == Some(404) && error.code() == Some("NoSuchUpload") => {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// # Errors
     ///
     /// Will return `Err` if can not make the request
@@ -45,6 +70,18 @@ impl<'a> AbortMultipartUpload<'a> {
         } else {
             Err(response_error(response).await)
         }
+    }
+}
+
+fn shell_argument(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/-._=+".contains(&byte))
+    {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
 
