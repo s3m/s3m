@@ -11,12 +11,21 @@ use std::collections::BTreeMap;
 #[derive(Debug)]
 pub struct ListObjectVersions<'a> {
     prefix: &'a str,
+    /// List versions after this key (`NextKeyMarker` of a truncated page).
+    pub key_marker: Option<String>,
+    /// With `key_marker`, list versions after this version id
+    /// (`NextVersionIdMarker`).
+    pub version_id_marker: Option<String>,
 }
 
 impl<'a> ListObjectVersions<'a> {
     #[must_use]
     pub const fn new(prefix: &'a str) -> Self {
-        Self { prefix }
+        Self {
+            prefix,
+            key_marker: None,
+            version_id_marker: None,
+        }
     }
 
     /// # Errors
@@ -71,6 +80,14 @@ impl Action for ListObjectVersions<'_> {
         // prefix parameter
         map.insert("prefix", self.prefix);
 
+        if let Some(key_marker) = &self.key_marker {
+            map.insert("key-marker", key_marker);
+        }
+
+        if let Some(version_id_marker) = &self.version_id_marker {
+            map.insert("version-id-marker", version_id_marker);
+        }
+
         Some(map)
     }
 }
@@ -94,6 +111,28 @@ mod tests {
     fn test_method() {
         let action = ListObjectVersions::new("key");
         assert_eq!(Method::GET, action.http_method().unwrap());
+    }
+
+    // <https://github.com/s3m/s3m/issues/90>: the markers of the next page.
+    #[test]
+    fn test_query_pairs_with_markers() {
+        let mut action = ListObjectVersions::new("key");
+        assert_eq!(
+            action.query_pairs(),
+            Some(BTreeMap::from([("prefix", "key"), ("versions", "")]))
+        );
+
+        action.key_marker = Some("key".to_string());
+        action.version_id_marker = Some("v2".to_string());
+        assert_eq!(
+            action.query_pairs(),
+            Some(BTreeMap::from([
+                ("key-marker", "key"),
+                ("prefix", "key"),
+                ("version-id-marker", "v2"),
+                ("versions", "")
+            ]))
+        );
     }
 
     #[test]

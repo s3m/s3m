@@ -364,6 +364,12 @@ pub struct ListVersionsResult {
     #[serde(default)]
     pub key_marker: String,
     pub version_id_marker: Option<String>,
+    /// Where the next page starts, when `is_truncated`.
+    #[serde(default)]
+    pub next_key_marker: Option<String>,
+    /// With `next_key_marker`, the version the next page starts after.
+    #[serde(default)]
+    pub next_version_id_marker: Option<String>,
     #[serde(default)]
     pub max_keys: i32,
     pub is_truncated: bool,
@@ -612,6 +618,22 @@ DeleteMarker: []
         let xml = r"<ListAllMyBucketsResult><Owner><ID>owner</ID></Owner></ListAllMyBucketsResult>";
 
         assert!(quick_xml::de::from_str::<ListAllMyBucketsResult>(xml).is_err());
+    }
+
+    // <https://github.com/s3m/s3m/issues/90>: a truncated page says where the next one
+    // starts.
+    #[test]
+    fn test_list_versions_next_markers() {
+        let xml = r"<ListVersionsResult><IsTruncated>true</IsTruncated><NextKeyMarker>key</NextKeyMarker><NextVersionIdMarker>v2</NextVersionIdMarker></ListVersionsResult>";
+        let parsed: ListVersionsResult = quick_xml::de::from_str(xml).unwrap();
+        assert!(parsed.is_truncated);
+        assert_eq!(parsed.next_key_marker.as_deref(), Some("key"));
+        assert_eq!(parsed.next_version_id_marker.as_deref(), Some("v2"));
+
+        let xml = r"<ListVersionsResult><IsTruncated>false</IsTruncated></ListVersionsResult>";
+        let parsed: ListVersionsResult = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(parsed.next_key_marker, None);
+        assert_eq!(parsed.next_version_id_marker, None);
     }
 
     #[test]

@@ -372,9 +372,40 @@ async fn handle_metadata(s3: &S3, key: &str, version: Option<String>, json: bool
     Ok(())
 }
 
+/// Every version under the key prefix: the listing is followed until its last page.
+async fn list_versions(s3: &S3, key: &str) -> Result<Vec<crate::s3::responses::Version>> {
+    let mut versions = Vec::new();
+    let mut action = actions::ListObjectVersions::new(key);
+    loop {
+        let page = action.request(s3).await?;
+        versions.extend(page.versions);
+        if !page.is_truncated {
+            return Ok(versions);
+        }
+
+        // A truncated page must say where the next one starts, and move on: asking
+        // for the same page again would never end.
+        let next = (
+            page.next_key_marker.filter(|marker| !marker.is_empty()),
+            page.next_version_id_marker
+                .filter(|marker| !marker.is_empty()),
+        );
+        if next.0.is_none() {
+            return Err(anyhow!(
+                "ListObjectVersions returned a truncated page without a NextKeyMarker"
+            ));
+        }
+        if next == (action.key_marker.take(), action.version_id_marker.take()) {
+            return Err(anyhow!(
+                "ListObjectVersions returned the same NextKeyMarker and NextVersionIdMarker twice"
+            ));
+        }
+        (action.key_marker, action.version_id_marker) = next;
+    }
+}
+
 async fn handle_versions(s3: &S3, key: &str, json: bool) -> Result<()> {
-    let action = actions::ListObjectVersions::new(key);
-    let result = action.request(s3).await?;
+    let versions = list_versions(s3, key).await?;
 
     if json {
         println!(
@@ -382,8 +413,7 @@ async fn handle_versions(s3: &S3, key: &str, json: bool) -> Result<()> {
             serde_json::to_string_pretty(&VersionsJsonOutput {
                 bucket: s3.bucket().map(str::to_string),
                 key_prefix: key.to_string(),
-                versions: result
-                    .versions
+                versions: versions
                     .into_iter()
                     .map(|version| VersionJsonEntry {
                         key: version.key,
@@ -400,12 +430,12 @@ async fn handle_versions(s3: &S3, key: &str, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    if result.versions.is_empty() {
+    if versions.is_empty() {
         println!("No versions found for key: {key}");
         return Ok(());
     }
 
-    for version in result.versions {
+    for version in versions {
         let last_modified = time::parse_rfc3339(&version.last_modified)?;
         println!(
             "{} {:>10} {:<} ID: {}",

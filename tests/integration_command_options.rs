@@ -1198,6 +1198,127 @@ fn versions_body(entries: &[(&str, bool, &str, u64)]) -> String {
     )
 }
 
+fn versions_page(version_id: &str, next: Option<(&str, &str)>) -> String {
+    let markers = next.map_or_else(String::new, |(key, version)| {
+        format!("<NextKeyMarker>{key}</NextKeyMarker><NextVersionIdMarker>{version}</NextVersionIdMarker>")
+    });
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult><Name>bucket</Name><Prefix>dir/data.bin</Prefix><KeyMarker></KeyMarker><MaxKeys>1</MaxKeys><IsTruncated>{}</IsTruncated>{markers}<Version><Key>dir/data.bin</Key><VersionId>{version_id}</VersionId><IsLatest>false</IsLatest><LastModified>2026-03-14T08:00:00.000Z</LastModified><ETag>"e"</ETag><Size>7</Size><StorageClass>STANDARD</StorageClass></Version></ListVersionsResult>"#,
+        next.is_some()
+    )
+}
+
+fn versions_mock(server: &mut ServerGuard, markers: &[(&str, &str)], body: String) -> Mock {
+    let mut query = vec![("versions", ""), ("prefix", "dir/data.bin")];
+    query.extend_from_slice(markers);
+    server
+        .mock("GET", "/bucket")
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&query))
+        .with_body(body)
+}
+
+// <https://github.com/s3m/s3m/issues/90>: `get --versions` printed the first page of
+// a truncated listing and exited 0. It now follows the markers to the last page.
+#[test]
+fn get_versions_follows_every_page() -> Result<()> {
+    let mut server = Server::new();
+    let pages = [
+        versions_mock(
+            &mut server,
+            &[],
+            versions_page("v3", Some(("dir/data.bin", "v3"))),
+        )
+        .expect(2)
+        .create(),
+        versions_mock(
+            &mut server,
+            &[("key-marker", "dir/data.bin"), ("version-id-marker", "v3")],
+            versions_page("v2", Some(("dir/data.bin", "v2"))),
+        )
+        .expect(2)
+        .create(),
+        versions_mock(
+            &mut server,
+            &[("key-marker", "dir/data.bin"), ("version-id-marker", "v2")],
+            versions_page("v1", None),
+        )
+        .expect(2)
+        .create(),
+    ];
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["get", OBJECT, "--versions"];
+    let text_out = expect_exit(&cli.run(&args)?, 0, &args)?;
+    let ids: Vec<&str> = text_out
+        .lines()
+        .filter_map(|line| line.rsplit_once("ID: ").map(|(_, id)| id))
+        .collect();
+    assert_eq!(ids, ["v3", "v2", "v1"], "{text_out}");
+
+    let args = ["get", OBJECT, "--versions", "--json"];
+    let json: Value = serde_json::from_str(&expect_exit(&cli.run(&args)?, 0, &args)?)?;
+    let ids: Vec<&str> = json
+        .get("versions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|version| version.get("version_id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ids, ["v3", "v2", "v1"]);
+    assert_all(&pages);
+    Ok(())
+}
+
+// #90: a truncated page that doesn't say where the next one starts, or that points
+// back to itself, is an error: neither a short list nor an endless loop.
+#[test]
+fn get_versions_fails_on_a_truncated_page_it_cannot_follow() -> Result<()> {
+    let truncated_without_markers = versions_page("v3", None).replace(
+        "<IsTruncated>false</IsTruncated>",
+        "<IsTruncated>true</IsTruncated>",
+    );
+    let mut server = Server::new();
+    let page = versions_mock(&mut server, &[], truncated_without_markers)
+        .expect(1)
+        .create();
+    let cli = Cli::new(&server.url())?;
+    expect_failure(
+        &cli,
+        &["get", OBJECT, "--versions"],
+        1,
+        "ListObjectVersions returned a truncated page without a NextKeyMarker",
+    )?;
+    page.assert();
+
+    let mut server = Server::new();
+    let pages = [
+        versions_mock(
+            &mut server,
+            &[],
+            versions_page("v3", Some(("dir/data.bin", "v3"))),
+        )
+        .expect(1)
+        .create(),
+        versions_mock(
+            &mut server,
+            &[("key-marker", "dir/data.bin"), ("version-id-marker", "v3")],
+            versions_page("v3", Some(("dir/data.bin", "v3"))),
+        )
+        .expect(1)
+        .create(),
+    ];
+    let cli = Cli::new(&server.url())?;
+    expect_failure(
+        &cli,
+        &["get", OBJECT, "--versions"],
+        1,
+        "ListObjectVersions returned the same NextKeyMarker and NextVersionIdMarker twice",
+    )?;
+    assert_all(&pages);
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/81>: s3m never sends `key-marker`, so a server
 // may leave out <KeyMarker>, and `get --versions` failed with "missing field
 // `KeyMarker`". `Name`, `MaxKeys`, `ETag`, `StorageClass` and the owner's `ID` are
