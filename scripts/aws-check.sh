@@ -11,13 +11,12 @@
 # that expires current versions). Then the interrupted and changing uploads of
 # scripts/provider-scenarios.sh.
 #
-# Everything is written under ci/<unique prefix>/ and removed again: legal holds are
-# released, every version and delete marker is deleted (with
-# x-amz-bypass-governance-retention), unfinished multipart uploads are aborted, and
-# the run fails if anything is left under the prefix. Retention is GOVERNANCE only and
-# lasts minutes. Use a dedicated bucket and a key limited to it; the IAM policy should
-# deny COMPLIANCE mode and long retention, so a mistake here can't lock anything for
-# long. Needs jq and xargs.
+# Cleanup releases legal holds, deletes versions and recorded delete markers, and
+# aborts unfinished multipart uploads. Startup also cleans run prefixes older than
+# one hour. The CLI does not list delete markers: if a marker creation response was
+# lost, its ID is unknown. An optional expired-delete-marker lifecycle rule removes
+# eligible orphan markers. Use a dedicated bucket and a key that denies COMPLIANCE
+# mode and long retention. Needs GNU date, jq and xargs.
 #
 # The version paging check uploads ~1,000 objects of one byte (about $0.005 per run).
 set -euo pipefail
@@ -40,194 +39,137 @@ config=$(realpath "$2")
 host=$3
 bucket=$4
 target="$host/$bucket"
-prefix="ci/$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID:-local}-$RANDOM"
+# shellcheck source=scripts/provider-scenarios.sh
+source "$(dirname "$(realpath "$0")")/provider-scenarios.sh"
+prefix=$(run_prefix)
 jobs=8
 
 work=$(mktemp -d)
-# Upload state of this run only, so cleanup finds the uploads it left unfinished.
 export S3M_HOME="$work/home"
-# Keys uploaded with a legal hold, and "<key>\t<version id>" of every delete marker
-# this run created (s3m lists versions, not delete markers).
-held=()
 markers="$work/markers"
 : >"$markers"
 
-s3m() { "$bin" --config "$config" "$@"; }
-# Cleanup deletes every version under the prefix; nothing to record per key.
-track() { :; }
-# shellcheck source=scripts/provider-scenarios.sh
-source "$(dirname "$(realpath "$0")")/provider-scenarios.sh"
-
-# Only keys of this run, without characters that would break the tab-separated rows.
-# shellcheck disable=SC2016 # $prefix is a jq variable
-safe_key='type == "string" and startswith($prefix + "/") and (test("[\t\n\r]") | not)'
-safe_id='type == "string" and length > 0 and (test("[\t\n\r]") | not)'
-
-# version_rows <key or prefix>: "<key>\t<version id>" for every version under it.
-version_rows() {
-  local listing
-  listing=$(s3m get --versions --json "$target/$1") || return 1
-  jq -e --arg prefix "$prefix" "(.versions | type) == \"array\" and all(.versions[]; (.key | $safe_key) and (.version_id | $safe_id))" <<<"$listing" >/dev/null || {
-    echo "unexpected version listing for $1" >&2
-    return 1
-  }
-  jq -r '.versions[] | [.key, .version_id] | join("\t")' <<<"$listing"
+version_listing() {
+  s3m get --versions --json "$target/$1" | json_array versions |
+    jq -ce --arg p "$1" "$safe_string"'
+      if all(.[]; (.key | safe_string and startswith($p)) and (.version_id | safe_string))
+      then . else error("invalid version row") end'
 }
 
-# delete_rows: reads "<key>\t<version id>" lines and deletes each version, $jobs at once.
-# Each delete is tried 3 times: under this load AWS fails an occasional request, and
-# s3m retries uploads but not deletes.
-delete_rows() {
-  # shellcheck disable=SC2016 # expanded by the inner bash, one version per call
-  awk -F'\t' -v t="$target/" 'NF == 2 { print t $1; print $2 }' |
-    xargs -r -d '\n' -n 2 -P "$jobs" bash -c \
-      'for try in 1 2 3; do
-         err=$("$0" --config "$1" rm "$2" --version-id "$3" --bypass-governance 2>&1 >/dev/null) && exit 0
-         sleep "$try"
-       done
-       echo "cleanup: could not delete $2 version $3: $(tr "\n" " " <<<"$err")" >&2
-       exit 1' \
-      "$bin" "$config"
+object_rows() {
+  version_listing "$1" | jq -r '.[] | [.key, .version_id] | join("\t")'
 }
 
-# abort_listed <label>: reads "<key>\t<upload id>" lines and aborts each upload under
-# this run's prefix.
-abort_listed() {
-  local label=$1 key upload_id status=0
-  while IFS=$'\t' read -r key upload_id; do
-    [[ -n "$key$upload_id" ]] || continue
-    if [[ "$key" != "$prefix/"* || -z "$upload_id" ]]; then
-      echo "cleanup: unexpected upload '$key' ($label), not aborted" >&2
-      status=1
-      continue
+# One tab-separated row per worker. Check the exact scope before sending either
+# request, including when the rows came from the local delete marker record.
+delete_rows() (
+  export -f retry
+  # shellcheck disable=SC2016 # expanded by the worker Bash
+  xargs -r -d '\n' -n 1 -P "$jobs" bash -c '
+    bin=$1 config=$2 target=$3 scope=$4
+    tab=$5 cr=$6
+    key=${7%%"$tab"*}
+    id=${7#*"$tab"}
+    if [[ $7 != *"$tab"* || $key != "$scope/"* ||
+          $key == *"$cr"* || -z $id || $id == *["$tab$cr"]* ]]; then
+      echo "cleanup: invalid version row under $target/$scope/" >&2
+      exit 1
     fi
-    s3m rm "$target/$key" --abort "$upload_id" >/dev/null 2>&1 || {
-      echo "cleanup: could not abort the upload of $target/$key ($label)" >&2
-      status=1
-    }
-  done
-  return "$status"
-}
+    # All keys uploaded with a legal hold start with hold- at the run root.
+    if [[ ${key#"$scope/"} == hold-* ]] &&
+       ! retry "$bin" --config "$config" object-lock set "$target/$key" --legal-hold off --version-id="$id" >/dev/null 2>&1; then
+      echo "cleanup: could not release the legal hold on $target/$key version $id" >&2
+      exit 1
+    fi
+    if ! retry "$bin" --config "$config" rm "$target/$key" --version-id="$id" --bypass-governance >/dev/null 2>&1; then
+      echo "cleanup: could not delete $target/$key version $id" >&2
+      exit 1
+    fi
+  ' bash "$bin" "$config" "$target" "$1" $'\t' $'\r'
+)
 
-valid_uploads='length == 1 and (.[0].uploads | type) == "array" and all(.[0].uploads[]; ([.key, .upload_id] | all(type == "string" and length > 0 and (test("[\t\n\r]") | not))))'
-valid_streams='length == 1 and (.[0].streams | type) == "array" and all(.[0].streams[] | select(.etag == null and .upload_id != null); ([.destination, .upload_id] | all(type == "string" and length > 0 and (test("[\t\n\r]") | not))))'
+sweep_old_runs() {
+  local now versions uploads scopes scope stamp failed=0
+  now=$(date -u +%s) || return 1
+  if ! versions=$(retry object_rows ci/ 2>/dev/null); then
+    echo "cleanup: could not discover old versions under $target/ci/" >&2
+    versions=
+    failed=1
+  fi
+  if ! uploads=$(retry upload_rows ci 2>/dev/null); then
+    echo "cleanup: could not discover old multipart uploads under $target/ci/" >&2
+    uploads=
+    failed=1
+  fi
+  scopes=$(printf '%s\n' "$versions" "$uploads" | awk -F '[\t/]' 'NF >= 4 { print $1 "/" $2 }' | sort -u) ||
+    return 1
+  while IFS= read -r scope; do
+    [[ $scope =~ ^ci/([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z-[A-Za-z0-9_-]+$ ]] ||
+      continue
+    stamp=$(date -u -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}Z" +%s 2>/dev/null) ||
+      continue
+    ((stamp < now - 3600)) || continue
+    echo "cleanup: removing leftovers under $target/$scope/"
+    clean_scope "$scope" || failed=1
+  done <<<"$scopes"
+  return "$failed"
+}
 
 cleanup() {
-  local status=$? failed=0 key row rows streams uploads listed
+  local status=$? failed=0
   trap - EXIT
-  # A version under a legal hold can't be deleted, and no lifecycle rule removes the
-  # hold: release it first, on every version of the keys uploaded with one.
-  for key in ${held[@]+"${held[@]}"}; do
-    if rows=$(version_rows "$key"); then
-      while IFS=$'\t' read -r row_key row; do
-        [[ "$row_key" == "$key" ]] || continue
-        s3m object-lock set "$target/$key" --legal-hold off --version-id "$row" >/dev/null 2>&1 || {
-          echo "cleanup: could not release the legal hold on $target/$key version $row" >&2
-          failed=1
-        }
-      done <<<"$rows"
-    else
-      echo "cleanup: could not list the versions of $target/$key" >&2
-      failed=1
-    fi
-  done
-  # Every version under the prefix, then the delete markers this run created.
-  if rows=$(version_rows "$prefix/"); then
-    delete_rows <<<"$rows" || failed=1
-  else
-    echo "cleanup: could not list the versions under $target/$prefix/" >&2
-    failed=1
+  stop_upload
+  abort_recorded_uploads || failed=1
+  clean_scope "$prefix" || failed=1
+  if [[ -s $markers ]]; then
+    delete_rows "$prefix" <"$markers" || failed=1
   fi
-  delete_rows <"$markers" || failed=1
-  # Unfinished multipart uploads: those in this run's state, then whatever the server
-  # still has open under the prefix.
-  if [[ -d "$S3M_HOME" ]]; then
-    if streams=$(s3m streams --json ls 2>/dev/null) &&
-      jq -es "$valid_streams" <<<"$streams" >/dev/null &&
-      listed=$(jq -r --arg bucket "$bucket/" '.streams[] | select(.etag == null and .upload_id != null) | [(.destination | ltrimstr($bucket)), .upload_id] | join("\t")' <<<"$streams"); then
-      abort_listed "recorded state" <<<"$listed" || failed=1
-    else
-      echo "cleanup: could not read the upload state in $S3M_HOME" >&2
-      failed=1
-    fi
-  fi
-  if uploads=$(s3m ls "$target" --multipart --prefix "$prefix/" --json 2>/dev/null) &&
-    jq -es "$valid_uploads" <<<"$uploads" >/dev/null &&
-    listed=$(jq -r '.uploads[] | [.key, .upload_id] | join("\t")' <<<"$uploads"); then
-    abort_listed "still open on the server" <<<"$listed" || failed=1
-  else
-    echo "cleanup: could not list the unfinished uploads under $target/$prefix/" >&2
-    failed=1
-  fi
-  # Nothing may be left. Delete markers whose id was never recorded don't show here;
-  # the bucket's lifecycle rule for expired delete markers removes those.
-  if rows=$(version_rows "$prefix/"); then
-    if [[ -n "$rows" ]]; then
-      echo "cleanup: $(wc -l <<<"$rows") versions left under $target/$prefix/" >&2
-      failed=1
-    fi
-  else
-    failed=1
-  fi
-  rm -rf "$work"
-  if [[ $status -eq 0 && $failed -ne 0 ]]; then
-    status=1
+  rm -rf "$work" || failed=1
+  if ((status == 0)); then
+    ((failed == 0)) || exit 1
+    echo "all AWS checks passed"
   fi
   exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-fail() {
-  echo "FAIL: $*" >&2
-  exit 1
-}
+sweep_old_runs || fail "could not sweep old AWS runs"
 
-# upload <name> <file> [s3m options...]: prints s3m's output.
-upload() {
-  local name=$1 file=$2
-  shift 2
-  s3m --retries 1 "$@" "$file" "$target/$prefix/$name"
-}
-
-# stored_checksum <name> <algorithm>: the x-amz-checksum-<algorithm> AWS stored
-stored_checksum() {
-  s3m get -m "$target/$prefix/$1" | awk -v h="x-amz-checksum-$2:" 'tolower($1) == h { print $2 }'
-}
-
-# check_checksum <name> <file> <algorithm> [s3m options...]
-check_checksum() {
-  local name=$1 file=$2 alg=$3
-  shift 3
-  local output printed stored
-  output=$(upload "$name" "$file" --checksum "$alg" "$@" 2>&1) || fail "$name: upload failed: $output"
-  printed=$(awk -v l="$alg" '$1 == l && $2 == "(base64):" { print $3 }' <<<"$output")
-  stored=$(stored_checksum "$name" "$alg")
-  [[ -n "$printed" ]] || fail "$name: no '$alg (base64):' line in: $output"
-  [[ "$printed" == "$stored" ]] || fail "$name: printed $printed, AWS stored ${stored:-nothing}"
-  echo "ok  $name  $alg $printed"
-}
-
-# check_lock <name> <pattern>: `object-lock get` on the object prints a matching line
+# Object Lock reports JSON on stdout. Compare retention as a timestamp because
+# the server may format the same instant with a different UTC offset or precision.
 check_lock() {
-  local output
-  output=$(s3m object-lock get "$target/$prefix/$1" 2>&1) || fail "$1: object-lock get: $output"
-  grep -Eqi "$2" <<<"$output" || fail "$1: no '$2' in: $output"
+  local name=$1 expected=$2 output until actual want
+  output=$(s3m object-lock get "$target/$prefix/$name" --json) || fail "$name: object-lock get failed"
+  if [[ $expected == ON ]]; then
+    jq -es 'length == 1 and .[0].legal_hold == "ON"' <<<"$output" >/dev/null ||
+      fail "$name: expected legal hold ON"
+  else
+    until=$(jq -ers 'if length == 1 and .[0].retention.mode == "GOVERNANCE" then .[0].retention.retain_until_date | strings else empty end' <<<"$output") &&
+      actual=$(date -u -d "$until" +%s) && want=$(date -u -d "$expected" +%s) &&
+      [[ -n $until && $actual == "$want" ]] || fail "$name: expected GOVERNANCE retention until $expected"
+  fi
 }
 
-# check_download <name> <file>
-check_download() {
-  s3m get -q "$target/$prefix/$1" "$work/$1.download" >/dev/null
-  cmp -s "$2" "$work/$1.download" || fail "$1: downloaded bytes differ"
-  echo "ok  $1  download matches"
+release_hold() {
+  local key="$prefix/$1" rows version_key id found=1
+  rows=$(retry object_rows "$key") || return 1
+  while IFS=$'\t' read -r version_key id; do
+    [[ $version_key == "$key" ]] || continue
+    retry s3m object-lock set "$target/$key" --legal-hold off --version-id="$id" >/dev/null || return 1
+    found=0
+  done <<<"$rows"
+  return "$found"
 }
 
 # mark_deleted <name>: deletes the current version (adds a delete marker) and records
 # the marker for cleanup.
 mark_deleted() {
   local output marker
-  output=$(s3m rm "$target/$prefix/$1" 2>&1) || fail "$1: rm: $output"
+  output=$(s3m rm "$target/$prefix/$1") || fail "$1: rm failed; marker ID is unknown"
   marker=$(sed -n 's/.*delete marker created (version \([^)]*\)).*/\1/p' <<<"$output")
-  [[ -n "$marker" ]] || fail "$1: rm didn't create a delete marker: $output"
+  [[ -n $marker && $marker != *[$'\t\n\r']* ]] || fail "$1: rm did not report exactly one marker ID"
   printf '%s\t%s\n' "$prefix/$1" "$marker" >>"$markers"
 }
 
@@ -245,43 +187,52 @@ echo "AWS checks under $target/$prefix/"
 output=$(upload small-plain.bin "$work/small.bin" 2>&1) || fail "small-plain.bin: $output"
 grep -q '^ETag: ' <<<"$output" || fail "small-plain.bin: no ETag in: $output"
 echo "ok  small-plain.bin"
-output=$(upload big-plain.bin "$work/big.bin" "${part[@]}" 2>&1) || fail "big-plain.bin: $output"
+output=$(upload big-plain.bin "$work/big.bin" "${part[@]}") || fail "big-plain.bin: $output"
 grep -q '^ETag: ".*-3"$' <<<"$output" || fail "big-plain.bin: no multipart ETag in: $output"
 check_download big-plain.bin "$work/big.bin"
 
 # Multipart and streamed uploads report the headers of the final answer (#75, #76).
 # check_report <name> <output>
 check_report() {
-  grep -q '^Version ID: .' <<<"$2" || fail "$1: no Version ID in: $2"
-  grep -q '^Expiration: .*rule-id=' <<<"$2" || fail "$1: no Expiration in: $2"
-  echo "ok  $1  Version ID and Expiration reported"
+  local name=$1 output=$2 version expiration metadata
+  local expiration_pattern='^expiry-date="[^"]+",[[:space:]]*rule-id="[^"]+"$'
+  version=$(sed -n 's/^Version ID: //p' <<<"$output")
+  expiration=$(sed -n 's/^Expiration: //p' <<<"$output")
+  [[ -n $version && $version != *$'\n'* &&
+     $expiration =~ $expiration_pattern ]] ||
+    fail "$name: expected Version ID and lifecycle Expiration on stdout"
+  metadata=$(s3m get -m "$target/$prefix/$name" --json) || fail "$name: could not read report metadata"
+  jq -es --arg v "$version" --arg e "$expiration" '
+    length == 1 and .[0].headers["x-amz-version-id"] == $v and .[0].headers["x-amz-expiration"] == $e
+  ' <<<"$metadata" >/dev/null || fail "$name: Version ID or Expiration differs from stored metadata"
+  echo "ok  $name  Version ID and Expiration reported"
 }
 check_report big-plain.bin "$output"
-output=$(s3m --retries 1 --pipe "$target/$prefix/pipe.bin" <"$work/small.bin" 2>&1) || fail "pipe.bin: $output"
+output=$(s3m --retries 1 --pipe "$target/$prefix/pipe.bin" <"$work/small.bin") || fail "pipe.bin: upload failed"
 check_report pipe.bin "$output"
-output=$(upload compress.zst "$work/small.bin" --compress 2>&1) || fail "compress.zst: $output"
+output=$(upload compress.zst "$work/small.bin" --compress) || fail "compress.zst: upload failed"
 check_report compress.zst "$output"
 
 # --checksum, single-part and multipart. AWS keeps a composite checksum of the parts
 # and returns it when the upload completes; s3m compares it with its own (#88).
 for alg in crc32 crc32c sha1 sha256; do
-  check_checksum "small-$alg.bin" "$work/small.bin" "$alg"
-  check_checksum "big-$alg.bin" "$work/big.bin" "$alg" "${part[@]}"
+  check_checksum "small-$alg.bin" "$work/small.bin" "$alg" single
+  check_checksum "big-$alg.bin" "$work/big.bin" "$alg" multipart "${part[@]}"
 done
 check_download big-sha256.bin "$work/big.bin"
 
 # Object Lock. AWS requires an integrity checksum on uploads with retention or a legal
 # hold: Content-MD5 without --checksum, x-amz-sdk-checksum-algorithm with it (#73).
 output=$(upload lock-plain.bin "$work/small.bin" "${lock[@]}" 2>&1) || fail "lock-plain.bin: $output"
-check_lock lock-plain.bin GOVERNANCE
+check_lock lock-plain.bin "$until"
 echo "ok  lock-plain.bin  GOVERNANCE retention"
-check_checksum lock-sha256.bin "$work/small.bin" sha256 "${lock[@]}"
-check_lock lock-sha256.bin GOVERNANCE
-check_checksum lock-big-crc32c.bin "$work/big.bin" crc32c "${lock[@]}" "${part[@]}"
-check_lock lock-big-crc32c.bin GOVERNANCE
-held+=("$prefix/hold-crc32.bin")
-check_checksum hold-crc32.bin "$work/small.bin" crc32 --legal-hold
-check_lock hold-crc32.bin 'legal hold.*on'
+check_checksum lock-sha256.bin "$work/small.bin" sha256 single "${lock[@]}"
+check_lock lock-sha256.bin "$until"
+check_checksum lock-big-crc32c.bin "$work/big.bin" crc32c multipart "${lock[@]}" "${part[@]}"
+check_lock lock-big-crc32c.bin "$until"
+check_checksum hold-crc32.bin "$work/small.bin" crc32 single --legal-hold
+check_lock hold-crc32.bin ON
+release_hold hold-crc32.bin || fail "hold-crc32.bin: immediate legal hold release failed"
 
 # Versions and delete markers alternating in key order (#91):
 # Version(a), DeleteMarker(b), Version(b), DeleteMarker(c), Version(c).
@@ -290,19 +241,21 @@ for name in a b c; do
 done
 mark_deleted v/b
 mark_deleted v/c
-rows=$(version_rows "$prefix/v/") || fail "get --versions $prefix/v/ failed"
-[[ $(wc -l <<<"$rows") -eq 3 ]] || fail "get --versions $prefix/v/: expected 3 versions, got: $rows"
+listing=$(version_listing "$prefix/v/") || fail "get --versions $prefix/v/ failed"
+jq -e --arg p "$prefix/v/" '
+  map({key,is_latest}) | sort_by(.key) ==
+    [{key:($p+"a"),is_latest:true},{key:($p+"b"),is_latest:false},{key:($p+"c"),is_latest:false}]
+' <<<"$listing" >/dev/null || fail "get --versions $prefix/v/: expected one version of each key, with only a current"
 echo "ok  get --versions with interleaved delete markers"
 
 # More versions than one page of ListObjectVersions (1,000) (#90).
 seq -w 0 1000 | xargs -d '\n' -P "$jobs" -I{} \
   "$bin" --config "$config" --retries 1 -q "$work/tiny.bin" "$target/$prefix/page/{}" >/dev/null ||
   fail "uploading the objects for the paging check failed"
-rows=$(version_rows "$prefix/page/") || fail "get --versions $prefix/page/ failed"
-count=$(wc -l <<<"$rows")
-[[ $count -eq 1001 ]] || fail "get --versions $prefix/page/: expected 1001 versions, got $count"
-echo "ok  get --versions over two pages ($count versions)"
+listing=$(version_listing "$prefix/page/") || fail "get --versions $prefix/page/ failed"
+actual=$(jq -r '.[].key' <<<"$listing" | LC_ALL=C sort)
+expected=$(seq -w 0 1000 | sed "s|^|$prefix/page/|")
+[[ $actual == "$expected" ]] || fail "get --versions $prefix/page/: expected exactly the 1,001 paging keys"
+echo "ok  get --versions over two pages (1001 versions)"
 
 run_provider_scenarios
-
-echo "all AWS checks passed"

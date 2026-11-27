@@ -30,130 +30,61 @@ config=$(realpath "$2")
 host=$3
 bucket=$4
 target="$host/$bucket"
-prefix="ci/$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID:-local}-$RANDOM"
-
-work=$(mktemp -d)
-# Upload state of this run only, so cleanup finds the uploads it left unfinished.
-export S3M_HOME="$work/home"
-created=()
-
-s3m() { "$bin" --config "$config" "$@"; }
 # shellcheck source=scripts/provider-scenarios.sh
 source "$(dirname "$(realpath "$0")")/provider-scenarios.sh"
+prefix=$(run_prefix)
 
-# abort_listed <label>: reads "<key>\t<upload id>" lines and aborts each upload. Only
-# uploads under this run's prefix are touched: a line with another key, or without an
-# upload id, is an error (keys of this script have no tab or newline in them).
-abort_listed() {
-  local label=$1 key upload_id status=0
-  while IFS=$'\t' read -r key upload_id; do
-    [[ -n "$key$upload_id" ]] || continue
-    if [[ "$key" != "$prefix/"* || -z "$upload_id" ]]; then
-      echo "cleanup: unexpected upload '$key' ($label), not aborted" >&2
-      status=1
-      continue
-    fi
-    s3m rm "$target/$key" --abort "$upload_id" >/dev/null 2>&1 || {
-      echo "cleanup: could not abort the upload of $target/$key ($label)" >&2
-      status=1
-    }
-  done
-  return "$status"
+work=$(mktemp -d)
+export S3M_HOME="$work/home"
+created="$work/created"
+: >"$created"
+
+track() {
+  printf '%s\n' "$prefix/$1" >>"$created"
 }
 
-# One JSON document with an array of uploads, each with a key and an upload id that
-# are non-empty strings without a tab or a line break (the rows are passed on as
-# tab-separated lines).
-valid_uploads='length == 1 and (.[0].uploads | type) == "array" and all(.[0].uploads[]; ([.key, .upload_id] | all(type == "string" and length > 0 and (test("[\t\n\r]") | not))))'
+object_rows() {
+  s3m ls "$target" --prefix "$1" --json | json_array objects |
+    jq -r --arg p "$1" "$safe_string"'
+      if all(.[]; (.key | safe_string and startswith($p)))
+      then .[].key else error("invalid object row") end'
+}
 
-# The same for the uploads recorded in the local state that are not finished: their
-# destination and upload id are what the cleanup acts on.
-valid_streams='length == 1 and (.[0].streams | type) == "array" and all(.[0].streams[] | select(.etag == null and .upload_id != null); ([.destination, .upload_id] | all(type == "string" and length > 0 and (test("[\t\n\r]") | not))))'
-
-cleanup() {
-  local status=$? failed=0 key streams uploads listed
-  trap - EXIT
-  for key in ${created[@]+"${created[@]}"}; do
-    s3m rm "$target/$key" >/dev/null 2>&1 || {
+delete_rows() {
+  local scope=$1 key failed=0
+  while IFS= read -r key; do
+    [[ -n $key ]] || continue
+    if [[ $key != "$scope/"* || $key == *[$'\t\r']* ]]; then
+      echo "cleanup: invalid object row under $target/$scope/" >&2
+      failed=1
+    elif ! retry s3m rm "$target/$key" >/dev/null 2>&1; then
       echo "cleanup: could not delete $target/$key" >&2
       failed=1
-    }
-  done
-  # A failed or interrupted multipart upload keeps its parts until aborted. First the
-  # uploads this run recorded in its own state.
-  if [[ -d "$S3M_HOME" ]]; then
-    if streams=$(s3m streams --json ls 2>/dev/null) &&
-      jq -es "$valid_streams" <<<"$streams" >/dev/null &&
-      listed=$(jq -r --arg bucket "$bucket/" '.streams[] | select(.etag == null and .upload_id != null) | [(.destination | ltrimstr($bucket)), .upload_id] | join("\t")' <<<"$streams"); then
-      abort_listed "recorded state" <<<"$listed" || failed=1
-    else
-      echo "cleanup: could not read the upload state in $S3M_HOME" >&2
-      failed=1
     fi
-  fi
-  # Then whatever the server still has open under this run's prefix. The state above
-  # can't show an upload whose id was never recorded, or one whose state is locked by
-  # an s3m that is still running. If this script alone is killed while such a child
-  # runs, the bucket's lifecycle rule for incomplete multipart uploads is the backstop.
-  if uploads=$(s3m ls "$target" --multipart --prefix "$prefix/" --json 2>/dev/null) &&
-    jq -es "$valid_uploads" <<<"$uploads" >/dev/null &&
-    listed=$(jq -r '.uploads[] | [.key, .upload_id] | join("\t")' <<<"$uploads"); then
-    abort_listed "still open on the server" <<<"$listed" || failed=1
-  else
-    echo "cleanup: could not list the unfinished uploads under $target/$prefix/" >&2
+  done
+  return "$failed"
+}
+
+cleanup() {
+  local status=$? failed=0
+  trap - EXIT
+  stop_upload
+  abort_recorded_uploads || failed=1
+  if ! clean_scope "$prefix"; then
     failed=1
+    # An unavailable listing must not prevent deleting known keys.
+    sort -u "$created" | delete_rows "$prefix" || true
   fi
-  rm -rf "$work"
-  # Leftovers in the bucket fail an otherwise green run.
-  if [[ $status -eq 0 && $failed -ne 0 ]]; then
-    status=1
+  rm -rf "$work" || failed=1
+  if ((status == 0)); then
+    ((failed == 0)) || exit 1
+    echo "all R2 checks passed"
   fi
   exit "$status"
 }
 trap cleanup EXIT
-
-fail() {
-  echo "FAIL: $*" >&2
-  exit 1
-}
-
-# upload <name> <file> [s3m options...]: prints s3m's output. It runs in a
-# subshell ($(upload ...)), so callers record the key with `track` first.
-upload() {
-  local name=$1 file=$2
-  shift 2
-  s3m --retries 1 "$@" "$file" "$target/$prefix/$name"
-}
-
-track() {
-  created+=("$prefix/$1")
-}
-
-# stored_checksum <name> <algorithm>: the x-amz-checksum-<algorithm> R2 stored
-stored_checksum() {
-  s3m get -m "$target/$prefix/$1" | awk -v h="x-amz-checksum-$2:" 'tolower($1) == h { print $2 }'
-}
-
-# check_checksum <name> <file> <algorithm> [s3m options...]
-check_checksum() {
-  local name=$1 file=$2 alg=$3
-  shift 3
-  local output printed stored
-  track "$name"
-  output=$(upload "$name" "$file" --checksum "$alg" "$@") || fail "$name: upload failed: $output"
-  printed=$(awk -v l="$alg" '$1 == l && $2 == "(base64):" { print $3 }' <<<"$output")
-  stored=$(stored_checksum "$name" "$alg")
-  [[ -n "$printed" ]] || fail "$name: no '$alg (base64):' line in: $output"
-  [[ "$printed" == "$stored" ]] || fail "$name: printed $printed, R2 stored ${stored:-nothing}"
-  echo "ok  $name  $alg $printed"
-}
-
-# check_download <name> <file>
-check_download() {
-  s3m get -q "$target/$prefix/$1" "$work/$1.download" >/dev/null
-  cmp -s "$2" "$work/$1.download" || fail "$1: downloaded bytes differ"
-  echo "ok  $1  download matches"
-}
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 head -c 1048576 /dev/urandom >"$work/small.bin"
 head -c 12582912 /dev/urandom >"$work/big.bin"
@@ -162,57 +93,57 @@ part=(--buffer 5242880)
 echo "R2 checks under $target/$prefix/"
 
 # Without --checksum, uploads send Content-MD5.
-track small-plain.bin
 output=$(upload small-plain.bin "$work/small.bin") || fail "small-plain.bin: $output"
 grep -q '^ETag: ' <<<"$output" || fail "small-plain.bin: no ETag in: $output"
 echo "ok  small-plain.bin"
-track big-plain.bin
 output=$(upload big-plain.bin "$work/big.bin" "${part[@]}") || fail "big-plain.bin: $output"
 grep -q '^ETag: ".*-3"$' <<<"$output" || fail "big-plain.bin: no multipart ETag in: $output"
 check_download big-plain.bin "$work/big.bin"
 
 # Listing without a prefix: R2 leaves <Prefix> out of the response (#78).
-listing=$(s3m ls "$target" 2>&1) || fail "ls $target: $listing"
-awk -v key="$prefix/big-plain.bin" '$NF == key { found = 1 } END { exit !found }' <<<"$listing" ||
+listing=$(s3m ls "$target" --json 2>/dev/null) || fail "ls $target failed"
+json_array objects <<<"$listing" |
+  jq -e --arg k "$prefix/big-plain.bin" 'any(.[]; .key == $k)' >/dev/null ||
   fail "ls $target doesn't list $prefix/big-plain.bin"
 echo "ok  ls without a prefix"
 
 # Listing buckets: R2 answers 501 to max-buckets, and s3m asks again without it (#79).
 # The output is not printed: the token may see other buckets. A token limited to the
 # test bucket may not list buckets at all (403 AccessDenied): then this is skipped.
-if buckets=$(s3m ls "$host" 2>&1); then
-  awk -v b="$bucket" '$NF == b { found = 1 } END { exit !found }' <<<"$buckets" ||
+if buckets=$(s3m ls "$host" --json 2>"$work/buckets.err"); then
+  json_array buckets <<<"$buckets" | jq -e --arg b "$bucket" 'any(.[]; .name == $b)' >/dev/null ||
     fail "ls $host doesn't list the test bucket (output not shown)"
   echo "ok  ls $host"
-elif grep -q '^Error: Code: AccessDenied$' <<<"$buckets"; then
+elif grep -qx 'Error: Code: AccessDenied' "$work/buckets.err" &&
+     grep -qx 'HTTP Status Code: 403 Forbidden' "$work/buckets.err"; then
   echo "skip  ls $host: the token may not list buckets"
 else
-  fail "ls $host failed: $(grep -E '^(Error|HTTP Status Code|Message):' <<<"$buckets" | tr '\n' ' ')"
+  fail "ls $host failed (output not shown)"
 fi
 
 # Single-part with --checksum: R2 rejects Content-MD5 next to x-amz-checksum-* (#73).
 for alg in crc32 crc32c sha1 sha256; do
-  check_checksum "small-$alg.bin" "$work/small.bin" "$alg"
+  check_checksum "small-$alg.bin" "$work/small.bin" "$alg" single
 done
 
 # Multipart with --checksum: R2 rejects a composite checksum header on
 # CompleteMultipartUpload (#73); it derives the same value from the parts.
 for alg in crc32 crc32c; do
-  check_checksum "big-$alg.bin" "$work/big.bin" "$alg" "${part[@]}"
+  check_checksum "big-$alg.bin" "$work/big.bin" "$alg" multipart "${part[@]}"
 done
 check_download big-crc32c.bin "$work/big.bin"
 
 # Multipart with a SHA checksum: R2 answers 501 NotImplemented to the parts (#80).
 # s3m must stop at once, abort the upload and say so. If R2 starts accepting them,
 # this fails: move sha1/sha256 to the multipart checks above.
-track big-sha256.bin
 if output=$(upload big-sha256.bin "$work/big.bin" --checksum sha256 "${part[@]}" 2>&1); then
   fail "big-sha256.bin: a multipart upload with --checksum sha256 succeeded: $output"
 fi
 grep -q "doesn't support sha256 checksums on the parts of a multipart upload, and the upload was aborted" <<<"$output" ||
   fail "big-sha256.bin: unexpected error: $output"
-echo "ok  big-sha256.bin  rejected at once and aborted"
+count=$(open_uploads big-sha256.bin) || fail "big-sha256.bin: could not list open uploads"
+[[ $count == 0 ]] || fail "big-sha256.bin: $count multipart uploads still open"
+check_absent big-sha256.bin
+echo "ok  big-sha256.bin  rejected and aborted"
 
 run_provider_scenarios
-
-echo "all R2 checks passed"
