@@ -5,11 +5,10 @@ use crate::s3::{
     S3,
     checksum::ChecksumAlgorithm,
     error::{ApiError, Error, Result},
-    responses::ErrorResponse,
+    responses::{ErrorResponse, from_xml_root},
     signature::Signature,
 };
 use base64ct::{Base64, Encoding};
-use quick_xml::de::from_str;
 use reqwest::{Method, Response, StatusCode, header::HeaderMap};
 use std::{collections::BTreeMap, fmt::Write};
 use url::Url;
@@ -286,7 +285,10 @@ pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<St
 
     match body {
         Some(body) => {
-            if let Ok(e) = from_str::<ErrorResponse>(&body) {
+            // Only an <Error> document gives the error its code: s3m acts on some
+            // codes (NoSuchUpload forgets a saved upload), and another document that
+            // happens to have a <Code> must not trigger that.
+            if let Ok(e) = from_xml_root::<ErrorResponse>(&body, "Error") {
                 code = Some(e.code.clone());
                 message = Some(e.message.clone());
                 detail.insert("Code", e.code);

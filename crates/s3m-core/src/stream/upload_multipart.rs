@@ -370,14 +370,21 @@ async fn abort_and_forget(
     upload_id: &str,
     db: &Db,
 ) -> std::result::Result<(), crate::s3::Error> {
+    // Only where the upload was started: another server never had it, and whatever it
+    // answers (it may well accept the abort) says nothing about the real upload.
+    if !started_here(s3, db) {
+        return Err(crate::s3::Error::Other(
+            "the host's endpoint, bucket or keys are not the ones this upload was started with"
+                .to_string(),
+        ));
+    }
     match actions::AbortMultipartUpload::new(key, upload_id)
         .request(s3)
         .await
     {
         Ok(_) => {}
-        // Already gone on the server. Only the server the upload was started on can
-        // say so: another one never had it (see [`started_here`]).
-        Err(abort) if upload_is_gone(&abort, false) && started_here(s3, db) => {}
+        // Already gone on the server.
+        Err(abort) if upload_is_gone(&abort, false) => {}
         Err(abort) => return Err(abort),
     }
     if let Err(forget) = forget_aborted_upload(db) {
@@ -751,7 +758,8 @@ fn forget_gone_upload(s3: &S3, db: &Db, answer: &str) -> anyhow::Error {
         return anyhow!(
             "the server has no such multipart upload, but the host's endpoint, bucket or \
              keys are not the ones this upload was started with, so its saved state was \
-             kept. Run the upload again to start a new one with the host as it is now.\n{answer}"
+             kept. To resume or abort it, give the host the settings it was started \
+             with.\n{answer}"
         );
     }
     if let Err(forget) = forget_aborted_upload(db) {
@@ -2225,11 +2233,12 @@ mod tests {
         assert_eq!(db.check().unwrap(), None);
     }
 
-    // #84 review, round 2: the abort paths (#80, #83) also took a 404 NoSuchUpload as
-    // "already aborted". From another server than the one the upload was started on,
-    // it proves nothing: the state is kept, and the error says the abort failed.
+    // #84 review: the abort paths (#80, #83) must not act on another server than the
+    // one the upload was started on. It never had the upload: its 404 NoSuchUpload
+    // was taken for "already aborted", and its 204 for an abort, and both erased the
+    // state of an upload that was still open elsewhere. No abort is sent there.
     #[tokio::test]
-    async fn an_abort_answered_by_another_host_keeps_the_upload() {
+    async fn an_upload_started_on_another_host_is_not_aborted() {
         let mut server = Server::new_async().await;
         let started_on = S3::new(
             &Credentials::new("AKIA", &SecretString::new("secret".into())),
@@ -2243,15 +2252,15 @@ mod tests {
         file.write_all(b"0123456789").unwrap();
         let db = Db::new(&started_on, "key", "checksum", 1, dir.path()).unwrap();
         db.save_upload_id("uid").unwrap();
-        // Part 2 saved with a range that isn't this file's: the upload is aborted.
+        // Part 2 saved with a range that isn't this file's: on the right host the
+        // upload would be aborted.
         db.create_parts([(1, 0, 4), (2, 4, 6)], None).unwrap();
 
         let abort = server
             .mock("DELETE", "/bucket/key")
             .match_query(Matcher::Any)
-            .with_status(404)
-            .with_body(NO_SUCH_UPLOAD)
-            .expect(1)
+            .with_status(204)
+            .expect(0)
             .create_async()
             .await;
 
@@ -2261,7 +2270,13 @@ mod tests {
             .to_string();
 
         abort.assert_async().await;
-        assert!(error.contains("could not be aborted"), "{error}");
+        assert!(
+            error.contains(
+                "could not be aborted (the host's endpoint, bucket or keys are not the ones \
+                 this upload was started with)"
+            ),
+            "{error}"
+        );
         assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
         assert_eq!(db.db_parts().unwrap().len(), 2);
     }
@@ -2314,5 +2329,40 @@ mod tests {
             "{error}"
         );
         assert_eq!(db.upload_id().unwrap(), None);
+    }
+
+    // #84 review: a 404 whose body is not an S3 <Error> document doesn't say the
+    // upload is gone, even if it has a <Code>NoSuchUpload</Code> in it. The upload was
+    // forgotten for it; it is now an error like any other, and the upload id is kept.
+    #[tokio::test]
+    async fn no_such_upload_in_another_document_keeps_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.create_parts([(1, 0, 4), (2, 4, 4), (3, 8, 2)], None)
+            .unwrap();
+
+        let other = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(404)
+            .with_body("<ReplicaStatus><Code>NoSuchUpload</Code></ReplicaStatus>")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        other.assert_async().await;
+        assert!(!error.contains("no longer exists"), "{error}");
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.db_parts().unwrap().len(), 3);
     }
 }
