@@ -108,42 +108,38 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
 
     increment_progress_bar(&pb, db_uploaded.len() as u64 * request.chunk_size, None);
 
-    let mut tasks = FuturesUnordered::new();
-
     log::info!("Max concurrent requests: {}", request.max_requests);
 
-    for part in db_parts
-        .iter()
-        .values()
-        .filter_map(Result::ok)
-        .map(|p| from_bytes::<Part, RkyvError>(&p).map_err(anyhow::Error::from))
-    {
-        let part: Part = part?;
+    let parts_uploaded = upload_pending_parts(
+        PendingParts {
+            s3: request.s3,
+            key: request.key,
+            file: request.file,
+            upload_id: &upload_id,
+            db: request.sdb,
+            globals: &request.globals,
+            chunk_size: request.chunk_size,
+            max_requests: request.max_requests.into(),
+        },
+        &pb,
+    )
+    .await;
 
-        log::info!("Task push part: {}", part.get_number());
-
-        // spawn task (upload part)
-        tasks.push(upload_part(
-            request.s3,
-            request.key,
-            request.file,
-            &upload_id,
-            request.sdb,
-            part,
-            &request.globals,
-        ));
-
-        await_tasks(
-            &mut tasks,
-            &pb,
-            request.chunk_size,
-            request.max_requests.into(),
-        )
-        .await?;
+    if let Err(error) = parts_uploaded {
+        return Err(match error.downcast::<UnsupportedChecksum>() {
+            Ok(unsupported) => {
+                abort_unsupported_checksum(
+                    request.s3,
+                    request.key,
+                    &upload_id,
+                    request.sdb,
+                    unsupported,
+                )
+                .await
+            }
+            Err(error) => error,
+        });
     }
-
-    // wait for the remaining tasks
-    await_remaining_tasks(&mut tasks, &pb, request.chunk_size).await?;
 
     // finish progress bar
     increment_progress_bar(&pb, 0, Some(true));
@@ -173,6 +169,53 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     log::info!("Upload finished, ETag: {}", rs.e_tag);
 
     Ok(upload_report(rs, checksum.as_ref()))
+}
+
+struct PendingParts<'a> {
+    s3: &'a S3,
+    key: &'a str,
+    file: &'a Path,
+    upload_id: &'a str,
+    db: &'a Db,
+    globals: &'a RequestOptions,
+    chunk_size: u64,
+    max_requests: usize,
+}
+
+/// Upload the parts still pending, `max_requests` at a time. The parts in flight
+/// live in this function: when it returns an error they are dropped, so nothing is
+/// still uploading when the caller handles the error.
+async fn upload_pending_parts(parts: PendingParts<'_>, pb: &Bar) -> Result<()> {
+    let mut tasks = FuturesUnordered::new();
+
+    for part in parts
+        .db
+        .db_parts()?
+        .iter()
+        .values()
+        .filter_map(Result::ok)
+        .map(|p| from_bytes::<Part, RkyvError>(&p).map_err(anyhow::Error::from))
+    {
+        let part: Part = part?;
+
+        log::info!("Task push part: {}", part.get_number());
+
+        // spawn task (upload part)
+        tasks.push(upload_part(
+            parts.s3,
+            parts.key,
+            parts.file,
+            parts.upload_id,
+            parts.db,
+            part,
+            parts.globals,
+        ));
+
+        await_tasks(&mut tasks, pb, parts.chunk_size, parts.max_requests).await?;
+    }
+
+    // wait for the remaining tasks
+    await_remaining_tasks(&mut tasks, pb, parts.chunk_size).await
 }
 
 /// The upload id to send parts to, and the additional checksum to send them with.
@@ -248,7 +291,7 @@ where
     // limit to available parallelism - 2 or 1 (see tools::default_concurrency)
     while tasks.len() >= max_requests {
         if let Some(r) = tasks.next().await {
-            r.map_err(|e| anyhow!("{e}"))?;
+            r.map_err(flatten_error)?;
             increment_progress_bar(pb, chunk_size, None);
         }
     }
@@ -268,10 +311,20 @@ where
     log::debug!("Remaining tasks: {}", tasks.len());
 
     while let Some(r) = tasks.next().await {
-        r.map_err(|e| anyhow!("{e}"))?;
+        r.map_err(flatten_error)?;
         increment_progress_bar(pb, chunk_size, None);
     }
     Ok(())
+}
+
+/// A part's error as one message, as it has always been reported. The unsupported
+/// checksum marker keeps its type: the upload is aborted for it once the parts stop.
+fn flatten_error(error: anyhow::Error) -> anyhow::Error {
+    if error.is::<UnsupportedChecksum>() {
+        error
+    } else {
+        anyhow!("{error}")
+    }
 }
 
 fn increment_progress_bar(pb: &Bar, chunk_size: u64, finish: Option<bool>) {
@@ -343,12 +396,17 @@ async fn upload_part(
 
             Err(e) => {
                 // Only before any part was accepted: after that, the server does
-                // support the checksum, and aborting would discard uploaded parts.
+                // support the checksum. No retry can succeed; the upload is aborted
+                // once, after every part in flight has stopped.
                 if let Some(checksum) = additional_checksum
                     .as_ref()
                     .filter(|_| is_not_implemented(&e) && processed.is_empty())
                 {
-                    return Err(abort_unsupported_checksum(s3, key, uid, db, checksum, &e).await);
+                    return Err(UnsupportedChecksum {
+                        algorithm: checksum.algorithm.name(),
+                        answer: e.to_string(),
+                    }
+                    .into());
                 }
 
                 log::error!(
@@ -394,22 +452,42 @@ fn is_not_implemented(error: &anyhow::Error) -> bool {
         .is_some_and(|error| error.status() == Some(501) && error.code() == Some("NotImplemented"))
 }
 
-/// The server rejected the first parts' additional checksum as not implemented
-/// (Cloudflare R2 does for SHA-1 and SHA-256). Neither a retry nor a resume can
-/// succeed, and the upload in progress would keep its algorithm, so it is aborted and
-/// forgotten: the next run starts a new upload. Returns the error to report.
+/// A part's additional checksum was rejected as not implemented, before any part was
+/// accepted (Cloudflare R2 does this for SHA-1 and SHA-256).
+#[derive(Debug)]
+struct UnsupportedChecksum {
+    algorithm: &'static str,
+    /// The server's answer.
+    answer: String,
+}
+
+impl std::fmt::Display for UnsupportedChecksum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.answer)
+    }
+}
+
+impl std::error::Error for UnsupportedChecksum {}
+
+/// The server doesn't implement the additional checksum on parts. Neither a retry nor
+/// a resume can succeed, and the upload in progress would keep its algorithm, so it is
+/// aborted and forgotten: the next run starts a new upload. Called once, after the
+/// parts in flight have stopped. Returns the error to report.
 ///
-/// When the abort fails the upload is still open on the server: the state is kept,
-/// and the error says how to abort it.
+/// If a part was accepted after all, the server does support the checksum: nothing is
+/// aborted. When the abort fails the upload is still open on the server: the state is
+/// kept, and the error says how to abort it.
 async fn abort_unsupported_checksum(
     s3: &S3,
     key: &str,
     upload_id: &str,
     db: &Db,
-    checksum: &Checksum,
-    error: &anyhow::Error,
+    unsupported: UnsupportedChecksum,
 ) -> anyhow::Error {
-    let algorithm = checksum.algorithm.name();
+    let UnsupportedChecksum { algorithm, answer } = unsupported;
+    if !db.db_uploaded().is_ok_and(|uploaded| uploaded.is_empty()) {
+        return anyhow!("{answer}");
+    }
     let advice = "Use another --checksum algorithm (Cloudflare R2 accepts crc32 and crc32c on \
                   multipart uploads), or a --buffer larger than the file to upload it as a \
                   single part.";
@@ -419,7 +497,7 @@ async fn abort_unsupported_checksum(
         .await
     {
         Ok(_) => Ok(()),
-        // Already gone: another part's failure aborted it first.
+        // Already gone on the server.
         Err(abort) if abort.code() == Some("NoSuchUpload") => Ok(()),
         Err(abort) => Err(abort),
     };
@@ -431,13 +509,13 @@ async fn abort_unsupported_checksum(
             }
             anyhow!(
                 "the server doesn't support {algorithm} checksums on the parts of a multipart \
-                 upload, and the upload was aborted. {advice}\n{error}"
+                 upload, and the upload was aborted. {advice}\n{answer}"
             )
         }
         Err(abort) => anyhow!(
             "the server doesn't support {algorithm} checksums on the parts of a multipart \
              upload. The multipart upload could not be aborted ({abort}); abort it with \
-             `s3m rm <host>/<bucket>/{key} --abort {upload_id}`. {advice}\n{error}"
+             `s3m rm <host>/<bucket>/{key} --abort {upload_id}`. {advice}\n{answer}"
         ),
     }
 }
@@ -447,6 +525,7 @@ fn forget_aborted_upload(db: &Db) -> Result<()> {
     db.forget_upload()?;
     db.db_parts()?.clear()?;
     db.db_uploaded()?.clear()?;
+    db.flush()?;
     Ok(())
 }
 
@@ -983,6 +1062,50 @@ mod tests {
         assert!(error.contains("could not be aborted"), "{error}");
         assert!(error.contains("--abort uid"), "{error}");
         assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+    }
+
+    // #80 review: with several parts in flight, each rejected part must not send its
+    // own abort. The parts stop, then the upload is aborted once.
+    #[tokio::test]
+    async fn part_checksum_not_implemented_aborts_once_with_parallel_parts() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789abcdefghij").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        let _create = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Regex("uploads".into()))
+            .with_body(INITIATED)
+            .create_async()
+            .await;
+        let _parts = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(501)
+            .with_body(SHA256_NOT_IMPLEMENTED)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(204)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut request = sha256_upload(&s3, &db, file.path());
+        request.file_size = 20;
+        request.max_requests = 4;
+        let error = upload_multipart(request).await.unwrap_err().to_string();
+
+        // Let a request that was already on its way arrive before counting.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        abort.assert_async().await;
+        assert!(error.contains("and the upload was aborted"), "{error}");
+        assert_eq!(db.upload_id().unwrap(), None);
+        assert!(db.db_parts().unwrap().is_empty());
     }
 
     // #80 review: a 501 after a part was accepted with its checksum is not "the
