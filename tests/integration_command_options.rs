@@ -445,6 +445,41 @@ fn host_bucket_and_unknown_config_keys_are_ignored() -> Result<()> {
     Ok(())
 }
 
+// AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY replace the keys of the config: the
+// request is signed with the access key from the environment.
+#[test]
+fn environment_credentials_replace_the_config_keys() -> Result<()> {
+    let mut server = Server::new();
+    let cli = Cli::new(&server.url())?;
+    let policy = "<AccessControlPolicy/>";
+    let get = server
+        .mock("GET", OBJECT_PATH)
+        .match_query(Matcher::Any)
+        .match_header(
+            "authorization",
+            Matcher::Regex("Credential=ENVACCESSKEY/".to_string()),
+        )
+        .with_body(policy)
+        .expect(1)
+        .create();
+
+    let args = ["acl", OBJECT];
+    let output = Command::new(env!("CARGO_BIN_EXE_s3m"))
+        .env("HOME", cli.home.path())
+        .env("AWS_ACCESS_KEY_ID", "ENVACCESSKEY")
+        .env("AWS_SECRET_ACCESS_KEY", "env-secret")
+        .current_dir(&cli.work)
+        .arg("--config")
+        .arg(&cli.config)
+        .args(args)
+        .output()?;
+
+    let stdout = expect_exit(&output, 0, &args)?;
+    assert_eq!(stdout, format!("{policy}\n"));
+    get.assert();
+    Ok(())
+}
+
 // A missing or misspelled key used to be sent as an empty credential and fail as a
 // signature error from the server. It is now reported before any request, unless
 // the requests are unsigned (--no-sign-request, for public buckets).

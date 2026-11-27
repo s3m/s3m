@@ -59,5 +59,4 @@ zstd = "0.14"
 
 [dev-dependencies]
 mockito = "1.7.2"
-temp-env = "0.3.6"
 tokio = { version = "1", features = ["test-util"] }
