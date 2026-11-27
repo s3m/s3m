@@ -4,6 +4,7 @@
 # The caller sets bin, config, host, bucket, target, prefix and work, and defines
 # object_rows <key prefix> and delete_rows <run prefix> for its type of bucket.
 # object_rows returns the key as the first tab-separated field.
+# Each interruption attempt waits 15 seconds after observing the multipart upload.
 
 s3m() { "$bin" --config "$config" "$@"; }
 
@@ -206,24 +207,70 @@ wait_for_upload() {
     fi
     sleep 0.25
   done
-  fail "$name: could not observe one active multipart upload"
+  return 1
 }
 
+# interrupt <name variable> [s3m options...]
+# At 512 KiB/s with one request at a time, the 5 MiB parts land around 10
+# and 20 seconds. Killing 15 seconds after observation leaves room for a few
+# seconds of listing lag. A timing miss gets one fresh key for the scenario.
 interrupt() {
-  local name=$1 status=0
+  local name_var=$1 attempt_name=${!1} attempt status elapsed killed entries result observed_state
+  local observed_at timing
   shift
-  track "$name" || fail "$name: could not record upload key"
-  "$bin" --config "$config" --buffer 5242880 -n 1 -k 1024 "$@" "$work/big.bin" "$target/$prefix/$name" >/dev/null 2>&1 &
-  upload_pid=$!
-  wait_for_upload "$name"
-  # One part at a time at 1 MiB/s. Verify that one or two 5 MiB parts were saved.
-  sleep 7.5
-  kill -KILL "$upload_pid" 2>/dev/null || fail "$name: the upload ended before it could be interrupted"
-  wait "$upload_pid" 2>/dev/null || status=$?
-  upload_pid=
-  [[ $status == 137 ]] || fail "$name: the upload did not exit from SIGKILL"
-  stream "$name" '.etag == null and .parts_total == 3 and (.parts_uploaded == 1 or .parts_uploaded == 2)' >/dev/null ||
-    fail "$name: expected partial state for a three-part interrupted upload"
+  for attempt in 1 2; do
+    track "$attempt_name" || fail "$attempt_name: could not record upload key"
+    "$bin" --config "$config" --buffer 5242880 -n 1 -k 512 "$@" "$work/big.bin" "$target/$prefix/$attempt_name" >/dev/null 2>&1 &
+    upload_pid=$!
+    elapsed=n/a
+    if wait_for_upload "$attempt_name" 2>/dev/null; then
+      observed_at=$SECONDS
+      sleep 15
+      elapsed="$((SECONDS - observed_at))s"
+    fi
+    killed=false
+    kill -KILL "$upload_pid" 2>/dev/null && killed=true
+    status=0
+    wait "$upload_pid" 2>/dev/null || status=$?
+    upload_pid=
+
+    timing="exit_status=$status observation_to_kill_attempt=$elapsed"
+    entries=$(stream_entries "$attempt_name" 2>/dev/null) ||
+      fail "$attempt_name: could not read saved state ($timing state=unavailable)"
+    # Normal completion clears the uploaded-parts tree after saving the ETag.
+    result=$(jq -r --argjson exit_status "$status" --argjson killed "$killed" --arg elapsed "$elapsed" "$safe_string"'
+      if length == 1 and (.[0].id | safe_string) and (.[0].upload_id | safe_string) then
+        .[0] |
+        if $exit_status == 0 and .status == "complete" and .etag != null and
+           ((.parts_total == 0 and .parts_uploaded == 0) or (.parts_total == 3 and .parts_uploaded == 3)) then
+          "upload ended before the kill"
+        elif $killed and $exit_status == 137 and $elapsed != "n/a" and
+             (.status == "active" or .status == "resumable" or .status == "stale") and
+             .etag == null and .parts_total == 3 then
+          if .parts_uploaded == 1 or .parts_uploaded == 2 then "partial"
+          elif .parts_uploaded == 0 then "no parts uploaded"
+          else "unexpected saved state" end
+        else "unexpected upload exit or saved state" end
+      else "expected one saved upload with IDs" end' <<<"$entries" 2>/dev/null) ||
+      fail "$attempt_name: could not inspect saved state ($timing state=unavailable)"
+    if [[ $result == partial ]]; then
+      printf -v "$name_var" '%s' "$attempt_name"
+      return 0
+    fi
+
+    observed_state=$(jq -c 'map({
+      status: (if .status | IN("active", "resumable", "stale", "broken", "complete") then .status else null end),
+      parts_total: (.parts_total | if type == "number" then . else null end),
+      parts_uploaded: (.parts_uploaded | if type == "number" then . else null end),
+      etag_present: (.etag != null)
+    })' <<<"$entries" 2>/dev/null) || observed_state=unavailable
+    if [[ $attempt == 1 && ( $result == 'no parts uploaded' || $result == 'upload ended before the kill' ) ]]; then
+      printf '%s: %s, retrying as %s.retry (%s state=%s)\n' "$attempt_name" "$result" "$attempt_name" "$timing" "$observed_state" >&2
+      attempt_name+=.retry
+    else
+      fail "$attempt_name: $result ($timing state=$observed_state)"
+    fi
+  done
 }
 
 stream_entries() {
@@ -243,63 +290,63 @@ open_uploads() {
 }
 
 scenario_resume_checksum() {
-  local id output printed stored
-  interrupt resume-crc32c.bin --checksum crc32c
-  id=$(stream resume-crc32c.bin .id)
-  output=$(s3m streams resume "$id") || fail "resume-crc32c.bin: streams resume failed"
+  local name=resume-crc32c.bin id output printed stored
+  interrupt name --checksum crc32c
+  id=$(stream "$name" .id)
+  output=$(s3m streams resume "$id") || fail "$name: streams resume failed"
   printed=$(awk '$1 == "crc32c" && $2 == "(base64):" { print $3 }' <<<"$output")
-  stored=$(stored_checksum resume-crc32c.bin crc32c) || fail "resume-crc32c.bin: could not read stored checksum"
+  stored=$(stored_checksum "$name" crc32c) || fail "$name: could not read stored checksum"
   { [[ $printed =~ ^[A-Za-z0-9+/]+=*-3$ ]] && grep -Eq '^ETag: "[^"]+-3"$' <<<"$output"; } ||
-    fail "resume-crc32c.bin: no three-part ETag and composite crc32c"
-  [[ $printed == "$stored" ]] || fail "resume-crc32c.bin: printed $printed, stored ${stored:-nothing}"
-  check_download resume-crc32c.bin "$work/big.bin"
-  echo "ok  resume-crc32c.bin  streams resume kept crc32c ($printed)"
+    fail "$name: no three-part ETag and composite crc32c"
+  [[ $printed == "$stored" ]] || fail "$name: printed $printed, stored ${stored:-nothing}"
+  check_download "$name" "$work/big.bin"
+  echo "ok  $name  streams resume kept crc32c ($printed)"
 }
 
 scenario_gone_upload() {
-  local upload_id output entries count
-  interrupt gone.bin
-  upload_id=$(stream gone.bin .upload_id)
-  printf '%s\t%s\n' "$prefix/gone.bin" "$upload_id" | abort_rows "$prefix" ||
-    fail "gone.bin: could not abort the interrupted upload"
-  count=$(open_uploads gone.bin) || fail "gone.bin: could not verify the abort"
-  [[ $count == 0 ]] || fail "gone.bin: multipart upload is still open"
-  if output=$(upload gone.bin "$work/big.bin" --buffer 5242880 2>&1); then
-    fail "gone.bin: the upload to an aborted multipart upload succeeded"
+  local name=gone.bin upload_id output entries count
+  interrupt name
+  upload_id=$(stream "$name" .upload_id)
+  printf '%s\t%s\n' "$prefix/$name" "$upload_id" | abort_rows "$prefix" ||
+    fail "$name: could not abort the interrupted upload"
+  count=$(open_uploads "$name") || fail "$name: could not verify the abort"
+  [[ $count == 0 ]] || fail "$name: multipart upload is still open"
+  if output=$(upload "$name" "$work/big.bin" --buffer 5242880 2>&1); then
+    fail "$name: the upload to an aborted multipart upload succeeded"
   fi
-  grep -q 'no longer exists on the server' <<<"$output" || fail "gone.bin: unexpected error: $output"
-  entries=$(stream_entries gone.bin) || fail "gone.bin: could not verify that the state was forgotten"
+  grep -q 'no longer exists on the server' <<<"$output" || fail "$name: unexpected error: $output"
+  entries=$(stream_entries "$name") || fail "$name: could not verify that the state was forgotten"
   jq -e 'all(.[]; .upload_id == null and .parts_total == 0)' <<<"$entries" >/dev/null ||
-    fail "gone.bin: aborted upload ID or saved parts are still present"
-  upload gone.bin "$work/big.bin" --buffer 5242880 >/dev/null || fail "gone.bin: the next run failed"
-  check_download gone.bin "$work/big.bin"
-  echo "ok  gone.bin  aborted upload reported, next run uploaded it"
+    fail "$name: aborted upload ID or saved parts are still present"
+  upload "$name" "$work/big.bin" --buffer 5242880 >/dev/null || fail "$name: the next run failed"
+  check_download "$name" "$work/big.bin"
+  echo "ok  $name  aborted upload reported, next run uploaded it"
 }
 
 scenario_single_part_rerun() {
-  local output count
-  interrupt rerun.bin
-  output=$(upload rerun.bin "$work/big.bin" --buffer 16777216) || fail "rerun.bin: single-part rerun failed"
-  grep -Eq '^ETag: "[^"-]+"$' <<<"$output" || fail "rerun.bin: expected a single-part ETag"
-  count=$(open_uploads rerun.bin) || fail "rerun.bin: could not list open uploads"
-  [[ $count == 0 ]] || fail "rerun.bin: $count multipart uploads left open after the single-part rerun"
-  check_download rerun.bin "$work/big.bin"
-  echo "ok  rerun.bin  single-part rerun aborted the multipart upload"
+  local name=rerun.bin output count
+  interrupt name
+  output=$(upload "$name" "$work/big.bin" --buffer 16777216) || fail "$name: single-part rerun failed"
+  grep -Eq '^ETag: "[^"-]+"$' <<<"$output" || fail "$name: expected a single-part ETag"
+  count=$(open_uploads "$name") || fail "$name: could not list open uploads"
+  [[ $count == 0 ]] || fail "$name: $count multipart uploads left open after the single-part rerun"
+  check_download "$name" "$work/big.bin"
+  echo "ok  $name  single-part rerun aborted the multipart upload"
 }
 
 scenario_two_destinations() {
-  local id_a id_b
-  interrupt two-a.bin
-  interrupt two-b.bin
-  id_a=$(stream two-a.bin .id)
-  id_b=$(stream two-b.bin .id)
-  [[ $id_a != "$id_b" ]] || fail "two-a.bin and two-b.bin share the state $id_a"
-  s3m streams resume "$id_a" >/dev/null || fail "two-a.bin: streams resume failed"
-  check_download two-a.bin "$work/big.bin"
-  check_absent two-b.bin
-  s3m streams resume "$id_b" >/dev/null || fail "two-b.bin: streams resume failed"
-  check_download two-b.bin "$work/big.bin"
-  echo "ok  two-a.bin two-b.bin  one file, two destinations, resumed separately"
+  local name_a=two-a.bin name_b=two-b.bin id_a id_b
+  interrupt name_a
+  interrupt name_b
+  id_a=$(stream "$name_a" .id)
+  id_b=$(stream "$name_b" .id)
+  [[ $id_a != "$id_b" ]] || fail "$name_a and $name_b share the same saved state"
+  s3m streams resume "$id_a" >/dev/null || fail "$name_a: streams resume failed"
+  check_download "$name_a" "$work/big.bin"
+  check_absent "$name_b"
+  s3m streams resume "$id_b" >/dev/null || fail "$name_b: streams resume failed"
+  check_download "$name_b" "$work/big.bin"
+  echo "ok  $name_a $name_b  one file, two destinations, resumed separately"
 }
 
 scenario_file_changes() {
@@ -308,7 +355,7 @@ scenario_file_changes() {
   cp "$work/big.bin" "$work/changing.bin"
   "$bin" --config "$config" --retries 1 --buffer 5242880 -n 1 -k 1024 "$work/changing.bin" "$target/$prefix/changing.bin" >"$work/changing.out" 2>&1 &
   upload_pid=$!
-  wait_for_upload changing.bin
+  wait_for_upload changing.bin || fail "changing.bin: could not observe one active multipart upload"
   printf x >>"$work/changing.bin"
   wait "$upload_pid" || status=$?
   upload_pid=
