@@ -275,3 +275,104 @@ fn shared_legacy_parts_are_never_used_and_each_upload_id_is_visible() {
     assert!(unrelated.upload_id().unwrap().is_none());
     assert!(unrelated.db_parts().unwrap().is_empty());
 }
+
+fn single_put_with_unreadable_legacy_owner(torn: bool) {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    let mut uploads = Uploads::new();
+    let mut other_server = Server::new();
+    let home = uploads.home.path();
+    let hash = calculate_file_hash(&uploads.source);
+    let mtime = fs::metadata(&uploads.source)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let s3 = S3::new(
+        &Credentials::new("mock", &SecretString::new("mock-secret".into())),
+        &Region::custom("", uploads.server.url()),
+        Some("bucket".into()),
+        false,
+    );
+    let db = Layout::Legacy.open(&s3, "a", &hash, mtime, &s3m_dir(home));
+    db.save_upload_id("old-a").unwrap();
+    if torn {
+        fs::write(db.path().join("state.yml"), "broken: [").unwrap();
+    }
+    drop(db);
+    wait_for_state_lock(home, &hash);
+
+    let mut config = fs::OpenOptions::new()
+        .append(true)
+        .open(s3m_dir(home).join("config.yml"))
+        .unwrap();
+    writeln!(
+        config,
+        "  other:\n    endpoint: {}\n    access_key: mock\n    secret_key: mock-secret",
+        other_server.url()
+    )
+    .unwrap();
+    let other_put = other_server
+        .mock("PUT", "/bucket/b")
+        .with_header("etag", "b")
+        .expect(1)
+        .create();
+    let abort = uploads
+        .server
+        .mock("DELETE", "/bucket/a")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "old-a".into()))
+        .with_status(204)
+        .expect(1)
+        .create();
+
+    let (sent, received) = mpsc::channel();
+    let other_home = home.to_owned();
+    let source = uploads.source.clone();
+    let owner_put = uploads
+        .server
+        .mock("PUT", "/bucket/a")
+        .with_header("etag", "a")
+        .with_body_from_request(move |_| {
+            // The owner's CLI holds sled until this PUT and its subsequent abort finish.
+            let other = run_streams(&other_home, &[source.to_str().unwrap(), "other/bucket/b"]);
+            sent.send(other).unwrap();
+            Vec::new()
+        })
+        .expect(1)
+        .create();
+    let owner = run_streams(home, &[uploads.source.to_str().unwrap(), "s3/bucket/a"]);
+    owner_put.assert();
+    let other = received.try_recv().unwrap();
+    assert!(
+        other.status.success(),
+        "{}",
+        String::from_utf8_lossy(&other.stderr)
+    );
+    assert!(
+        owner.status.success(),
+        "{}",
+        String::from_utf8_lossy(&owner.stderr)
+    );
+    abort.assert();
+    other_put.assert();
+    let entries = uploads.list();
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["id"] == hash && entry["destination"] == "bucket/a")
+    );
+}
+
+#[test]
+fn legacy_single_put_publishes_its_missing_owner() {
+    single_put_with_unreadable_legacy_owner(false);
+}
+
+#[test]
+fn legacy_single_put_repairs_its_torn_owner() {
+    single_put_with_unreadable_legacy_owner(true);
+}

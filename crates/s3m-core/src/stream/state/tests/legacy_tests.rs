@@ -181,5 +181,27 @@ fn locked_legacy_upload_only_blocks_its_own_destination() {
     assert!(other.upload_id().unwrap().is_none());
     assert!(is_lock_error(&f.put("active", 1).unwrap_err().to_string()));
     fs::remove_file(f.dir().join(STATE_FILE)).unwrap();
-    assert!(is_lock_error(&f.put("unknown", 1).unwrap_err().to_string()));
+    let error = f.put("unknown", 1).unwrap_err().to_string();
+    assert!(is_lock_error(&error));
+    assert!(
+        error.contains("wait for the active upload to finish") && error.contains("retry"),
+        "{error}"
+    );
+}
+
+#[test]
+fn another_destination_can_start_when_the_locked_owner_becomes_readable() {
+    let f = Fixture::new();
+    f.multipart("active", 1, true, false);
+    let held = f.put("active", 1).unwrap();
+    let metadata = load_metadata(held.path()).unwrap();
+    fs::remove_file(held.path().join(STATE_FILE)).unwrap();
+    let home = f.home.path().to_owned();
+    let repair = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        write_metadata(&home, &metadata).unwrap();
+    });
+    let other = f.put("other", 1);
+    repair.join().unwrap();
+    assert_ne!(other.unwrap().path(), held.path());
 }

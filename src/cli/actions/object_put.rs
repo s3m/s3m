@@ -9,7 +9,7 @@ use crate::{
     stream::{
         FileStreamUpload, StreamAbortFailed,
         db::Db,
-        state::{StreamMetadata, StreamMode, write_metadata},
+        state::{StreamMetadata, StreamMode, load_metadata, write_metadata},
         upload_compressed::stream_compressed,
         upload_compressed_encrypted::stream_compressed_encrypted,
         upload_default::{UploadRequest, upload},
@@ -262,7 +262,7 @@ async fn handle_standard_file_upload(
         local_file.mtime,
         &request.s3m_dir,
     )
-    .context("could not create stream tree, try option \"--clean\"")?;
+    .context("could not open upload state")?;
 
     maybe_write_stream_metadata(
         &request,
@@ -415,7 +415,17 @@ fn maybe_write_stream_metadata(
     blake3_checksum: &str,
     part_size: u64,
 ) -> Result<()> {
-    if local_file.size <= part_size {
+    let id = db
+        .path()
+        .file_name()
+        .and_then(|id| id.to_str())
+        .context("invalid stream state directory name")?;
+    // Only the legacy file-hash directory needs to identify its owner during a
+    // single PUT. Keep matching multipart metadata, including its original part size.
+    if local_file.size <= part_size
+        && (id != blake3_checksum
+            || load_metadata(db.path()).is_ok_and(|m| m.db_key == db.state_key()))
+    {
         return Ok(());
     }
 
@@ -427,12 +437,7 @@ fn maybe_write_stream_metadata(
         &request.s3m_dir,
         &StreamMetadata {
             version: 1,
-            id: db
-                .path()
-                .file_name()
-                .and_then(|id| id.to_str())
-                .context("invalid stream state directory name")?
-                .to_owned(),
+            id: id.to_owned(),
             host: request.host.clone(),
             bucket: bucket.to_string(),
             key: request.key.clone(),

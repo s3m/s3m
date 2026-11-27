@@ -37,7 +37,7 @@ pub(crate) fn is_lock_error(error: &str) -> bool {
 /// Will return `Err` if the database can not be opened, or if its lock is still
 /// held after a short wait
 pub(crate) fn open_state(path: &Path) -> sled::Result<sled::Db> {
-    retry_sled_lock(LOCK_ATTEMPTS, LOCK_RETRY_DELAY, || {
+    wait_for_sled(|| {
         let _opening = lock_for_open(path)?;
         open_database(path)
     })
@@ -53,8 +53,12 @@ pub(crate) fn open_state_once(path: &Path) -> sled::Result<Option<sled::Db>> {
     path.try_exists()?.then(|| open_database(path)).transpose()
 }
 
-pub(super) fn open_existing_state(path: &Path) -> sled::Result<Option<sled::Db>> {
-    retry_sled_lock(LOCK_ATTEMPTS, LOCK_RETRY_DELAY, || open_state_once(path))
+fn open_existing_state(path: &Path) -> sled::Result<Option<sled::Db>> {
+    wait_for_sled(|| open_state_once(path))
+}
+
+pub(super) fn wait_for_sled<T>(open: impl Fn() -> sled::Result<T>) -> sled::Result<T> {
+    retry_sled_lock(LOCK_ATTEMPTS, LOCK_RETRY_DELAY, open)
 }
 
 fn retry_sled_lock<T>(

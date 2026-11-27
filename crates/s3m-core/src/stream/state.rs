@@ -406,7 +406,11 @@ fn infer_db_key(db: &sled::Db) -> Result<Option<String>> {
     Ok(upload.or(etag))
 }
 
-pub(super) fn load_metadata(state_dir: &Path) -> Result<StreamMetadata> {
+/// Read the metadata in an upload's state directory.
+///
+/// # Errors
+/// Returns an error if `state.yml` cannot be read or parsed.
+pub fn load_metadata(state_dir: &Path) -> Result<StreamMetadata> {
     let file = fs::File::open(state_dir.join(STATE_FILE))?;
     // Keep errors single-line; they are shown in stream listings.
     let options = serde_saphyr::options! { with_snippet: false };
