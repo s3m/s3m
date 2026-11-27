@@ -513,7 +513,7 @@ fn missing_host_keys_fail_before_any_request() -> Result<()> {
         ),
         (
             &["--no-sign-request", "share", OBJECT][..],
-            "Error: share signs the URL with the host's keys, so it can't be used with --no-sign-request",
+            "Error: hosts.s3 has no access_key in the config; set it",
         ),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_s3m"))
@@ -529,6 +529,30 @@ fn missing_host_keys_fail_before_any_request() -> Result<()> {
         let stderr = text(&output.stderr);
         ensure!(stderr.lines().next() == Some(message), "{args:?}: {stderr}");
     }
+    assert_all(&forbidden);
+    Ok(())
+}
+
+// With the keys in place, share prints a signed URL whether or not
+// --no-sign-request is given, as it always has. Rejecting the flag broke callers
+// that pass it to every command.
+#[test]
+fn share_signs_the_url_with_or_without_no_sign_request() -> Result<()> {
+    let mut server = Server::new();
+    let cli = Cli::new(&server.url())?;
+    let forbidden = forbid_requests(&mut server);
+
+    for args in [
+        &["share", OBJECT][..],
+        &["--no-sign-request", "share", OBJECT][..],
+    ] {
+        let stdout = expect_exit(&cli.run(args)?, 0, args)?;
+        ensure!(
+            stdout.contains("X-Amz-Signature=") && stdout.contains("X-Amz-Credential="),
+            "{args:?}: {stdout}"
+        );
+    }
+    assert_all(&forbidden);
     Ok(())
 }
 

@@ -147,13 +147,9 @@ fn build_s3(matches: &ArgMatches, name: &str, host: &Host, bucket: Option<String
         .get_one::<bool>("no-sign-request")
         .copied()
         .unwrap_or(false);
-    // A presigned URL is always signed with the host's keys.
+    // A presigned URL is always signed with the host's keys, also when
+    // --no-sign-request is given: the flag has never changed what share prints.
     let credentials = if matches.subcommand_name() == Some("share") {
-        if no_sign_request {
-            return Err(anyhow!(
-                "share signs the URL with the host's keys, so it can't be used with --no-sign-request"
-            ));
-        }
         host.presign_credentials(name)?
     } else {
         host.credentials(name, no_sign_request)?
