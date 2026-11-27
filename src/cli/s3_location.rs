@@ -68,7 +68,7 @@ impl S3Location {
 
     /// Validate S3 bucket name according to AWS specifications
     /// - Length: 3-63 characters
-    /// - Pattern: [a-z0-9][\.\-a-z0-9]{1,61}[a-z0-9]
+    /// - Pattern: `[a-z0-9][\.\-a-z0-9]{1,61}[a-z0-9]`
     fn validate_bucket_name(bucket: &str, validate_bucket_name: bool) -> Result<()> {
         if bucket.len() < 3 || bucket.len() > 63 {
             return Err(anyhow!(
@@ -95,7 +95,7 @@ impl S3Location {
 
     /// Validate S3 object key according to AWS specifications
     /// - Length: 0-1024 characters
-    /// - Pattern: [\P{M}\p{M}]* (Unicode characters, including combining marks)
+    /// - Pattern: `[\P{M}\p{M}]*` (Unicode characters, including combining marks)
     fn validate_object_key(key: &str) -> Result<()> {
         if key.len() > 1024 {
             return Err(anyhow!(
