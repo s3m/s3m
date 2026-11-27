@@ -4,10 +4,11 @@ use crate::{
     s3::{
         S3, actions,
         checksum::{Checksum, ChecksumAlgorithm},
+        responses::CompleteMultipartUploadResult,
     },
     stream::{db::Db, iterator::PartIterator, part::Part, retry::backoff_secs, upload_report},
 };
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use futures::stream::{FuturesUnordered, StreamExt};
 use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 use sled::transaction::{TransactionError, Transactional};
@@ -283,6 +284,8 @@ async fn complete_upload(
         Err(error) => return Err(error.into()),
     };
 
+    verify_completion_checksum(&rs, checksum.as_ref(), db)?;
+
     // Save the returned ETag first: killed between the two steps, the upload is
     // recorded as complete, not as an upload to resume that the server no longer has.
     db.save_etag(&rs.e_tag)?;
@@ -294,6 +297,44 @@ async fn complete_upload(
     log::info!("Upload finished, ETag: {}", rs.e_tag);
 
     Ok(upload_report(rs, checksum.as_ref()))
+}
+
+fn verify_completion_checksum(
+    result: &CompleteMultipartUploadResult,
+    checksum: Option<&Checksum>,
+    db: &Db,
+) -> Result<()> {
+    let Some(local) = checksum else {
+        return Ok(());
+    };
+    let remote = match local.algorithm {
+        ChecksumAlgorithm::Crc32 => result.checksum_crc32.as_deref(),
+        ChecksumAlgorithm::Crc32c => result.checksum_crc32c.as_deref(),
+        ChecksumAlgorithm::Sha1 => result.checksum_sha1.as_deref(),
+        ChecksumAlgorithm::Sha256 => result.checksum_sha256.as_deref(),
+        ChecksumAlgorithm::Md5 => None,
+    };
+    let Some(remote) = remote.filter(|remote| {
+        *remote != local.checksum
+            && is_composite_checksum(remote) == is_composite_checksum(&local.checksum)
+    }) else {
+        return Ok(());
+    };
+
+    let reason = format!(
+        "the object was stored but does not have the {} checksum s3m computed (s3m: {}, server: {remote})",
+        local.algorithm.name(),
+        local.checksum
+    );
+    forget_aborted_upload(db)
+        .with_context(|| format!("{reason}. Could not clear the saved upload state"))?;
+    Err(anyhow!(reason))
+}
+
+fn is_composite_checksum(value: &str) -> bool {
+    value.rsplit_once('-').is_some_and(|(_, parts)| {
+        !parts.is_empty() && parts.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 /// The saved parts are not the parts of this file.
@@ -1215,6 +1256,100 @@ mod tests {
     }
 
     const COMPLETED: &str = "<CompleteMultipartUploadResult><Location>l</Location><Bucket>bucket</Bucket><Key>key</Key><ETag>\"done-2\"</ETag></CompleteMultipartUploadResult>";
+
+    const CRC32_COMPOSITE: &str = "3O3KWw==-2";
+
+    async fn complete_with_crc32(response_value: Option<&str>, mismatch: bool) {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.save_upload_checksum(Some(&ChecksumAlgorithm::Crc32))
+            .unwrap();
+        for (number, offset, crc32) in [(1_u16, 0, "3aRwJA=="), (2, 5, "Ex2gcA==")] {
+            let checksum = Checksum {
+                algorithm: ChecksumAlgorithm::Crc32,
+                checksum: crc32.into(),
+            };
+            let part = Part::new(number, offset, 5, Some(checksum)).set_etag(format!("p{number}"));
+            db.db_uploaded()
+                .unwrap()
+                .insert(
+                    number.to_be_bytes(),
+                    to_bytes::<RkyvError>(&part).unwrap().as_slice(),
+                )
+                .unwrap();
+        }
+
+        let body = response_value.map_or_else(
+            || COMPLETED.to_string(),
+            |crc32| {
+                const END: &str = "</CompleteMultipartUploadResult>";
+                COMPLETED.replace(END, &format!("<ChecksumCRC32>{crc32}</ChecksumCRC32>{END}"))
+            },
+        );
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_body(body)
+            .expect(1)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let result = complete_upload(
+            &s3,
+            "key",
+            "uid",
+            &db,
+            10,
+            Some(Checksum::new(ChecksumAlgorithm::Crc32)),
+        )
+        .await;
+
+        complete.assert_async().await;
+        abort.assert_async().await;
+        if mismatch {
+            let error = result.unwrap_err().to_string();
+            assert!(
+                error.contains(
+                    "the object was stored but does not have the crc32 checksum s3m computed"
+                ),
+                "{error}"
+            );
+            assert!(error.contains(CRC32_COMPOSITE), "{error}");
+            assert!(error.contains(response_value.unwrap()), "{error}");
+            assert_eq!(db.cached_etag().unwrap(), None);
+            assert_eq!(db.upload_id().unwrap(), None);
+            assert_eq!(db.upload_checksum().unwrap(), None);
+            assert!(db.db_parts().unwrap().is_empty());
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                format!("ETag: \"done-2\"\ncrc32 (base64): {CRC32_COMPOSITE}")
+            );
+            assert_eq!(db.cached_etag().unwrap().as_deref(), Some("\"done-2\""));
+        }
+        assert!(db.db_uploaded().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejects_a_different_composite_completion_checksum_and_forgets_upload() {
+        complete_with_crc32(Some("AAAAAA==-2"), true).await;
+    }
+
+    #[tokio::test]
+    async fn accepts_matching_missing_and_full_object_completion_checksums() {
+        for value in [Some(CRC32_COMPOSITE), None, Some("poTHxg==")] {
+            complete_with_crc32(value, false).await;
+        }
+    }
 
     // #77: the upload id is saved but s3m stopped before recording the parts. The
     // resume creates them with the algorithm the upload was created with; without it
