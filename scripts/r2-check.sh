@@ -7,7 +7,7 @@
 # and aborts any multipart upload it left unfinished. Use a dedicated test bucket
 # and an API token limited to it. Needs jq.
 #
-# Known R2 limitation, not checked here: multipart uploads with --checksum sha1 or
+# Known R2 limitation, checked at the end: multipart uploads with --checksum sha1 or
 # sha256 (R2 answers 501 for per-part SHA checksums, #80).
 set -euo pipefail
 
@@ -150,5 +150,16 @@ for alg in crc32 crc32c; do
   check_checksum "big-$alg.bin" "$work/big.bin" "$alg" "${part[@]}"
 done
 check_download big-crc32c.bin "$work/big.bin"
+
+# Multipart with a SHA checksum: R2 answers 501 NotImplemented to the parts (#80).
+# s3m must stop at once, abort the upload and say so. If R2 starts accepting them,
+# this fails: move sha1/sha256 to the multipart checks above.
+track big-sha256.bin
+if output=$(upload big-sha256.bin "$work/big.bin" --checksum sha256 "${part[@]}" 2>&1); then
+  fail "big-sha256.bin: a multipart upload with --checksum sha256 succeeded: $output"
+fi
+grep -q "doesn't support sha256 checksums on the parts of a multipart upload, and the upload was aborted" <<<"$output" ||
+  fail "big-sha256.bin: unexpected error: $output"
+echo "ok  big-sha256.bin  rejected at once and aborted"
 
 echo "all R2 checks passed"
