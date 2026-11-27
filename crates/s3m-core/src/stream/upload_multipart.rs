@@ -335,8 +335,10 @@ fn verify_completion_checksum(
         ChecksumAlgorithm::Sha256 => result.checksum_sha256.as_deref(),
         ChecksumAlgorithm::Md5 => None,
     };
-    let Some(remote) = remote.filter(|remote| {
-        *remote != local.checksum
+    // XML may put white space around the value; it is not part of it.
+    let Some(remote) = remote.map(str::trim).filter(|remote| {
+        !remote.is_empty()
+            && *remote != local.checksum
             && is_composite_checksum(remote) == is_composite_checksum(&local.checksum)
     }) else {
         return Ok(());
@@ -1348,7 +1350,7 @@ mod tests {
                 "{error}"
             );
             assert!(error.contains(CRC32_COMPOSITE), "{error}");
-            assert!(error.contains(response_value.unwrap()), "{error}");
+            assert!(error.contains(response_value.unwrap().trim()), "{error}");
             assert_eq!(db.cached_etag().unwrap(), None);
             assert_eq!(db.upload_id().unwrap(), None);
             assert_eq!(db.upload_checksum().unwrap(), None);
@@ -1366,11 +1368,22 @@ mod tests {
     #[tokio::test]
     async fn rejects_a_different_composite_completion_checksum_and_forgets_upload() {
         complete_with_crc32(Some("AAAAAA==-2"), true).await;
+        // #88 review: white space around the value didn't hide a mismatch: the line
+        // break made it look like a full-object value, which is not compared.
+        complete_with_crc32(Some("\n  AAAAAA==-2\n"), true).await;
     }
 
     #[tokio::test]
     async fn accepts_matching_missing_and_full_object_completion_checksums() {
-        for value in [Some(CRC32_COMPOSITE), None, Some("poTHxg==")] {
+        let padded = format!("  {CRC32_COMPOSITE}\n");
+        for value in [
+            Some(CRC32_COMPOSITE),
+            None,
+            Some("poTHxg=="),
+            // #88 review: white space around an equal value is not a mismatch.
+            Some(padded.as_str()),
+            Some(""),
+        ] {
             complete_with_crc32(value, false).await;
         }
     }
