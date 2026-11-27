@@ -383,17 +383,21 @@ hosts:
     secret_key: YYY
     bucket: my-bucket";
 
-    fn get_config() -> Result<PathBuf> {
+    /// A config directory for one test. It is removed when the returned value is
+    /// dropped, at the end of the test (it used to be kept: every run left one
+    /// directory per test in the system's temporary directory).
+    fn get_config() -> Result<tempfile::TempDir> {
         let tmp_dir = Builder::new().prefix("test-s3m-").tempdir()?;
         let config_path = tmp_dir.path().join("config.yml");
         let mut config = File::create(&config_path)?;
         config.write_all(CONF.as_bytes())?;
-        Ok(tmp_dir.keep())
+        Ok(tmp_dir)
     }
 
     #[test]
     fn test_short_version_is_bare_and_long_version_adds_commit_and_date() -> Result<()> {
-        let cmd = new(&get_config()?);
+        let config = get_config()?;
+        let cmd = new(config.path());
         let short = format!("s3m {}", env!("CARGO_PKG_VERSION"));
         assert_eq!(cmd.render_version(), format!("{short}\n"));
 
@@ -424,7 +428,7 @@ hosts:
     #[test]
     fn test_check_defaults() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test"]);
         assert!(m.is_ok());
 
@@ -447,7 +451,7 @@ hosts:
     #[test]
     fn test_check_clean() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--clean"]);
         assert!(m.is_ok());
 
@@ -461,7 +465,7 @@ hosts:
     #[test]
     fn test_check_buffer() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--buffer", "123"]);
         assert!(m.is_ok());
 
@@ -475,7 +479,7 @@ hosts:
     #[test]
     fn test_check_config() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--config", "test.yml"]);
         assert!(m.is_err());
 
@@ -485,7 +489,7 @@ hosts:
     #[test]
     fn test_check_pipe() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--pipe"]);
         assert!(m.is_ok());
 
@@ -499,7 +503,7 @@ hosts:
     #[test]
     fn test_short_help_stays_compact() -> Result<()> {
         let config = get_config().unwrap();
-        let mut cmd = new(&config);
+        let mut cmd = new(config.path());
         let short_help = cmd.render_help().to_string();
 
         assert!(!short_help.contains("Examples:"));
@@ -511,7 +515,7 @@ hosts:
     #[test]
     fn test_long_help_contains_examples_and_notes() -> Result<()> {
         let config = get_config().unwrap();
-        let mut cmd = new(&config);
+        let mut cmd = new(config.path());
         let long_help = cmd.render_long_help().to_string();
 
         assert!(long_help.contains("Examples:"));
@@ -525,7 +529,7 @@ hosts:
     #[test]
     fn test_check_tmp_dir() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--tmp-dir", "/tmp"]);
         assert!(m.is_ok());
 
@@ -544,7 +548,7 @@ hosts:
     #[test]
     fn test_tmp_dir_has_no_default_to_validate() -> Result<()> {
         let config = get_config().unwrap();
-        let m = new(&config).try_get_matches_from(vec!["s3m", "test"])?;
+        let m = new(config.path()).try_get_matches_from(vec!["s3m", "test"])?;
         assert_eq!(m.get_one::<PathBuf>("tmp-dir"), None);
         Ok(())
     }
@@ -552,7 +556,7 @@ hosts:
     #[test]
     fn test_check_quiet() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--quiet"]);
         assert!(m.is_ok());
 
@@ -576,7 +580,7 @@ hosts:
         ];
         for acl in tets {
             let config = get_config().unwrap();
-            let cmd = new(&config);
+            let cmd = new(config.path());
             let m = cmd.try_get_matches_from(vec!["s3m", "test", "--acl", acl]);
             assert!(m.is_ok());
 
@@ -590,7 +594,7 @@ hosts:
     #[test]
     fn test_check_meta() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--meta", "key1=value1;key2=value2"]);
         assert!(m.is_ok());
 
@@ -609,7 +613,7 @@ hosts:
         let tests = vec!["crc32", "crc32c", "sha1", "sha256"];
         for checksum in tests {
             let config = get_config().unwrap();
-            let cmd = new(&config);
+            let cmd = new(config.path());
             let m = cmd.try_get_matches_from(vec!["s3m", "test", "--checksum", checksum]);
             assert!(m.is_ok());
 
@@ -628,7 +632,7 @@ hosts:
         let tests = vec!["1", "255"];
         for n in tests {
             let config = get_config().unwrap();
-            let cmd = new(&config);
+            let cmd = new(config.path());
             let m = cmd.try_get_matches_from(vec!["s3m", "test", "--number", n]);
             assert!(m.is_ok());
 
@@ -644,7 +648,7 @@ hosts:
         let tests = vec!["0", "256"];
         for n in tests {
             let config = get_config().unwrap();
-            let cmd = new(&config);
+            let cmd = new(config.path());
             let m = cmd.try_get_matches_from(vec!["s3m", "test", "--number", n]);
             assert!(m.is_err());
         }
@@ -654,13 +658,13 @@ hosts:
     #[test]
     fn test_check_throttle() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--kilobytes", "1024"]);
         assert!(m.is_ok());
         let m = m.unwrap();
         assert_eq!(m.get_one::<usize>("throttle").copied(), Some(1024));
 
-        let cmd2 = new(&config);
+        let cmd2 = new(config.path());
         let m2 = cmd2.try_get_matches_from(vec!["s3m", "test", "-k", "500"]);
         assert!(m2.is_ok());
         let m2 = m2.unwrap();
@@ -671,13 +675,13 @@ hosts:
     #[test]
     fn test_check_compress() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--compress"]);
         assert!(m.is_ok());
         let m = m.unwrap();
         assert_eq!(m.get_one::<bool>("compress").copied(), Some(true));
 
-        let cmd2 = new(&config);
+        let cmd2 = new(config.path());
         let m2 = cmd2.try_get_matches_from(vec!["s3m", "test", "-x"]);
         assert!(m2.is_ok());
         let m2 = m2.unwrap();
@@ -688,7 +692,7 @@ hosts:
     #[test]
     fn test_check_decrypt() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "--decrypt", "file.enc", "mykey"]);
         assert!(m.is_ok());
         let m = m.unwrap();
@@ -704,13 +708,13 @@ hosts:
     #[test]
     fn test_check_verbose() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "-vvv"]);
         assert!(m.is_ok());
         let m = m.unwrap();
         assert_eq!(m.get_count("verbose"), 3);
 
-        let cmd2 = new(&config);
+        let cmd2 = new(config.path());
         let m2 = cmd2.try_get_matches_from(vec!["s3m", "test", "--verbose"]);
         assert!(m2.is_ok());
         let m2 = m2.unwrap();
@@ -721,7 +725,7 @@ hosts:
     #[test]
     fn test_check_no_sign_request() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--no-sign-request"]);
         assert!(m.is_ok());
 
@@ -740,7 +744,7 @@ hosts:
     #[test]
     fn test_check_arguments() -> Result<()> {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "/path/to/file", "s3/my-bucket/path/to/file"]);
 
         assert!(m.is_ok());
@@ -766,7 +770,7 @@ hosts:
         let tests = vec!["0", "10"];
         for n in tests {
             let config = get_config().unwrap();
-            let cmd = new(&config);
+            let cmd = new(config.path());
             let m = cmd.try_get_matches_from(vec!["s3m", "test", "--retries", n]);
             assert!(m.is_ok());
 
@@ -780,7 +784,7 @@ hosts:
     #[test]
     fn test_conflicts_pipe_checksum() {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--pipe", "--checksum"]);
         assert!(m.is_err());
     }
@@ -788,7 +792,7 @@ hosts:
     #[test]
     fn test_conflicts_compress_checksum() {
         let config = get_config().unwrap();
-        let cmd = new(&config);
+        let cmd = new(config.path());
         let m = cmd.try_get_matches_from(vec!["s3m", "test", "--compress", "--checksum"]);
         assert!(m.is_err());
     }

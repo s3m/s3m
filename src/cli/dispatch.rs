@@ -1589,9 +1589,7 @@ hosts:
         let filepath = config_path.as_os_str().to_str().unwrap();
         let mut full_args = vec!["test", "--config", filepath, "rm"];
         full_args.extend_from_slice(args);
-        let matches = new(&tmp_dir.keep())
-            .try_get_matches_from(full_args)
-            .unwrap();
+        let matches = new(tmp_dir.path()).try_get_matches_from(full_args).unwrap();
         let mut globals = GlobalArgs::new();
         let s3_location = host_bucket_key(&matches).unwrap();
         let action = dispatch(&s3_location, 0, Path::new(""), &matches, &mut globals)?;
@@ -1725,7 +1723,7 @@ hosts:
     fn test_finalize_action_single_object_builds_single_group() {
         let (tmp_dir, config_path, config) = write_config_file();
         let filepath = config_path.as_os_str().to_str().unwrap();
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd
             .try_get_matches_from(vec!["test", "--config", filepath, "rm", "s3/bucket/key"])
             .unwrap();
@@ -1765,7 +1763,7 @@ hosts:
     fn test_finalize_action_groups_multiple_objects_by_bucket() {
         let (tmp_dir, config_path, config) = write_config_file();
         let filepath = config_path.as_os_str().to_str().unwrap();
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd
             .try_get_matches_from(vec![
                 "test",
@@ -1926,7 +1924,7 @@ hosts:
     fn test_finalize_action_keeps_older_than_runtime_listing_path() {
         let (tmp_dir, config_path, config) = write_config_file();
         let filepath = config_path.as_os_str().to_str().unwrap();
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd
             .try_get_matches_from(vec![
                 "test",
@@ -1966,7 +1964,7 @@ hosts:
     fn test_finalize_action_rejects_multiple_older_than_targets() {
         let (tmp_dir, config_path, _config) = write_config_file();
         let filepath = config_path.as_os_str().to_str().unwrap();
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd
             .try_get_matches_from(vec![
                 "test",
@@ -1992,7 +1990,7 @@ hosts:
     fn test_finalize_action_rejects_bucket_and_object_mix() {
         let (tmp_dir, config_path, config) = write_config_file();
         let filepath = config_path.as_os_str().to_str().unwrap();
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd
             .try_get_matches_from(vec![
                 "test",
@@ -2052,7 +2050,7 @@ hosts:
 
         let filepath = config_path.as_os_str().to_str().unwrap();
 
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -2117,7 +2115,7 @@ hosts:
 
         let filepath = config_path.as_os_str().to_str().unwrap();
 
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches =
             cmd.try_get_matches_from(vec!["test", "--config", filepath, "foo", "s3/bucket/key"]);
 
@@ -2145,7 +2143,7 @@ hosts:
 
         let filepath = config_path.as_os_str().to_str().unwrap();
 
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches =
             cmd.try_get_matches_from(vec!["test", "--config", filepath, filepath, "s3/bucket/"]);
 
@@ -2202,7 +2200,7 @@ hosts:
         config.write_all(CONF.as_bytes()).unwrap();
         let filepath = config_path.as_os_str().to_str().unwrap();
 
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -2268,7 +2266,7 @@ hosts:
         config.write_all(CONF.as_bytes()).unwrap();
         let filepath = config_path.as_os_str().to_str().unwrap();
 
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -2347,7 +2345,7 @@ hosts:
         config.write_all(CONF.as_bytes()).unwrap();
         let filepath = config_path.as_os_str().to_str().unwrap();
 
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -2413,7 +2411,7 @@ hosts:
         config.write_all(CONF.as_bytes()).unwrap();
         let filepath = config_path.as_os_str().to_str().unwrap();
 
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd.try_get_matches_from(vec![
             "test",
             "--config",
@@ -2544,7 +2542,7 @@ hosts:
 
         let filepath = config_path.as_os_str().to_str().unwrap();
 
-        let cmd = new(&tmp_dir.keep());
+        let cmd = new(tmp_dir.path());
         let matches = cmd.try_get_matches_from(vec!["test", "--config", filepath, "s3/bucket/key"]);
 
         assert!(matches.is_ok());
