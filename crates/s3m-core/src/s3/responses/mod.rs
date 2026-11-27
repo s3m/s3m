@@ -638,6 +638,65 @@ DeleteMarker: []
         assert!(quick_xml::de::from_str::<ListAllMyBucketsResult>(xml).is_err());
     }
 
+    // <https://github.com/s3m/s3m/issues/91>: AWS S3 lists versions and delete markers
+    // in key order, so the two kinds of elements alternate in one page (the shape of
+    // the examples in the ListObjectVersions reference). That failed with "duplicate
+    // field `Version`".
+    #[test]
+    fn test_list_versions_with_interleaved_delete_markers() {
+        let version = |key: &str, id: &str| {
+            format!(
+                "<Version><Key>{key}</Key><VersionId>{id}</VersionId><IsLatest>false</IsLatest><LastModified>2026-11-27T00:00:00.000Z</LastModified><ETag>e</ETag><Size>1</Size><StorageClass>STANDARD</StorageClass></Version>"
+            )
+        };
+        let marker = |key: &str, id: &str| {
+            format!(
+                "<DeleteMarker><Key>{key}</Key><VersionId>{id}</VersionId><IsLatest>true</IsLatest><LastModified>2026-11-27T00:00:00.000Z</LastModified></DeleteMarker>"
+            )
+        };
+        let xml = format!(
+            "<ListVersionsResult><Name>bucket</Name><IsTruncated>false</IsTruncated>{}{}{}{}{}</ListVersionsResult>",
+            version("a", "a1"),
+            marker("b", "b2"),
+            version("b", "b1"),
+            marker("c", "c2"),
+            version("c", "c1"),
+        );
+
+        let parsed: ListVersionsResult = quick_xml::de::from_str(&xml).unwrap();
+
+        let ids = |entries: Vec<&str>| entries.join(",");
+        assert_eq!(
+            ids(parsed
+                .versions
+                .iter()
+                .map(|v| v.version_id.as_str())
+                .collect()),
+            "a1,b1,c1"
+        );
+        assert_eq!(
+            ids(parsed
+                .delete_markers
+                .iter()
+                .map(|m| m.version_id.as_str())
+                .collect()),
+            "b2,c2"
+        );
+    }
+
+    // #91: the same for the answer to DeleteObjects, where deleted keys and errors can
+    // alternate.
+    #[test]
+    fn test_delete_result_with_interleaved_errors() {
+        let xml = r"<DeleteResult><Deleted><Key>a</Key></Deleted><Error><Key>b</Key><Code>AccessDenied</Code><Message>no</Message></Error><Deleted><Key>c</Key></Deleted><Error><Key>d</Key><Code>AccessDenied</Code><Message>no</Message></Error></DeleteResult>";
+        let parsed: DeleteObjectsResult = quick_xml::de::from_str(xml).unwrap();
+
+        let deleted: Vec<&str> = parsed.deleted.iter().map(|d| d.key.as_str()).collect();
+        let errors: Vec<&str> = parsed.errors.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(deleted, ["a", "c"]);
+        assert_eq!(errors, ["b", "d"]);
+    }
+
     // <https://github.com/s3m/s3m/issues/90>: a truncated page says where the next one
     // starts.
     #[test]

@@ -1257,6 +1257,45 @@ fn versions_mock(server: &mut ServerGuard, markers: &[(&str, &str)], body: Strin
         .with_body(body)
 }
 
+// <https://github.com/s3m/s3m/issues/91>: AWS S3 returns versions and delete markers
+// in key order, so they alternate in a page. `get --versions` failed on that with
+// "duplicate field `Version`".
+#[test]
+fn get_versions_accepts_interleaved_delete_markers() -> Result<()> {
+    let version = |id: &str| {
+        format!(
+            "<Version><Key>dir/data.bin</Key><VersionId>{id}</VersionId><IsLatest>false</IsLatest><LastModified>2026-03-14T08:00:00.000Z</LastModified><ETag>\"e\"</ETag><Size>7</Size><StorageClass>STANDARD</StorageClass></Version>"
+        )
+    };
+    let marker = |id: &str| {
+        format!(
+            "<DeleteMarker><Key>dir/data.bin</Key><VersionId>{id}</VersionId><IsLatest>false</IsLatest><LastModified>2026-03-14T08:00:00.000Z</LastModified></DeleteMarker>"
+        )
+    };
+    let body = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult><Name>bucket</Name><Prefix>dir/data.bin</Prefix><KeyMarker></KeyMarker><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>{}{}{}{}{}</ListVersionsResult>"#,
+        version("v5"),
+        marker("v4"),
+        version("v3"),
+        marker("v2"),
+        version("v1"),
+    );
+    let mut server = Server::new();
+    let list = versions_mock(&mut server, &[], body).expect(1).create();
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["get", OBJECT, "--versions"];
+    let text_out = expect_exit(&cli.run(&args)?, 0, &args)?;
+
+    let ids: Vec<&str> = text_out
+        .lines()
+        .filter_map(|line| line.rsplit_once("ID: ").map(|(_, id)| id))
+        .collect();
+    assert_eq!(ids, ["v5", "v3", "v1"], "{text_out}");
+    list.assert();
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/90>: `get --versions` printed the first page of
 // a truncated listing and exited 0. It now follows the markers to the last page.
 #[test]

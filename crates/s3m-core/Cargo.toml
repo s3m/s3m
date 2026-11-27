@@ -32,7 +32,7 @@ jiff = { version = "1.0", default-features = false, features = ["std"] }
 log = "0.4"
 md5 = "0.8"
 percent-encoding = "2.3"
-quick-xml = { version = "0.42", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize", "overlapped-lists"] }
 rand = "0.10.4"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
 ring = "0.17"
