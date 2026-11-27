@@ -1,10 +1,9 @@
 use crate::s3::error::Result;
 use crate::{
     s3::actions::{Action, response_error},
-    s3::responses::ListBucketResult,
+    s3::responses::{ListBucketResult, from_xml_root},
     s3::{S3, request, tools},
 };
-use quick_xml::de::from_str;
 use reqwest::Method;
 use std::collections::BTreeMap;
 
@@ -51,7 +50,8 @@ impl ListObjectsV2 {
         .await?;
 
         if response.status().is_success() {
-            let objects: ListBucketResult = from_str(&response.text().await?)?;
+            let objects: ListBucketResult =
+                from_xml_root(&response.text().await?, "ListBucketResult")?;
             Ok(objects)
         } else {
             Err(response_error(response).await)

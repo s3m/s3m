@@ -1,10 +1,9 @@
 use crate::s3::error::Result;
 use crate::{
     s3::actions::{Action, response_error},
-    s3::responses::ListMultipartUploadsResult,
+    s3::responses::{ListMultipartUploadsResult, from_xml_root},
     s3::{S3, request, tools},
 };
-use quick_xml::de::from_str;
 use reqwest::Method;
 use std::collections::BTreeMap;
 
@@ -48,7 +47,8 @@ impl ListMultipartUploads {
         )
         .await?;
         if response.status().is_success() {
-            let uploads: ListMultipartUploadsResult = from_str(&response.text().await?)?;
+            let uploads: ListMultipartUploadsResult =
+                from_xml_root(&response.text().await?, "ListMultipartUploadsResult")?;
             Ok(uploads)
         } else {
             Err(response_error(response).await)

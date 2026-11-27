@@ -1292,6 +1292,44 @@ fn versions_mock(server: &mut ServerGuard, markers: &[(&str, &str)], body: Strin
         .with_body(body)
 }
 
+// #81 review: with their echoed elements optional, the listing answers accepted any
+// document that has an <IsTruncated>. A bucket listing answered to a version listing
+// printed "no versions" with exit 0. Each listing is now checked by its document type.
+#[test]
+fn listings_reject_the_answer_to_another_listing() -> Result<()> {
+    let objects = list_page(&[("dir/data.bin", 7, "2026-03-14T08:00:00.000Z")], None);
+    let versions = versions_page("v1", None);
+    for (args, body, expected) in [
+        (
+            &["get", OBJECT, "--versions"][..],
+            objects.clone(),
+            "expected a <ListVersionsResult> document, got <ListBucketResult>",
+        ),
+        (
+            &["ls", "s3/bucket"][..],
+            versions.clone(),
+            "expected a <ListBucketResult> document, got <ListVersionsResult>",
+        ),
+        (
+            &["ls", "s3/bucket", "--multipart"][..],
+            objects.clone(),
+            "expected a <ListMultipartUploadsResult> document, got <ListBucketResult>",
+        ),
+    ] {
+        let mut server = Server::new();
+        let list = server
+            .mock("GET", "/bucket")
+            .match_query(Matcher::Any)
+            .with_body(body)
+            .expect(1)
+            .create();
+        let cli = Cli::new(&server.url())?;
+        expect_failure(&cli, args, 1, expected)?;
+        list.assert();
+    }
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/91>: AWS S3 returns versions and delete markers
 // in key order, so they alternate in a page. `get --versions` failed on that with
 // "duplicate field `Version`".

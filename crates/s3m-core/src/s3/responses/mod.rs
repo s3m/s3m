@@ -201,6 +201,24 @@ pub(crate) fn from_xml_root<T: serde::de::DeserializeOwned>(
             }
             Ok(Event::End(_)) => depth = depth.saturating_sub(1),
             Ok(Event::Eof) => break,
+            // Text outside the document element: not a document (an error message
+            // appended by something in between, for example).
+            Ok(Event::Text(text)) if depth == 0 => {
+                let text: &str = text.as_ref();
+                if !text
+                    .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+                    .is_empty()
+                {
+                    return Err(quick_xml::DeError::Custom(format!(
+                        "expected a <{root}> document, got text outside it"
+                    )));
+                }
+            }
+            Ok(Event::CData(_)) if depth == 0 => {
+                return Err(quick_xml::DeError::Custom(format!(
+                    "expected a <{root}> document, got text outside it"
+                )));
+            }
             Ok(_) => {}
             Err(error) => return Err(quick_xml::DeError::Custom(error.to_string())),
         }
@@ -830,6 +848,16 @@ DeleteMarker: []
             error.contains("got 2: <CompleteMultipartUploadResult>, <Error>"),
             "{error}"
         );
+        // Text after the document is not ignored either.
+        for trailing in ["upstream failure", "<![CDATA[x]]>"] {
+            let error = from_xml_root::<CompleteMultipartUploadResult>(
+                &format!("{complete}{trailing}"),
+                "CompleteMultipartUploadResult",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("got text outside it"), "{trailing}: {error}");
+        }
         // Comments and processing instructions around the document are fine.
         let parsed: CompleteMultipartUploadResult = from_xml_root(
             &format!("\u{feff}<!-- a -->\n{complete}\n<!-- b -->\n"),
