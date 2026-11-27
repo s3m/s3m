@@ -41,11 +41,21 @@ impl<'a> HeadObject<'a> {
         if response.status().is_success() {
             let mut h: BTreeMap<String, String> = BTreeMap::new();
             for (key, value) in response.headers() {
-                if !value.is_empty() {
+                if value.is_empty() {
+                    continue;
+                }
+                let text = match value.to_str() {
+                    // Exactly as sent: callers compare these values (the ETag of a
+                    // cached upload).
+                    Ok(text) => text.to_string(),
+                    // An ETag that can't be read exactly is left out: shown escaped,
+                    // two different ETags could look the same to a comparison.
+                    Err(_) if key.as_str() == "etag" => continue,
                     // Shown as far as it can be read: one header that isn't ASCII
                     // must not hide the others.
-                    h.insert(key.as_str().to_string(), header_text(value));
-                }
+                    Err(_) => header_text(value),
+                };
+                h.insert(key.as_str().to_string(), text);
             }
             Ok(h)
         } else {

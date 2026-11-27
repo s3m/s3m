@@ -1120,6 +1120,45 @@ fn get_meta_shows_a_header_that_is_not_ascii() -> Result<()> {
     Ok(())
 }
 
+// #75 review: the ETag of a HEAD answer is compared with the one saved by an upload,
+// to skip a file that is already there. Shown escaped, an ETag with a real U+2028 and
+// one with the six characters "\u{2028}" looked the same, and a changed object passed
+// for the uploaded one. A header that reads as ASCII is returned exactly as sent, and
+// an ETag that doesn't is left out.
+#[test]
+fn get_meta_never_rewrites_an_etag() -> Result<()> {
+    for (etag, shown) in [
+        (r#""a\u{2028}b""#, Some(r#""a\u{2028}b""#)),
+        ("\"a\u{2028}b\"", None),
+    ] {
+        let mut server = Server::new();
+        let head = server
+            .mock("HEAD", OBJECT_PATH)
+            .with_header("etag", etag)
+            .with_header("x-amz-meta-owner", "alice")
+            .expect(1)
+            .create();
+        let cli = Cli::new(&server.url())?;
+
+        let args = ["get", OBJECT, "-m"];
+        let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
+
+        let fields: Vec<(&str, &str)> = stdout
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.trim(), value.trim()))
+            .collect();
+        let printed = fields
+            .iter()
+            .find(|(name, _)| *name == "etag")
+            .map(|(_, value)| *value);
+        ensure!(printed == shown, "{etag:?}: {stdout}");
+        ensure!(fields.contains(&("x-amz-meta-owner", "alice")), "{stdout}");
+        head.assert();
+    }
+    Ok(())
+}
+
 #[test]
 fn get_meta_reads_headers_without_downloading_the_body() -> Result<()> {
     let mut server = Server::new();
