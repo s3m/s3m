@@ -21,7 +21,7 @@ fn create_part_state(home: &Path, id: &str, saved_parts: usize) {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let db = Db::new(&test_s3(), "key", id, file_mtime, &s3m_dir).unwrap();
+    let db = legacy_db(&test_s3(), "key", id, file_mtime, &s3m_dir);
     db.save_upload_id("upload-1").unwrap();
     for (number, seek, chunk) in PartIterator::new(11, 5).take(saved_parts) {
         db.create_part(number, seek, chunk, None).unwrap();

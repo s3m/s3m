@@ -1,5 +1,6 @@
 use crate::stream::{
     db::{DB_PARTS, DB_UPLOADED, is_lock_error, open_state_once},
+    legacy,
     part::Part,
 };
 use anyhow::{Context, Result};
@@ -155,8 +156,8 @@ fn replace_metadata(dir: &Path, metadata: &StreamMetadata) -> Result<()> {
 /// Will return `Err` if scanning the streams directory fails
 pub fn scan_streams(base_path: &Path) -> Result<Vec<StreamEntry>> {
     let mut entries = Vec::new();
-    visit_streams(base_path, |entry, _| {
-        entries.push(entry);
+    visit_streams(base_path, |_, states, _| {
+        entries.extend(states);
         Ok(())
     })?;
     entries.sort_by(|a, b| {
@@ -170,7 +171,7 @@ pub fn scan_streams(base_path: &Path) -> Result<Vec<StreamEntry>> {
 /// Inspect and, for clean, remove each directory while holding its sled lock.
 fn visit_streams(
     base_path: &Path,
-    mut visit: impl FnMut(StreamEntry, bool) -> Result<()>,
+    mut visit: impl FnMut(&Path, Vec<StreamEntry>, bool) -> Result<()>,
 ) -> Result<()> {
     let streams = streams_dir(base_path);
     if !streams.try_exists()? {
@@ -181,36 +182,59 @@ fn visit_streams(
         if dir.file_type()?.is_dir() {
             let path = dir.path();
             let db = open_state_once(&path);
-            let id = dir.file_name();
-            let mut entry = load_entry(&id.to_string_lossy(), &path, &db);
-            let removable = match (&db, entry.status) {
-                (Ok(db), StreamStatus::Broken) if has_upload_id(db)? => {
-                    let reason = entry.error.get_or_insert_with(String::new);
-                    reason.push_str("; kept because the database has a saved upload id");
-                    false
-                }
-                (Ok(_), StreamStatus::Broken | StreamStatus::Complete) => true,
-                _ => false,
-            };
-            visit(entry, removable)?;
+            let name = dir.file_name();
+            let id = name.to_string_lossy();
+            let result = db
+                .as_ref()
+                .map_err(|error| anyhow::anyhow!("{error}"))
+                .and_then(|db| inspect_directory(&id, &path, db));
+            let (entries, removable) = result.unwrap_or_else(|error| {
+                let entry = load_entry(&id, &path, load_metadata(&path), Err(error));
+                (vec![entry], false)
+            });
+            visit(&path, entries, removable)?;
         }
     }
     Ok(())
 }
 
-fn load_entry(id: &str, state_dir: &Path, db: &sled::Result<sled::Db>) -> StreamEntry {
-    let (metadata, metadata_error) = match load_metadata(state_dir) {
+fn inspect_directory(id: &str, path: &Path, db: &sled::Db) -> Result<(Vec<StreamEntry>, bool)> {
+    let metadata = load_metadata(path);
+    if !id.starts_with("v2-") {
+        let owners = legacy::owners(db, metadata.as_ref().ok())?;
+        if owners.len() > 1 {
+            let states = legacy::shared_entries(id, path, db, metadata.as_ref().ok(), &owners)?;
+            return Ok((states, !has_upload_id(db)?));
+        }
+    }
+    let snapshot = inspect_db(db, metadata.as_ref().ok());
+    let mut entry = load_entry(id, path, metadata, snapshot);
+    let removable = match entry.status {
+        StreamStatus::Broken if has_upload_id(db)? => {
+            let reason = entry.error.get_or_insert_with(String::new);
+            reason.push_str("; kept because the database has a saved upload id");
+            false
+        }
+        StreamStatus::Broken | StreamStatus::Complete => true,
+        _ => false,
+    };
+    Ok((vec![entry], removable))
+}
+
+fn load_entry(
+    id: &str,
+    state_dir: &Path,
+    metadata: Result<StreamMetadata>,
+    snapshot: Result<DbSnapshot>,
+) -> StreamEntry {
+    let (metadata, metadata_error) = match metadata {
         Ok(metadata) => (Some(metadata), None),
         Err(error) => (None, Some(error.to_string())),
     };
     let trusted_updated_at = metadata.as_ref().and_then(|metadata| metadata.updated_at);
     let updated_at = trusted_updated_at.or_else(|| directory_timestamp(state_dir));
 
-    match db
-        .as_ref()
-        .map_err(|error| anyhow::anyhow!("{error}"))
-        .and_then(|db| inspect_db(db, metadata.as_ref()))
-    {
+    match snapshot {
         Ok(snapshot) => {
             let parts_total = snapshot.parts_pending + snapshot.parts_uploaded;
             // An upload whose abort is still pending is not done: `streams clean`
@@ -298,14 +322,8 @@ fn inspect_db(db: &sled::Db, metadata: Option<&StreamMetadata>) -> Result<DbSnap
         .or_else(|| infer_db_key(db))
         .context("missing stream db key")?;
 
-    let upload_id = db
-        .get(db_key.as_bytes())?
-        .map(|value| String::from_utf8(value.to_vec()))
-        .transpose()?;
-    let etag = db
-        .get(format!("etag {db_key}").as_bytes())?
-        .map(|value| String::from_utf8(value.to_vec()))
-        .transpose()?;
+    let upload_id = read_record(db, &db_key)?;
+    let etag = read_record(db, &format!("etag {db_key}"))?;
 
     let abort_pending = db.contains_key(format!("abort {db_key}").as_bytes())?;
 
@@ -330,15 +348,16 @@ fn inspect_db(db: &sled::Db, metadata: Option<&StreamMetadata>) -> Result<DbSnap
     Ok(snapshot)
 }
 
-fn is_upload_key(key: &[u8]) -> bool {
-    ![b"etag ".as_slice(), b"checksum ", b"abort "]
-        .iter()
-        .any(|prefix| key.starts_with(prefix))
+pub(super) fn read_record(db: &sled::Db, key: &str) -> Result<Option<String>> {
+    Ok(db
+        .get(key)?
+        .map(|value| String::from_utf8(value.to_vec()))
+        .transpose()?)
 }
 
-fn has_upload_id(db: &sled::Db) -> sled::Result<bool> {
+fn has_upload_id(db: &sled::Db) -> Result<bool> {
     for key in db.iter().keys() {
-        if is_upload_key(&key?) {
+        if legacy::record_owner(std::str::from_utf8(&key?)?).is_none() {
             return Ok(true);
         }
     }
@@ -352,14 +371,14 @@ fn infer_db_key(db: &sled::Db) -> Option<String> {
         .filter_map(Result::ok)
         .filter_map(|key| String::from_utf8(key.to_vec()).ok())
         // The upload id is stored under the db key; the other records are prefixed.
-        .filter(|key| is_upload_key(key.as_bytes()))
+        .filter(|key| legacy::record_owner(key).is_none())
         .collect::<Vec<_>>();
     keys.sort();
     keys.dedup();
     if keys.len() == 1 { keys.pop() } else { None }
 }
 
-fn load_metadata(state_dir: &Path) -> Result<StreamMetadata> {
+pub(super) fn load_metadata(state_dir: &Path) -> Result<StreamMetadata> {
     let file = fs::File::open(state_dir.join(STATE_FILE))?;
     // Keep errors single-line; they are shown in stream listings.
     let options = serde_saphyr::options! { with_snippet: false };
@@ -386,12 +405,13 @@ fn now_secs() -> u64 {
 pub fn clean_streams(base_path: &Path) -> Result<CleanSummary> {
     let mut summary = CleanSummary::default();
 
-    visit_streams(base_path, |entry, removable| {
+    visit_streams(base_path, |path, states, removable| {
+        let ids = states.into_iter().map(|entry| entry.id);
         if removable {
-            fs::remove_dir_all(&entry.state_dir)?;
-            summary.removed.push(entry.id);
+            fs::remove_dir_all(path)?;
+            summary.removed.extend(ids);
         } else {
-            summary.kept.push(entry.id);
+            summary.kept.extend(ids);
         }
         Ok(())
     })?;
@@ -454,11 +474,52 @@ mod tests {
         )
     }
 
+    fn legacy_db(id: &str, base: &Path) -> Db {
+        Db::open_existing(
+            &state_dir(base, id),
+            format!("{} key 1", &test_s3().hash()[..8]),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn single_owner_legacy_plans_survive_a_put_to_another_destination() {
+        use crate::s3::checksum::{Checksum, ChecksumAlgorithm};
+
+        for sandbox in [false, true] {
+            let dir = tempdir().unwrap();
+            let db = legacy_db("file", dir.path());
+            db.save_upload_id("original").unwrap();
+            let algorithm = ChecksumAlgorithm::Sha256;
+            db.create_part(1, 0, 7, Some(Checksum::new(algorithm.clone())))
+                .unwrap();
+            if sandbox {
+                db.save_upload_checksum(Some(&algorithm)).unwrap();
+                db.save_etag("replaced").unwrap();
+                db.mark_abort_pending().unwrap();
+            }
+            drop(db);
+            let other = Db::new(&test_s3(), "other", "file", 1, dir.path()).unwrap();
+            assert!(other.db_parts().unwrap().is_empty());
+            other.save_upload_id("second").unwrap();
+            other.create_part(1, 0, 3, None).unwrap();
+            let original = Db::new(&test_s3(), "key", "file", 1, dir.path()).unwrap();
+            assert_eq!(original.path(), state_dir(dir.path(), "file"));
+            assert_eq!(original.upload_id().unwrap().as_deref(), Some("original"));
+            assert_eq!(original.resume_checksum(None).unwrap(), Some(algorithm));
+            assert_eq!(original.get_part(1).unwrap().unwrap().get_chunk(), 7);
+            assert_eq!(original.abort_pending().unwrap(), sandbox);
+            assert_eq!(
+                original.cached_etag().unwrap().as_deref(),
+                sandbox.then_some("replaced")
+            );
+        }
+    }
+
     #[test]
     fn test_scan_valid_state() {
         let dir = tempdir().unwrap();
-        let s3 = test_s3();
-        let db = Db::new(&s3, "key", "stream-1", 1, dir.path()).unwrap();
+        let db = legacy_db("stream-1", dir.path());
         db.save_upload_id("upload-1").unwrap();
         db.create_part(1, 0, 10, None).unwrap();
         db.db_parts().unwrap().flush().unwrap();
@@ -506,7 +567,7 @@ mod tests {
     #[test]
     fn test_scan_locked_state_is_active_not_broken() {
         let dir = tempdir().unwrap();
-        let db = Db::new(&test_s3(), "key", "locked", 1, dir.path()).unwrap();
+        let db = legacy_db("locked", dir.path());
         db.save_upload_id("upload-1").unwrap();
         db.create_part(1, 0, 10, None).unwrap();
         db.db_parts().unwrap().flush().unwrap();
@@ -695,7 +756,7 @@ mod tests {
     #[test]
     fn test_clean_removes_broken_and_keeps_resumable() {
         let dir = tempdir().unwrap();
-        let resumable_db = Db::new(&test_s3(), "key", "good", 1, dir.path()).unwrap();
+        let resumable_db = legacy_db("good", dir.path());
         resumable_db.save_upload_id("upload-1").unwrap();
         resumable_db.create_part(1, 0, 10, None).unwrap();
         resumable_db.db_parts().unwrap().flush().unwrap();
@@ -771,7 +832,7 @@ mod tests {
     #[test]
     fn test_scan_legacy_state_without_updated_at_is_not_active() {
         let dir = tempdir().unwrap();
-        let db = Db::new(&test_s3(), "key", "legacy", 1, dir.path()).unwrap();
+        let db = legacy_db("legacy", dir.path());
         let db_key = db.state_key().to_string();
         db.save_upload_id("upload-1").unwrap();
         db.create_part(1, 0, 10, None).unwrap();

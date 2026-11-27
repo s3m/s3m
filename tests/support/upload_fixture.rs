@@ -12,7 +12,7 @@ pub(super) struct Fixture {
 }
 impl Fixture {
     pub(super) fn new(endpoint: &str, bytes: &[u8]) -> Result<Self> {
-        let home = StreamHome::new(bytes)?;
+        let home = StreamHome::new()?;
         let source = home.path().join("source.bin");
         let config = home.path().join("config.yml");
         fs::write(&source, bytes)?;
@@ -31,6 +31,7 @@ impl Fixture {
     pub(super) fn command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_s3m"));
         cmd.env("HOME", self.home.path())
+            .env("S3M_HOME", self.home.base())
             .arg("-c")
             .arg(&self.config);
         cmd

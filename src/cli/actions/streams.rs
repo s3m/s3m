@@ -705,7 +705,11 @@ mod tests {
     #[test]
     fn test_clean_streams_state_keeps_resumable_entries() {
         let dir = tempdir().unwrap();
-        let db = Db::new(&test_s3("bucket"), "key", "good", 1, dir.path()).unwrap();
+        let db = Db::open_existing(
+            &Db::state_dir(dir.path(), "good"),
+            "legacy key 1".to_owned(),
+        )
+        .unwrap();
         db.save_upload_id("upload-1").unwrap();
         db.create_part(1, 0, 1, None).unwrap();
         db.db_parts().unwrap().flush().unwrap();
@@ -798,10 +802,7 @@ mod tests {
             db.create_part(1, 0, 5, None).unwrap();
             db.db_parts().unwrap().flush().unwrap();
             db.flush().unwrap();
-            (
-                db.state_key().to_string(),
-                Db::state_dir(dir.path(), &checksum),
-            )
+            (db.state_key().to_string(), db.path().to_owned())
         };
 
         let metadata = StreamMetadata {

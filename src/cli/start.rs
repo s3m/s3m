@@ -385,7 +385,11 @@ hosts:
             Some("bucket".to_string()),
             false,
         );
-        let db = Db::new(&s3, "key", "good", 1, tmp_dir.path()).unwrap();
+        let db = Db::open_existing(
+            &state_dir(tmp_dir.path(), "good"),
+            format!("{} key 1", &s3.hash()[..8]),
+        )
+        .unwrap();
         db.save_upload_id("upload-1").unwrap();
         db.create_part(1, 0, 10, None).unwrap();
         db.db_parts().unwrap().flush().unwrap();

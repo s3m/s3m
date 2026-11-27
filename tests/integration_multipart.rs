@@ -35,7 +35,7 @@ struct MultipartFixture {
 impl MultipartFixture {
     fn new(payload: Vec<u8>) -> Self {
         let mut server = Server::new();
-        let home = StreamHome::new(&payload).unwrap();
+        let home = StreamHome::new().unwrap();
         let config = create_config_file(&server.url(), "dummy", "dummy-secret");
         let source = home.path().join("source.bin");
         fs::write(&source, &payload).unwrap();
@@ -71,6 +71,7 @@ impl MultipartFixture {
         let mut command = Command::new(get_s3m_binary());
         command
             .env("HOME", self.home.path())
+            .env("S3M_HOME", self.home.base())
             .arg("--config")
             .arg(self.config.path())
             .args(["-r", "1", "-n", "1"]);

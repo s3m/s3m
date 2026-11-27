@@ -24,6 +24,7 @@ fn terminal_progress_is_visible_and_both_quiet_forms_suppress_it() -> Result<()>
         );
         let output = Command::new("script")
             .env("HOME", fixture.home.path())
+            .env("S3M_HOME", fixture.home.base())
             .env("TERM", "xterm")
             .args(["-q", "-e", "-c", &command, "/dev/null"])
             .output()?;

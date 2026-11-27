@@ -900,13 +900,17 @@ impl std::fmt::Display for UploadGone {
 
 impl std::error::Error for UploadGone {}
 
-/// Whether the host's endpoint, bucket and keys are the ones the saved upload was started
-/// with: the state key starts with their hash. `streams resume` opens a saved state by
-/// its key, whatever the host's configuration is now.
+/// New states identify the endpoint and bucket. Older state keys also depend on
+/// the credentials that were in use when the upload started.
 fn started_here(s3: &S3, db: &Db) -> bool {
-    s3.hash()
-        .get(..8)
-        .is_some_and(|host| db.state_key().starts_with(host))
+    let Some((host, _)) = db.state_key().split_once(' ') else {
+        return false;
+    };
+    if host.starts_with("v2-") {
+        host == s3.upload_host()
+    } else {
+        s3.hash().get(..8) == Some(host)
+    }
 }
 
 /// Nothing can be sent to an upload the server no longer has, so every later run would
@@ -2180,7 +2184,7 @@ mod tests {
             .unwrap();
         // Adding the missing parts refreshes the metadata file, which fails on this one.
         std::fs::write(
-            Db::state_dir(dir.path(), "checksum").join(crate::stream::state::STATE_FILE),
+            db.path().join(crate::stream::state::STATE_FILE),
             "not: [the metadata",
         )
         .unwrap();
@@ -2524,6 +2528,55 @@ mod tests {
         assert!(!error.contains("no longer exists"), "{error}");
         assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
         assert_eq!(db.db_parts().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn rotated_keys_can_forget_a_dead_upload_on_its_original_server() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let rotated = S3::new(
+            &Credentials::new("replacement", &SecretString::new("new-secret".into())),
+            &Region::custom("us-east-1", server.url()),
+            Some("bucket".to_owned()),
+            false,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.create_parts([(1, 0, 4), (2, 4, 4), (3, 8, 2)], None)
+            .unwrap();
+        drop(db);
+        let db = Db::new(&rotated, "key", "checksum", 1, dir.path()).unwrap();
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert!(!super::started_here(
+            &rotated.with_bucket(Some("another".into())),
+            &db
+        ));
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let gone = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(404)
+            .with_body(NO_SUCH_UPLOAD)
+            .expect(1)
+            .create_async()
+            .await;
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&rotated, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+        gone.assert_async().await;
+        assert!(error.contains("no longer exists"), "{error}");
+        assert_eq!(db.upload_id().unwrap(), None);
+
+        let legacy = Db::open_existing(
+            &dir.path().join("old"),
+            format!("{} key 1", &s3.hash()[..8]),
+        )
+        .unwrap();
+        assert!(super::started_here(&s3, &legacy));
+        assert!(!super::started_here(&rotated, &legacy));
     }
 
     // #84 review: `streams resume` opens a saved state by its key. If the host now

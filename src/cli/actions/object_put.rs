@@ -427,7 +427,12 @@ fn maybe_write_stream_metadata(
         &request.s3m_dir,
         &StreamMetadata {
             version: 1,
-            id: blake3_checksum.to_string(),
+            id: db
+                .path()
+                .file_name()
+                .and_then(|id| id.to_str())
+                .context("invalid stream state directory name")?
+                .to_owned(),
             host: request.host.clone(),
             bucket: bucket.to_string(),
             key: request.key.clone(),

@@ -3,9 +3,9 @@ use crate::{
         S3, actions,
         checksum::{Checksum, ChecksumAlgorithm},
     },
-    stream::{part::Part, state},
+    stream::{legacy, part::Part, state},
 };
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 use std::{
     collections::BTreeMap,
@@ -75,24 +75,51 @@ pub struct Db {
 }
 
 impl Db {
+    /// Resolve a physical directory name. For a handle opened by [`Db::new`],
+    /// [`Db::path`] gives the selected directory, including legacy state.
     #[must_use]
-    pub fn state_dir(path: &Path, checksum: &str) -> PathBuf {
-        path.join("streams").join(checksum)
+    pub fn state_dir(path: &Path, id: &str) -> PathBuf {
+        state::state_dir(path, id)
     }
 
     /// # Errors
     ///
     /// Will return `Err` if can not create the db
     pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &Path) -> Result<Self> {
-        let key = format!("{} {} {}", &s3.hash()[0..8], key, mtime);
-        let state_dir = Self::state_dir(path, checksum);
+        let state_key = format!("{} {key} {mtime}", s3.upload_host());
+        let mut hash = blake3::Hasher::new();
+        hash.update(checksum.as_bytes());
+        hash.update(&[0]);
+        hash.update(state_key.as_bytes());
+        let id = format!("v2-{}", hash.finalize().to_hex());
+        let state_dir = Self::state_dir(path, &id);
 
-        log::debug!("db key: [{}], path: {}", key, path.display());
+        let old_dir = Self::state_dir(path, checksum);
+        if !state_dir.try_exists()? && old_dir.try_exists()? {
+            let storage = open_state(&old_dir)?;
+            let metadata = state::load_metadata(&old_dir).ok();
+            let owners = legacy::owners(&storage, metadata.as_ref())?;
+            let host: String = s3.hash().chars().take(8).collect();
+            let old_key = format!("{host} {key} {mtime}");
+            if owners.contains(&old_key) {
+                ensure!(
+                    owners.len() == 1,
+                    "{}: {}",
+                    old_dir.display(),
+                    legacy::SHARED
+                );
+                return Ok(Self {
+                    storage,
+                    key: old_key,
+                    state_dir: old_dir,
+                });
+            }
+        }
 
         let storage = open_state(&state_dir)?;
         Ok(Self {
             storage,
-            key,
+            key: state_key,
             state_dir,
         })
     }
@@ -102,11 +129,24 @@ impl Db {
     /// Will return `Err` if can not open an existing db
     pub fn open_existing(path: &Path, key: String) -> Result<Self> {
         let storage = open_state(path)?;
+        let metadata = state::load_metadata(path).ok();
+        let owners = legacy::owners(&storage, metadata.as_ref())?;
+        ensure!(owners.len() <= 1, "{}: {}", path.display(), legacy::SHARED);
+        ensure!(
+            owners.is_empty() || owners.contains(&key),
+            "upload state belongs to another destination"
+        );
         Ok(Self {
             storage,
             key,
             state_dir: path.to_path_buf(),
         })
+    }
+
+    /// The directory holding this upload's database and metadata.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.state_dir
     }
 
     #[must_use]
@@ -680,6 +720,53 @@ mod tests {
         assert_eq!(other.cached_etag()?, Some("\"def\"".to_string()));
         assert_eq!(other.upload_id()?, Some("other-uid".to_string()));
         Ok(())
+    }
+
+    #[test]
+    fn independent_endpoints_and_buckets_can_hold_the_same_key_open() {
+        let dir = tempdir().unwrap();
+        let host = |endpoint, bucket: &str| {
+            S3::new(
+                &Credentials::new("mock-access", &SecretString::new("mock-secret".into())),
+                &Region::custom("test", endpoint),
+                Some(bucket.to_owned()),
+                false,
+            )
+        };
+        let original = Db::new(
+            &host("http://127.0.0.1:1", "bucket"),
+            "key",
+            "file",
+            1,
+            dir.path(),
+        )
+        .unwrap();
+        original.save_upload_id("pending-abort").unwrap();
+        original.mark_abort_pending().unwrap();
+        original.save_etag("single-put").unwrap();
+        for destination in [
+            host("http://127.0.0.1:2", "bucket"),
+            host("http://127.0.0.1:1", "other"),
+        ] {
+            let other = Db::new(&destination, "key", "file", 1, dir.path()).unwrap();
+            assert_ne!(other.path(), original.path());
+            assert_eq!(other.upload_id().unwrap(), None);
+            assert!(!other.abort_pending().unwrap());
+            assert_eq!(other.cached_etag().unwrap(), None);
+            other.save_upload_id("second").unwrap();
+            other.forget_upload().unwrap();
+        }
+        assert!(original.abort_pending().unwrap());
+        assert_eq!(
+            original.upload_id().unwrap().as_deref(),
+            Some("pending-abort")
+        );
+        assert_eq!(
+            original.cached_etag().unwrap().as_deref(),
+            Some("single-put")
+        );
+        assert!(!original.state_key().contains("mock-access"));
+        assert!(!original.state_key().contains("mock-secret"));
     }
 
     #[test]

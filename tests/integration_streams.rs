@@ -99,6 +99,16 @@ fn minio_s3(minio: &MinioContext, bucket: &str) -> S3 {
     )
 }
 
+// Write the directory and key used by both 0.24.0 and the pre-#85 sandbox.
+// These fixtures deliberately exercise old IDs through the public CLI.
+fn legacy_db(s3: &S3, key: &str, id: &str, mtime: u128, base: &Path) -> Db {
+    Db::open_existing(
+        &state_dir(base, id),
+        format!("{} {key} {mtime}", &s3.hash()[..8]),
+    )
+    .unwrap()
+}
+
 /// sled can keep a state's file lock for a moment after its handle is dropped in this
 /// process. An `s3m` started right away would list that state as locked (active), so
 /// wait until the lock is free before running it.
@@ -134,7 +144,7 @@ fn create_state(home: &Path, id: &str, upload_id: Option<&str>) -> (StreamMetada
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let db = Db::new(&test_s3(), "key", id, file_mtime, &s3m_dir).unwrap();
+    let db = legacy_db(&test_s3(), "key", id, file_mtime, &s3m_dir);
     if let Some(upload_id) = upload_id {
         db.save_upload_id(upload_id).unwrap();
     }
@@ -190,7 +200,7 @@ fn create_valid_resumable_state(home: &Path, id: &str) -> PathBuf {
         .unwrap()
         .as_millis();
     let checksum = calculate_file_hash(&source);
-    let db = Db::new(&test_s3(), "key", id, file_mtime, &s3m_dir).unwrap();
+    let db = legacy_db(&test_s3(), "key", id, file_mtime, &s3m_dir);
     db.save_upload_id("upload-1").unwrap();
     db.create_part(1, 0, 11, None).unwrap();
     db.db_parts().unwrap().flush().unwrap();
@@ -270,7 +280,7 @@ async fn create_live_resumable_state(
         .request(&s3)
         .await
         .unwrap();
-    let db = Db::new(&s3, key, id, file_mtime, &s3m_dir).unwrap();
+    let db = legacy_db(&s3, key, id, file_mtime, &s3m_dir);
     db.save_upload_id(&create.upload_id).unwrap();
     for (number, seek, chunk) in PartIterator::new(file_size, part_size) {
         db.create_part(number, seek, chunk, None).unwrap();
@@ -338,7 +348,7 @@ async fn create_partially_uploaded_live_resumable_state(
         .request(&s3)
         .await
         .unwrap();
-    let db = Db::new(&s3, key, id, file_mtime, &s3m_dir).unwrap();
+    let db = legacy_db(&s3, key, id, file_mtime, &s3m_dir);
     db.save_upload_id(&create.upload_id).unwrap();
 
     let mut parts = PartIterator::new(file_size, part_size);
@@ -1012,3 +1022,6 @@ fn clean_keeps_an_upload_with_torn_metadata() {
         assert!(String::from_utf8_lossy(&listing.stdout).contains("saved upload id"));
     }
 }
+
+#[path = "support/streams_destinations.rs"]
+mod streams_destinations;

@@ -1,6 +1,7 @@
 pub mod db;
 mod final_part;
 pub mod iterator;
+mod legacy;
 pub mod part;
 mod retry;
 pub mod state;

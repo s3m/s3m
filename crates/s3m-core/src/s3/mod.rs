@@ -103,6 +103,21 @@ impl S3 {
         write_hex_bytes(sha256_digest(&hash).as_ref())
     }
 
+    /// Store the endpoint and bucket as one space-free field in the state key.
+    /// An endpoint containing userinfo or query parameters may itself carry a
+    /// secret. In that case only its fingerprint goes on disk.
+    pub(crate) fn upload_host(&self) -> String {
+        let mut endpoint = self.region.endpoint();
+        if endpoint.contains(['@', '?', '#']) {
+            endpoint = format!("blake3:{}", blake3::hash(endpoint.as_bytes()));
+        }
+        let host = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("endpoint", &endpoint)
+            .append_pair("bucket", self.bucket().unwrap_or_default())
+            .finish();
+        format!("v2-{host}")
+    }
+
     /// # Errors
     /// Will return an error if the endpoint is invalid
     pub fn endpoint(&self) -> Result<Url> {
