@@ -742,6 +742,164 @@ mod tests {
         (db, id)
     }
 
+    #[cfg(unix)]
+    fn same_size_resume_fixture(base: &Path, endpoint: &str) -> (PathBuf, String) {
+        let source = base.join("source.bin");
+        let bytes = b"original";
+        fs::write(&source, bytes).unwrap();
+        let old_time = UNIX_EPOCH + std::time::Duration::from_secs(10);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_modified(old_time)
+            .unwrap();
+        let file_mtime = old_time.duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let file_size = u64::try_from(bytes.len()).unwrap();
+        let checksum = blake3::hash(bytes).to_hex().to_string();
+        let s3 = S3::new(
+            &Credentials::new("fixture", &SecretString::new("local-only".into())),
+            &Region::custom("us-east-1", endpoint),
+            Some("bucket".into()),
+            false,
+        );
+        let db = Db::new(&s3, "key", &checksum, file_mtime, base).unwrap();
+        db.save_upload_id("upload-1").unwrap();
+        db.create_parts([(1, 0, file_size)], None).unwrap();
+        let id = db.path().file_name().unwrap().to_str().unwrap().to_owned();
+        write_metadata(
+            base,
+            &StreamMetadata {
+                version: 1,
+                id: id.clone(),
+                host: "s3".into(),
+                bucket: "bucket".into(),
+                key: "key".into(),
+                source_path: source.clone(),
+                checksum,
+                file_size,
+                file_mtime,
+                part_size: file_size,
+                db_key: db.state_key().to_owned(),
+                created_at: 1,
+                updated_at: Some(1),
+                pipe: false,
+                compress: false,
+                encrypt: false,
+                mode: StreamMode::FileMultipart,
+            },
+        )
+        .unwrap();
+        (source, id)
+    }
+
+    #[cfg(unix)]
+    async fn rewrite_source_during_config_read(config: &Path, source: &Path, endpoint: &str) {
+        use std::{process::Stdio, time::Duration};
+        use tokio::{
+            io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader},
+            process::Command,
+            time::timeout,
+        };
+
+        // Opening the FIFO for writing unblocks only once resume has validated
+        // the original source and reached the read of the host configuration.
+        let mut writer = Command::new("sh")
+            .args([
+                "-c",
+                r#"exec 3>"$1"; printf '%s\n' ready; exec cat >&3"#,
+                "sh",
+            ])
+            .arg(config)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut lines = BufReader::new(writer.stdout.take().unwrap()).lines();
+        let ready = timeout(Duration::from_secs(10), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            ready.as_deref(),
+            Some("ready"),
+            "resume did not open the config FIFO"
+        );
+        let mut replacement = tempfile::NamedTempFile::new_in(source.parent().unwrap()).unwrap();
+        std::io::Write::write_all(&mut replacement, b"modified").unwrap();
+        replacement
+            .as_file()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(20))
+            .unwrap();
+        replacement.persist(source).unwrap();
+        let mut input = writer.stdin.take().unwrap();
+        input.write_all(
+            format!("hosts:\n  s3:\n    endpoint: {endpoint}\n    access_key: fixture\n    secret_key: local-only\n").as_bytes(),
+        ).await.unwrap();
+        drop(input);
+        assert!(writer.wait().await.unwrap().success());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn streams_resume_rejects_a_same_size_rewrite_after_validation() {
+        use mockito::{Matcher, Server};
+        use std::process::Command;
+
+        let mut server = Server::new_async().await;
+        let endpoint = server.url();
+        let base = tempdir().unwrap();
+        let (source, id) = same_size_resume_fixture(base.path(), &endpoint);
+        let config = base.path().join("config.yml");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&config)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "upload-1".into()))
+            .with_status(204)
+            .expect(1)
+            .create_async()
+            .await;
+        let part = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(500)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let resume_config = config.clone();
+        let resume_base = base.path().to_owned();
+        let resume = tokio::spawn(async move {
+            resume_stream(
+                &resume_config,
+                &resume_base,
+                &id,
+                1,
+                false,
+                GlobalArgs::new(),
+            )
+            .await
+        });
+        rewrite_source_during_config_read(&config, &source, &endpoint).await;
+        let error = resume.await.unwrap().unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("modification time changed since it was read"),
+            "streams resume must reject a same-size rewrite after validation: {error:#}"
+        );
+        abort.assert_async().await;
+        part.assert_async().await;
+    }
+
     #[test]
     fn resume_reads_parts_after_a_locked_listing() {
         for uploaded in [false, true] {

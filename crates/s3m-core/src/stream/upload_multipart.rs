@@ -2164,6 +2164,51 @@ mod tests {
     // resume uploaded that part and completed the upload: a 4-byte object for a
     // 10-byte file, with exit 0. The missing parts are now planned and uploaded.
     #[tokio::test]
+    async fn a_failed_abort_after_source_change_keeps_state_and_prints_the_command() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789+").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.create_parts([(1, 0, 4), (2, 4, 4), (3, 8, 2)], None)
+            .unwrap();
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(403)
+            .with_body("<Error><Code>AccessDenied</Code></Error>")
+            .expect(1)
+            .create_async()
+            .await;
+        let part = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        abort.assert_async().await;
+        part.assert_async().await;
+        assert!(
+            error.contains("size changed from 10 to 11 bytes") && error.contains("AccessDenied"),
+            "{error}"
+        );
+        assert!(
+            error.contains("s3m rm <host>/<bucket>/key --abort uid"),
+            "source change followed by a failed abort must print the manual abort command: {error}"
+        );
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.db_parts().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
     async fn resume_adds_the_parts_an_interrupted_plan_lacks() {
         let mut server = Server::new_async().await;
         let s3 = checksum_s3(&server);

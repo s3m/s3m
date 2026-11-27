@@ -618,6 +618,66 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn multipart_put_rejects_a_same_size_source_rewrite_after_stat() {
+        use super::{GlobalArgs, PutObjectRequest, handle_standard_file_upload};
+        use std::{
+            fs::File,
+            io::Write as _,
+            time::{Duration, UNIX_EPOCH},
+        };
+
+        const PART_SIZE: usize = 5 * 1024 * 1024;
+        let mut server = Server::new_async().await;
+        let s3 = mock_s3(&server.url());
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source.bin");
+        let mut file = File::create(&source).unwrap();
+        file.write_all(&vec![0; PART_SIZE + 1]).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(10))
+            .unwrap();
+        let request = PutObjectRequest {
+            acl: None,
+            meta: None,
+            buf_size: PART_SIZE,
+            file: Some(source.to_str().unwrap().to_owned()),
+            host: "s3".into(),
+            key: "key".into(),
+            pipe: false,
+            s3m_dir: dir.path().to_owned(),
+            quiet: true,
+            tmp_dir: dir.path().to_owned(),
+            checksum_algorithm: None,
+            number: 1,
+        };
+        let local_file = request.load_local_file().unwrap();
+        drop(file);
+        let mut replacement = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+        replacement.write_all(&vec![1; PART_SIZE + 1]).unwrap();
+        replacement
+            .as_file()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(20))
+            .unwrap();
+        replacement.persist(&source).unwrap();
+
+        let initiate = server
+            .mock("POST", "/bucket/key")
+            .match_query(mockito::Matcher::Any)
+            .with_status(500)
+            .expect(0)
+            .create_async()
+            .await;
+        let error = handle_standard_file_upload(&s3, request, GlobalArgs::new(), local_file)
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("modification time changed since it was read"),
+            "multipart PUT must reject a same-size rewrite after stat: {error:#}"
+        );
+        initiate.assert_async().await;
+    }
+
     /// A state db that already holds a completed multipart upload of this file to `key`.
     fn completed_upload(s3: &S3, dir: &TempDir, etag: &str) -> Db {
         let db = Db::new(s3, "key", "checksum", 1, dir.path()).unwrap();
