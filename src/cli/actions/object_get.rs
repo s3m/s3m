@@ -376,6 +376,9 @@ async fn handle_metadata(s3: &S3, key: &str, version: Option<String>, json: bool
 async fn list_versions(s3: &S3, key: &str) -> Result<Vec<crate::s3::responses::Version>> {
     let mut versions = Vec::new();
     let mut action = actions::ListObjectVersions::new(key);
+    // Every page start asked for so far: a listing that comes back to one would never
+    // end.
+    let mut asked = std::collections::HashSet::new();
     loop {
         let page = action.request(s3).await?;
         versions.extend(page.versions);
@@ -395,7 +398,7 @@ async fn list_versions(s3: &S3, key: &str) -> Result<Vec<crate::s3::responses::V
                 "ListObjectVersions returned a truncated page without a NextKeyMarker"
             ));
         }
-        if next == (action.key_marker.take(), action.version_id_marker.take()) {
+        if !asked.insert(next.clone()) {
             return Err(anyhow!(
                 "ListObjectVersions returned the same NextKeyMarker and NextVersionIdMarker twice"
             ));

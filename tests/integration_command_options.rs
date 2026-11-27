@@ -1355,6 +1355,40 @@ fn get_versions_fails_on_a_truncated_page_it_cannot_follow() -> Result<()> {
         "ListObjectVersions returned the same NextKeyMarker and NextVersionIdMarker twice",
     )?;
     assert_all(&pages);
+
+    // A cycle over two cursors (x, y, x, ...) stops when x comes back: three requests.
+    let mut server = Server::new();
+    let pages = [
+        versions_mock(
+            &mut server,
+            &[],
+            versions_page("v3", Some(("dir/data.bin", "x"))),
+        )
+        .expect(1)
+        .create(),
+        versions_mock(
+            &mut server,
+            &[("key-marker", "dir/data.bin"), ("version-id-marker", "x")],
+            versions_page("v2", Some(("dir/data.bin", "y"))),
+        )
+        .expect(1)
+        .create(),
+        versions_mock(
+            &mut server,
+            &[("key-marker", "dir/data.bin"), ("version-id-marker", "y")],
+            versions_page("v1", Some(("dir/data.bin", "x"))),
+        )
+        .expect(1)
+        .create(),
+    ];
+    let cli = Cli::new(&server.url())?;
+    expect_failure(
+        &cli,
+        &["get", OBJECT, "--versions"],
+        1,
+        "ListObjectVersions returned the same NextKeyMarker and NextVersionIdMarker twice",
+    )?;
+    assert_all(&pages);
     Ok(())
 }
 
