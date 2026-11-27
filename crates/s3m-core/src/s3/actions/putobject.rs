@@ -116,6 +116,16 @@ impl Action for PutObject<'_> {
         // <https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html>
         if let Some(object_lock) = &self.object_lock {
             object_lock.apply(&mut map);
+            // The PutObject reference requires Content-MD5 or
+            // x-amz-sdk-checksum-algorithm for an upload with Object Lock
+            // parameters. The additional checksum replaces Content-MD5 (#73), so
+            // name its algorithm the way the AWS SDKs do.
+            if let Some(additional_checksum) = &self.additional_checksum {
+                map.insert(
+                    "x-amz-sdk-checksum-algorithm",
+                    additional_checksum.algorithm.as_algorithm(),
+                );
+            }
         }
 
         Some(map)
@@ -217,6 +227,63 @@ mod tests {
             Some(&"2027-01-01T00:00:00Z")
         );
         assert_eq!(headers.get("x-amz-object-lock-legal-hold"), Some(&"ON"));
+    }
+
+    // #73: with --checksum there is no Content-MD5, which the PutObject reference asks
+    // for when the upload carries Object Lock parameters, unless the request names the
+    // checksum algorithm. Without Object Lock the header is not sent.
+    #[test]
+    fn test_headers_object_lock_with_checksum_names_the_algorithm() {
+        use crate::s3::{
+            checksum::ChecksumAlgorithm,
+            object_lock::{ObjectLock, ObjectLockMode},
+        };
+
+        let checksum = || {
+            Some(Checksum {
+                algorithm: ChecksumAlgorithm::Sha256,
+                checksum: "checksum-value".to_string(),
+            })
+        };
+        let object_lock = ObjectLock {
+            retention: Some((
+                ObjectLockMode::Governance,
+                "2027-01-01T00:00:00Z".to_string(),
+            )),
+            legal_hold: None,
+        };
+
+        let action = PutObject::new(
+            "key",
+            Path::new("/"),
+            None,
+            None,
+            None,
+            checksum(),
+            Some(object_lock.clone()),
+        );
+        let headers = action.headers().unwrap();
+        assert_eq!(
+            headers.get("x-amz-checksum-sha256"),
+            Some(&"checksum-value")
+        );
+        assert_eq!(headers.get("x-amz-sdk-checksum-algorithm"), Some(&"SHA256"));
+
+        let action = PutObject::new("key", Path::new("/"), None, None, None, checksum(), None);
+        let headers = action.headers().unwrap();
+        assert_eq!(headers.get("x-amz-sdk-checksum-algorithm"), None);
+
+        let action = PutObject::new(
+            "key",
+            Path::new("/"),
+            None,
+            None,
+            None,
+            None,
+            Some(object_lock),
+        );
+        let headers = action.headers().unwrap();
+        assert_eq!(headers.get("x-amz-sdk-checksum-algorithm"), None);
     }
 
     fn test_s3() -> S3 {
