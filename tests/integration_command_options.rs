@@ -55,6 +55,8 @@ impl Cli {
     fn run(&self, args: &[&str]) -> Result<Output> {
         Ok(Command::new(env!("CARGO_BIN_EXE_s3m"))
             .env("HOME", self.home.path())
+            .env_remove("AWS_ACCESS_KEY_ID")
+            .env_remove("AWS_SECRET_ACCESS_KEY")
             .current_dir(&self.work)
             .arg("--config")
             .arg(&self.config)
@@ -172,6 +174,42 @@ fn list_mock(server: &mut ServerGuard, query: &[(&str, &str)], body: String) -> 
         .with_body(body)
         .expect(1)
         .create()
+}
+
+#[test]
+fn verbose_request_logs_hide_signing_credentials() -> Result<()> {
+    let mut server = Server::new();
+    let list = server
+        .mock("GET", "/bucket")
+        .match_query(Matcher::Any)
+        .match_header(
+            "authorization",
+            Matcher::Regex(format!("Credential={ACCESS_KEY}/.*Signature=")),
+        )
+        .with_body(list_page(&[], None))
+        .create();
+    let cli = Cli::new(&server.url())?;
+    let args = ["-vv", "ls", "s3/bucket"];
+    let output = cli.run(&args)?;
+
+    expect_exit(&output, 0, &args)?;
+    list.assert();
+    let stderr = text(&output.stderr);
+    for secret in [ACCESS_KEY, SECRET_KEY, "Signature="] {
+        ensure!(
+            !stderr.contains(secret),
+            "signing credentials appeared in stderr"
+        );
+    }
+    for header in [
+        "Headers:",
+        "<redacted>",
+        "x-amz-date",
+        "x-amz-content-sha256",
+    ] {
+        ensure!(stderr.contains(header), "missing {header}: {stderr}");
+    }
+    Ok(())
 }
 
 // <https://github.com/s3m/s3m/issues/78>: Cloudflare R2 leaves out <Prefix> when the

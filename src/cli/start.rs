@@ -169,11 +169,8 @@ fn resolve_s3_and_action(
     log::info!("host_buket_key: {s3_location:#?}");
 
     let host = get_host(config, config_path, &s3_location)?;
-    log::debug!("host: {host:#?}");
-
     apply_host_defaults(host, global_args)?;
     let s3 = build_s3(matches, &s3_location.host, host, s3_location.bucket.clone())?;
-    log::debug!("S3:\n{s3}");
 
     let action = dispatch::dispatch(&s3_location, buf_size, config_path, matches, global_args)?;
     let action = dispatch::finalize_action(action, matches, config, config_path)?;
@@ -222,8 +219,6 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
     let config_file = resolve_config_file(&matches, &config_path);
     let config = Config::new(config_file.clone())?;
 
-    log::debug!("config: {config:#?}");
-
     if let Some(action) =
         handle_config_only_subcommands(&matches, &config_path, &config_file, &config)?
     {
@@ -232,7 +227,7 @@ pub fn start() -> Result<(S3, Action, GlobalArgs)> {
 
     let (s3, action) =
         resolve_s3_and_action(&matches, &config_path, &config, buf_size, &mut global_args)?;
-    log::debug!("globals: {global_args:#?}, action: {action:#?}");
+    log::debug!("globals: {global_args:#?}");
 
     Ok((s3, action, global_args))
 }

@@ -25,6 +25,16 @@ static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_P
 
 pub type ProgressCallback = Arc<dyn Fn(usize) + Send + Sync + 'static>;
 
+fn headers_for_log(headers: &HeaderMap) -> HeaderMap {
+    let mut headers = headers.clone();
+    for (name, value) in &mut headers {
+        if name == reqwest::header::AUTHORIZATION || name == "x-amz-security-token" {
+            *value = HeaderValue::from_static("<redacted>");
+        }
+    }
+    headers
+}
+
 pub struct MultipartRequest<'a> {
     pub client: &'a Client,
     pub url: Url,
@@ -53,7 +63,10 @@ pub async fn request(
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
         .collect::<Result<HeaderMap>>()?;
 
-    log::debug!("HTTP method: {method}, Headers: {headers:#?}");
+    log::debug!(
+        "HTTP method: {method}, Headers: {:#?}",
+        headers_for_log(&headers)
+    );
 
     let request = if let Some(file_path) = file {
         let file = File::open(file_path).await?;
@@ -96,7 +109,11 @@ pub async fn multipart_upload(request: MultipartRequest<'_>) -> Result<Response>
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
         .collect::<Result<HeaderMap>>()?;
 
-    log::debug!("HTTP method: {}, Headers: {headers:#?}", request.method);
+    log::debug!(
+        "HTTP method: {}, Headers: {:#?}",
+        request.method,
+        headers_for_log(&headers)
+    );
 
     // async read
     let mut file = File::open(request.file).await?;
@@ -136,7 +153,10 @@ pub async fn upload(
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
         .collect::<Result<HeaderMap>>()?;
 
-    log::debug!("HTTP method: {method}, Headers: {headers:#?}");
+    log::debug!(
+        "HTTP method: {method}, Headers: {:#?}",
+        headers_for_log(&headers)
+    );
 
     let request = client
         .request(method, url)
@@ -165,6 +185,37 @@ mod tests {
     use mockito::Server;
     use reqwest::StatusCode;
     use tokio::time::Duration;
+
+    #[test]
+    fn hides_credential_headers_only_in_logs() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_static("Signature=secret"),
+        );
+        headers.insert(
+            "x-amz-security-token",
+            HeaderValue::from_static("session token"),
+        );
+        headers.append(
+            "x-amz-security-token",
+            HeaderValue::from_static("another token"),
+        );
+        headers.insert("content-length", HeaderValue::from_static("10"));
+
+        let logged = headers_for_log(&headers);
+        assert_eq!(logged["authorization"], "<redacted>");
+        assert_eq!(logged.get_all("x-amz-security-token").iter().count(), 2);
+        assert!(
+            logged
+                .get_all("x-amz-security-token")
+                .iter()
+                .all(|value| value == "<redacted>")
+        );
+        assert_eq!(logged["content-length"], "10");
+        assert_eq!(headers["authorization"], "Signature=secret");
+        assert_eq!(headers["x-amz-security-token"], "session token");
+    }
 
     #[test]
     fn test_calculate_duration_per_chunk() {
