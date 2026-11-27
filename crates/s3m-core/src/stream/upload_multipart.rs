@@ -183,8 +183,9 @@ struct PendingParts<'a> {
 }
 
 /// Upload the parts still pending, `max_requests` at a time. The parts in flight
-/// live in this function: when it returns an error they are dropped, so nothing is
-/// still uploading when the caller handles the error.
+/// live in this function: when it returns an error they are dropped, so this side
+/// starts no more parts, retries nothing and reads no more answers. A request already
+/// on the wire may still reach the server.
 async fn upload_pending_parts(parts: PendingParts<'_>, pb: &Bar) -> Result<()> {
     let mut tasks = FuturesUnordered::new();
 
@@ -472,11 +473,14 @@ impl std::error::Error for UnsupportedChecksum {}
 /// The server doesn't implement the additional checksum on parts. Neither a retry nor
 /// a resume can succeed, and the upload in progress would keep its algorithm, so it is
 /// aborted and forgotten: the next run starts a new upload. Called once, after the
-/// parts in flight have stopped. Returns the error to report.
+/// other parts were dropped (see [`upload_pending_parts`]). Returns the error to
+/// report.
 ///
-/// If a part was accepted after all, the server does support the checksum: nothing is
-/// aborted. When the abort fails the upload is still open on the server: the state is
-/// kept, and the error says how to abort it.
+/// Nothing is aborted when a part is recorded as uploaded: a safeguard, since the
+/// rejected part already saw none. It can't see a part the server accepted but whose
+/// answer was dropped with its task; a server that rejects one part's checksum this
+/// way rejects them all. When the abort fails the upload is still open on the server:
+/// the state is kept, and the error says how to abort it.
 async fn abort_unsupported_checksum(
     s3: &S3,
     key: &str,
