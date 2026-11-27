@@ -167,6 +167,42 @@ pub struct ErrorResponse {
     pub request_id: String,
 }
 
+/// Parse an S3 answer whose document element must be `root`.
+///
+/// The deserializer doesn't look at the name of the document element, so any XML
+/// with the fields a struct needs would pass for it. That matters for the answers
+/// that confirm something was stored: another document with an `<ETag>` must not
+/// be taken for the completion of a multipart upload.
+///
+/// # Errors
+///
+/// Will return `Err` if the document element is not `root`, or the document can't
+/// be parsed into `T`
+pub(crate) fn from_xml_root<T: serde::de::DeserializeOwned>(
+    body: &str,
+    root: &str,
+) -> std::result::Result<T, quick_xml::DeError> {
+    use quick_xml::events::Event;
+
+    let mut reader = quick_xml::Reader::from_str(body);
+    let found = loop {
+        match reader.read_event() {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                break element.local_name().as_ref().to_string();
+            }
+            Ok(Event::Eof) => break String::new(),
+            Ok(_) => {}
+            Err(error) => return Err(quick_xml::DeError::Custom(error.to_string())),
+        }
+    };
+    if found != root {
+        return Err(quick_xml::DeError::Custom(format!(
+            "expected a <{root}> document, got <{found}>"
+        )));
+    }
+    quick_xml::de::from_str(body)
+}
+
 #[derive(Deserialize, Debug)]
 pub struct InitiateMultipartUploadResult {
     #[serde(rename = "Bucket", default)]
@@ -651,6 +687,49 @@ DeleteMarker: []
         assert!(!marker.is_latest);
         assert_eq!(marker.last_modified, "");
         assert_eq!(marker.owner.id, "");
+    }
+
+    // #81 review: with the echoed elements optional, any document with an <ETag> parsed
+    // as a completed upload. The document element is checked for the two answers that
+    // confirm a multipart upload: its start and its completion.
+    #[test]
+    fn test_from_xml_root_rejects_another_document() {
+        let complete = r#"<?xml version="1.0" encoding="UTF-8"?>
+<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><ETag>"etag-3"</ETag></CompleteMultipartUploadResult>"#;
+        let parsed: CompleteMultipartUploadResult =
+            from_xml_root(complete, "CompleteMultipartUploadResult").unwrap();
+        assert_eq!(parsed.e_tag, "\"etag-3\"");
+
+        let copy = r#"<CopyObjectResult><ETag>"other"</ETag><LastModified>2026-11-27T00:00:00.000Z</LastModified></CopyObjectResult>"#;
+        let error =
+            from_xml_root::<CompleteMultipartUploadResult>(copy, "CompleteMultipartUploadResult")
+                .unwrap_err()
+                .to_string();
+        assert!(
+            error.contains(
+                "expected a <CompleteMultipartUploadResult> document, got <CopyObjectResult>"
+            ),
+            "{error}"
+        );
+
+        let error = from_xml_root::<InitiateMultipartUploadResult>(
+            "<ListPartsResult><UploadId>upload-1</UploadId></ListPartsResult>",
+            "InitiateMultipartUploadResult",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("got <ListPartsResult>"), "{error}");
+
+        for body in ["", "not xml", "<?xml version=\"1.0\"?>"] {
+            assert!(
+                from_xml_root::<InitiateMultipartUploadResult>(
+                    body,
+                    "InitiateMultipartUploadResult"
+                )
+                .is_err(),
+                "{body}"
+            );
+        }
     }
 
     // #81: s3m reads only the upload id of an initiated upload, and the ETag (and the

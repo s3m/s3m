@@ -7,10 +7,9 @@ use crate::s3::error::Result;
 use crate::{
     s3::actions::{Action, response_error},
     s3::object_lock::ObjectLock,
-    s3::responses::InitiateMultipartUploadResult,
+    s3::responses::{InitiateMultipartUploadResult, from_xml_root},
     s3::{S3, checksum::Checksum, request, tools},
 };
-use quick_xml::de::from_str;
 use reqwest::Method;
 use std::collections::BTreeMap;
 
@@ -65,7 +64,8 @@ impl<'a> CreateMultipartUpload<'a> {
             log::debug!("Response body: {body}");
 
             // Parse the XML response into InitiateMultipartUploadResult
-            let upload_req: InitiateMultipartUploadResult = from_str(&body)?;
+            let upload_req: InitiateMultipartUploadResult =
+                from_xml_root(&body, "InitiateMultipartUploadResult")?;
 
             Ok(upload_req)
         } else {

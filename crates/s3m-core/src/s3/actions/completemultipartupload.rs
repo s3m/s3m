@@ -6,7 +6,7 @@
 use crate::s3::error::Error;
 use crate::{
     s3::actions::{Action, api_error, response_error, upload_response_headers},
-    s3::responses::{CompleteMultipartUploadResult, ErrorResponse},
+    s3::responses::{CompleteMultipartUploadResult, ErrorResponse, from_xml_root},
     s3::{S3, checksum::Checksum, request, tools},
 };
 use base64ct::{Base64, Encoding};
@@ -184,7 +184,8 @@ impl<'a> CompleteMultipartUpload<'a> {
                 return Err(api_error(status, &headers, Some(body)));
             }
 
-            let mut rs: CompleteMultipartUploadResult = from_str(&body)?;
+            let mut rs: CompleteMultipartUploadResult =
+                from_xml_root(&body, "CompleteMultipartUploadResult")?;
             rs.headers = upload_response_headers(&headers);
             Ok(rs)
         } else {

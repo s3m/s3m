@@ -499,6 +499,50 @@ fn upload_output_labels_blake3_and_additional_checksum() -> Result<()> {
 // <https://github.com/s3m/s3m/issues/75>: a multipart upload prints the version id and
 // lifecycle expiration of the CompleteMultipartUpload response, like a single-part upload,
 // and a 200 OK response with an <Error> document fails the upload with the S3 error.
+// #81 review: the answer to completing a multipart upload is what confirms the object
+// is stored. Another S3 document with an <ETag> (here the answer to a copy) must not
+// be taken for it, now that the elements the completion echoes back are optional.
+#[test]
+fn multipart_upload_rejects_another_document_as_its_completion() -> Result<()> {
+    let payload = vec![9; 11 * MIB + 137];
+
+    let mut server = Server::new();
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let _init = initiate(&mut server).expect(1).create();
+    let _parts: Vec<_> = payload
+        .chunks(10 * MIB)
+        .enumerate()
+        .map(|(i, bytes)| part_mock(&mut server, i + 1, bytes).expect(1).create())
+        .collect();
+    let wrong = server
+        .mock("POST", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "UP1".into()))
+        .with_status(200)
+        .with_body("<CopyObjectResult><ETag>\"other\"</ETag><LastModified>2026-11-27T00:00:00.000Z</LastModified></CopyObjectResult>")
+        .expect(1)
+        .create();
+
+    let output = fixture
+        .command()
+        .args(["-n", "1"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+
+    wrong.assert();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(!output.status.success(), "{stdout}{stderr}");
+    ensure!(!stdout.contains("ETag"), "{stdout}");
+    ensure!(
+        stderr.contains(
+            "expected a <CompleteMultipartUploadResult> document, got <CopyObjectResult>"
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 // #75: the completion headers are only shown. A value outside ASCII must not turn an
 // upload the server has already completed into a failure.
 #[test]
