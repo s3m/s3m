@@ -7,6 +7,7 @@ use rkyv::{from_bytes, rancor::Error as RkyvError};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -123,13 +124,11 @@ pub fn state_file_path(base_path: &Path, id: &str) -> PathBuf {
 pub fn write_metadata(base_path: &Path, metadata: &StreamMetadata) -> Result<()> {
     let state_dir = state_dir(base_path, &metadata.id);
     fs::create_dir_all(&state_dir)?;
-    let path = state_dir.join(STATE_FILE);
     let mut metadata = metadata.clone();
     if metadata.updated_at.is_none() {
         metadata.updated_at = Some(metadata.created_at);
     }
-    fs::write(path, serde_saphyr::to_string(&metadata)?)?;
-    Ok(())
+    replace_metadata(&state_dir, &metadata)
 }
 
 /// # Errors
@@ -142,30 +141,24 @@ pub fn touch_metadata(state_dir: &Path) -> Result<()> {
 
     let mut metadata = load_metadata(state_dir)?;
     metadata.updated_at = Some(now_secs());
-    fs::write(path, serde_saphyr::to_string(&metadata)?)?;
+    replace_metadata(state_dir, &metadata)
+}
+
+fn replace_metadata(dir: &Path, metadata: &StreamMetadata) -> Result<()> {
+    let mut temp = tempfile::NamedTempFile::new_in(dir)?;
+    temp.write_all(serde_saphyr::to_string(metadata)?.as_bytes())?;
+    temp.persist(dir.join(STATE_FILE))?;
     Ok(())
 }
 
 /// # Errors
 /// Will return `Err` if scanning the streams directory fails
 pub fn scan_streams(base_path: &Path) -> Result<Vec<StreamEntry>> {
-    let streams_dir = streams_dir(base_path);
-    if !streams_dir.exists() {
-        return Ok(Vec::new());
-    }
-
     let mut entries = Vec::new();
-    for dir in fs::read_dir(&streams_dir)? {
-        let dir = dir?;
-        if !dir.file_type()?.is_dir() {
-            continue;
-        }
-
-        let state_dir = dir.path();
-        let id = dir.file_name().to_string_lossy().to_string();
-        entries.push(load_entry(&id, &state_dir));
-    }
-
+    visit_streams(base_path, |entry, _| {
+        entries.push(entry);
+        Ok(())
+    })?;
     entries.sort_by(|a, b| {
         b.updated_at
             .cmp(&a.updated_at)
@@ -174,7 +167,38 @@ pub fn scan_streams(base_path: &Path) -> Result<Vec<StreamEntry>> {
     Ok(entries)
 }
 
-fn load_entry(id: &str, state_dir: &Path) -> StreamEntry {
+/// Inspect and, for clean, remove each directory while holding its sled lock.
+fn visit_streams(
+    base_path: &Path,
+    mut visit: impl FnMut(StreamEntry, bool) -> Result<()>,
+) -> Result<()> {
+    let streams = streams_dir(base_path);
+    if !streams.try_exists()? {
+        return Ok(());
+    }
+    for dir in fs::read_dir(streams)? {
+        let dir = dir?;
+        if dir.file_type()?.is_dir() {
+            let path = dir.path();
+            let db = open_state_once(&path);
+            let id = dir.file_name();
+            let mut entry = load_entry(&id.to_string_lossy(), &path, &db);
+            let removable = match (&db, entry.status) {
+                (Ok(db), StreamStatus::Broken) if has_upload_id(db)? => {
+                    let reason = entry.error.get_or_insert_with(String::new);
+                    reason.push_str("; kept because the database has a saved upload id");
+                    false
+                }
+                (Ok(_), StreamStatus::Broken | StreamStatus::Complete) => true,
+                _ => false,
+            };
+            visit(entry, removable)?;
+        }
+    }
+    Ok(())
+}
+
+fn load_entry(id: &str, state_dir: &Path, db: &sled::Result<sled::Db>) -> StreamEntry {
     let (metadata, metadata_error) = match load_metadata(state_dir) {
         Ok(metadata) => (Some(metadata), None),
         Err(error) => (None, Some(error.to_string())),
@@ -182,12 +206,19 @@ fn load_entry(id: &str, state_dir: &Path) -> StreamEntry {
     let trusted_updated_at = metadata.as_ref().and_then(|metadata| metadata.updated_at);
     let updated_at = trusted_updated_at.or_else(|| directory_timestamp(state_dir));
 
-    match inspect_db(state_dir, metadata.as_ref()) {
+    match db
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .and_then(|db| inspect_db(db, metadata.as_ref()))
+    {
         Ok(snapshot) => {
             let parts_total = snapshot.parts_pending + snapshot.parts_uploaded;
             // An upload whose abort is still pending is not done: `streams clean`
             // must keep the only record of it.
-            let status = if snapshot.etag.is_some() && !snapshot.abort_pending {
+            let status = if snapshot.etag.is_some()
+                && !snapshot.abort_pending
+                && (metadata.is_some() || snapshot.upload_id.is_none())
+            {
                 StreamStatus::Complete
             } else if snapshot.upload_id.is_none() || metadata.is_none() {
                 StreamStatus::Broken
@@ -261,12 +292,10 @@ fn determine_status(updated_at: Option<u64>, timestamp_trust: TimestampTrust) ->
     }
 }
 
-fn inspect_db(state_dir: &Path, metadata: Option<&StreamMetadata>) -> Result<DbSnapshot> {
-    let db = open_state_once(state_dir)?;
-
+fn inspect_db(db: &sled::Db, metadata: Option<&StreamMetadata>) -> Result<DbSnapshot> {
     let db_key = metadata
         .map(|metadata| metadata.db_key.clone())
-        .or_else(|| infer_db_key(&db))
+        .or_else(|| infer_db_key(db))
         .context("missing stream db key")?;
 
     let upload_id = db
@@ -301,6 +330,21 @@ fn inspect_db(state_dir: &Path, metadata: Option<&StreamMetadata>) -> Result<DbS
     Ok(snapshot)
 }
 
+fn is_upload_key(key: &[u8]) -> bool {
+    ![b"etag ".as_slice(), b"checksum ", b"abort "]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+}
+
+fn has_upload_id(db: &sled::Db) -> sled::Result<bool> {
+    for key in db.iter().keys() {
+        if is_upload_key(&key?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn infer_db_key(db: &sled::Db) -> Option<String> {
     let mut keys = db
         .iter()
@@ -308,9 +352,7 @@ fn infer_db_key(db: &sled::Db) -> Option<String> {
         .filter_map(Result::ok)
         .filter_map(|key| String::from_utf8(key.to_vec()).ok())
         // The upload id is stored under the db key; the other records are prefixed.
-        .filter(|key| {
-            !key.starts_with("etag ") && !key.starts_with("checksum ") && !key.starts_with("abort ")
-        })
+        .filter(|key| is_upload_key(key.as_bytes()))
         .collect::<Vec<_>>();
     keys.sort();
     keys.dedup();
@@ -344,14 +386,15 @@ fn now_secs() -> u64 {
 pub fn clean_streams(base_path: &Path) -> Result<CleanSummary> {
     let mut summary = CleanSummary::default();
 
-    for entry in scan_streams(base_path)? {
-        if matches!(entry.status, StreamStatus::Broken | StreamStatus::Complete) {
+    visit_streams(base_path, |entry, removable| {
+        if removable {
             fs::remove_dir_all(&entry.state_dir)?;
             summary.removed.push(entry.id);
         } else {
             summary.kept.push(entry.id);
         }
-    }
+        Ok(())
+    })?;
 
     Ok(summary)
 }

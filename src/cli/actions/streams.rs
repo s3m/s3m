@@ -210,7 +210,7 @@ fn format_list_line(entry: &StreamEntry) -> String {
     let upload_id = format_upload_id_for_list(entry.upload_id.as_deref()).yellow();
     let status = format_status(entry.status);
 
-    format!(
+    let mut line = format!(
         "{:<64} {:<12} {} {:>10} {:>7} {:<24} {:<28} {}",
         entry.id,
         status,
@@ -220,7 +220,14 @@ fn format_list_line(entry: &StreamEntry) -> String {
         upload_id,
         destination,
         source,
-    )
+    );
+    if entry.status == StreamStatus::Broken
+        && let Some(reason) = &entry.error
+    {
+        line.push_str("  ");
+        line.push_str(reason);
+    }
+    line
 }
 
 fn format_list_header() -> String {

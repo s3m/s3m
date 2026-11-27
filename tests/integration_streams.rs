@@ -971,3 +971,44 @@ fn test_streams_clean_keeps_unfinished_states_byte_for_byte() {
         );
     }
 }
+
+#[test]
+fn replacing_stream_metadata_leaves_previous_contents_intact() {
+    let home = tempdir().unwrap();
+    let (mut metadata, _db) = create_state(home.path(), "entry", Some("open"));
+    let base = s3m_dir(home.path());
+    let dir = state_dir(&base, "entry");
+    let path = dir.join("state.yml");
+    for touch in [false, true] {
+        let previous = home.path().join(format!("previous-{touch}"));
+        fs::hard_link(&path, &previous).unwrap();
+        let before = fs::read(&previous).unwrap();
+        if touch {
+            s3m::stream::state::touch_metadata(&dir).unwrap();
+        } else {
+            metadata.updated_at = Some(1);
+            write_metadata(&base, &metadata).unwrap();
+        }
+        assert_ne!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read(previous).unwrap(), before);
+    }
+}
+
+#[test]
+fn clean_keeps_an_upload_with_torn_metadata() {
+    let home = tempdir().unwrap();
+    write_config(home.path());
+    create_resumable_state(home.path(), "torn");
+    let dir = state_dir(&s3m_dir(home.path()), "torn");
+    fs::write(dir.join("state.yml"), "id: [").unwrap();
+    for args in [&["streams", "clean"][..], &["--clean"]] {
+        assert!(run_streams(home.path(), args).status.success());
+        assert!(dir.exists(), "{args:?} removed an open upload");
+        let shown = show_json(home.path(), "torn");
+        assert_eq!(shown["status"], "broken");
+        assert_eq!(shown["upload_id"], "upload-1");
+        assert_eq!(shown["parts_pending"], 1);
+        let listing = run_streams(home.path(), &["streams", "ls"]);
+        assert!(String::from_utf8_lossy(&listing.stdout).contains("saved upload id"));
+    }
+}
