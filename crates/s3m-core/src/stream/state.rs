@@ -90,6 +90,8 @@ pub struct CleanSummary {
 struct DbSnapshot {
     upload_id: Option<String>,
     etag: Option<String>,
+    /// A multipart upload replaced by a single PUT is still open on the server.
+    abort_pending: bool,
     parts_pending: usize,
     parts_uploaded: usize,
     bytes_uploaded: u64,
@@ -183,7 +185,9 @@ fn load_entry(id: &str, state_dir: &Path) -> StreamEntry {
     match inspect_db(state_dir, metadata.as_ref()) {
         Ok(snapshot) => {
             let parts_total = snapshot.parts_pending + snapshot.parts_uploaded;
-            let status = if snapshot.etag.is_some() {
+            // An upload whose abort is still pending is not done: `streams clean`
+            // must keep the only record of it.
+            let status = if snapshot.etag.is_some() && !snapshot.abort_pending {
                 StreamStatus::Complete
             } else if snapshot.upload_id.is_none() || metadata.is_none() {
                 StreamStatus::Broken
@@ -274,12 +278,15 @@ fn inspect_db(state_dir: &Path, metadata: Option<&StreamMetadata>) -> Result<DbS
         .map(|value| String::from_utf8(value.to_vec()))
         .transpose()?;
 
+    let abort_pending = db.contains_key(format!("abort {db_key}").as_bytes())?;
+
     let pending_tree = db.open_tree(DB_PARTS)?;
     let uploaded_tree = db.open_tree(DB_UPLOADED)?;
 
     let mut snapshot = DbSnapshot {
         upload_id,
         etag,
+        abort_pending,
         parts_pending: pending_tree.len(),
         parts_uploaded: uploaded_tree.len(),
         bytes_uploaded: 0,
@@ -301,7 +308,9 @@ fn infer_db_key(db: &sled::Db) -> Option<String> {
         .filter_map(Result::ok)
         .filter_map(|key| String::from_utf8(key.to_vec()).ok())
         // The upload id is stored under the db key; the other records are prefixed.
-        .filter(|key| !key.starts_with("etag ") && !key.starts_with("checksum "))
+        .filter(|key| {
+            !key.starts_with("etag ") && !key.starts_with("checksum ") && !key.starts_with("abort ")
+        })
         .collect::<Vec<_>>();
     keys.sort();
     keys.dedup();

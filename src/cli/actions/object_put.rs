@@ -274,6 +274,11 @@ async fn handle_standard_file_upload(
     )?;
 
     if let Some(etag) = cached_upload_still_current(s3, &request.key, &db).await? {
+        // The object is current, but the multipart upload it replaced may still be
+        // open: retry its abort.
+        if db.abort_pending()? {
+            abort_replaced_multipart_upload(s3, &request.host, &request.key, &db).await;
+        }
         return Ok(etag_report(&etag));
     }
 
@@ -340,11 +345,11 @@ async fn abort_replaced_multipart_upload(s3: &S3, host: &str, key: &str, db: &Db
     let abort = actions::AbortMultipartUpload::new(key, &upload_id);
     if let Err(error) = abort.request_if_open(s3).await {
         let command = abort.command(host, s3.bucket().unwrap_or_default());
-        // The object is stored, but the multipart upload stays open. Without its saved
-        // ETag the state shows the upload as unfinished: `streams clean` keeps it, and
-        // the next run uploads the file again and retries the abort.
-        let kept = match db.forget_etag() {
-            Ok(()) => "the next run uploads the file again and retries the abort",
+        // The object is stored, but the multipart upload stays open. The mark keeps the
+        // state from counting as complete (`streams clean` keeps it), and the next run
+        // retries the abort without uploading the file again.
+        let kept = match db.mark_abort_pending() {
+            Ok(()) => "the next run retries the abort",
             Err(_) => "its state could not be updated",
         };
         eprintln!(
@@ -382,7 +387,13 @@ async fn cached_upload_still_current(s3: &S3, key: &str, db: &Db) -> Result<Opti
         }
     }
 
-    db.forget_upload()?;
+    // The object changed: forget its ETag. A multipart upload whose abort is still
+    // pending is kept, so that it is aborted after this run's upload.
+    if db.abort_pending()? {
+        db.forget_etag()?;
+    } else {
+        db.forget_upload()?;
+    }
     Ok(None)
 }
 

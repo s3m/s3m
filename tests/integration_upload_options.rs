@@ -64,7 +64,7 @@ fn leave_interrupted_multipart_upload(
     Ok(())
 }
 
-fn single_put_after_interrupted_multipart(abort_status: usize) -> Result<()> {
+fn single_put_after_interrupted_multipart(abort_status: usize, object_current: bool) -> Result<()> {
     let mut server = Server::new();
     let payload = vec![42; 5 * MIB + 1];
     let fixture = Fixture::new(&server.url(), &payload)?;
@@ -117,9 +117,9 @@ fn single_put_after_interrupted_multipart(abort_status: usize) -> Result<()> {
             stderr.contains("s3m rm s3/bucket/key --abort UP1"),
             "{stderr}"
         );
-        // #86 review: with its ETag saved the state looked complete, and `streams
-        // clean` removed the only record of the open upload. It stays unfinished.
-        assert_eq!(entry.etag, None);
+        // #86 review: the state looked complete, and `streams clean` removed the only
+        // record of the open upload. It keeps the new ETag but is not complete.
+        assert_eq!(entry.etag.as_deref(), Some("single"));
         assert_ne!(entry.status, s3m::stream::state::StreamStatus::Complete);
         assert_eq!(
             (
@@ -145,19 +145,31 @@ fn single_put_after_interrupted_multipart(abort_status: usize) -> Result<()> {
     abort.remove();
 
     if abort_status == 403 {
-        rerun_retries_the_abort(&mut server, &fixture)?;
+        rerun_retries_the_abort(&mut server, &fixture, object_current)?;
     }
     Ok(())
 }
 
-/// After a failed abort, the next run uploads the file again and retries the abort,
-/// which works now; the state then holds the new `ETag` and no upload id.
-fn rerun_retries_the_abort(server: &mut mockito::ServerGuard, fixture: &Fixture) -> Result<()> {
+/// After a failed abort, the next run retries the abort, which works now; the state
+/// then holds the `ETag` and no upload id. When the object is still current, the file
+/// is not uploaded again (a write-once bucket would refuse it); when it changed on
+/// the server, it is, and the old multipart upload is still aborted afterwards.
+fn rerun_retries_the_abort(
+    server: &mut mockito::ServerGuard,
+    fixture: &Fixture,
+    object_current: bool,
+) -> Result<()> {
+    let head = server
+        .mock("HEAD", "/bucket/key")
+        .with_status(if object_current { 200 } else { 404 })
+        .with_header("etag", "single")
+        .expect(1)
+        .create();
     let put = server
         .mock("PUT", "/bucket/key")
         .match_query(Matcher::Missing)
         .with_header("etag", "single")
-        .expect(1)
+        .expect(usize::from(!object_current))
         .create();
     let abort = server
         .mock("DELETE", "/bucket/key")
@@ -173,6 +185,7 @@ fn rerun_retries_the_abort(server: &mut mockito::ServerGuard, fixture: &Fixture)
     let stderr = String::from_utf8_lossy(&output.stderr);
     ensure!(output.status.code() == Some(0), "{stderr}");
     ensure!(!stderr.contains("warning:"), "{stderr}");
+    head.assert();
     put.assert();
     abort.assert();
     let state = fixture.home.entries()?;
@@ -184,12 +197,19 @@ fn rerun_retries_the_abort(server: &mut mockito::ServerGuard, fixture: &Fixture)
 
 #[test]
 fn single_put_aborts_the_interrupted_multipart_upload_after_success() -> Result<()> {
-    single_put_after_interrupted_multipart(204)
+    single_put_after_interrupted_multipart(204, true)
 }
 
 #[test]
 fn single_put_warns_when_the_interrupted_multipart_upload_cannot_be_aborted() -> Result<()> {
-    single_put_after_interrupted_multipart(403)
+    single_put_after_interrupted_multipart(403, true)
+}
+
+// #86 review: the same, when the object changed on the server since: the next run
+// uploads the file again and still retries the abort of the old multipart upload.
+#[test]
+fn single_put_retries_the_abort_after_the_object_changed() -> Result<()> {
+    single_put_after_interrupted_multipart(403, false)
 }
 
 #[test]

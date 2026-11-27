@@ -160,8 +160,33 @@ impl Db {
         Ok(())
     }
 
-    /// Forget the saved `ETag` only, keeping the multipart upload id and parts. The
-    /// state then shows an unfinished upload again, which `streams clean` keeps.
+    /// Record that the multipart upload saved for this file was replaced by a
+    /// single-part upload but could not be aborted: it is still open on the server.
+    /// The saved `ETag` is kept (the object is stored), the state doesn't count as
+    /// complete (`streams clean` keeps it), and the next run retries the abort.
+    ///
+    /// # Errors
+    /// Returns an error if the saved state cannot be updated.
+    pub fn mark_abort_pending(&self) -> Result<()> {
+        self.storage
+            .insert(format!("abort {}", self.key).as_bytes(), &b"1"[..])?;
+        self.flush()?;
+        Ok(())
+    }
+
+    /// Whether [`Db::mark_abort_pending`] recorded an upload that still has to be
+    /// aborted.
+    ///
+    /// # Errors
+    /// Returns an error if the saved state cannot be read.
+    pub fn abort_pending(&self) -> Result<bool> {
+        Ok(self
+            .storage
+            .contains_key(format!("abort {}", self.key).as_bytes())?)
+    }
+
+    /// Forget the saved `ETag` only, keeping the multipart upload id and parts (and a
+    /// pending abort).
     ///
     /// # Errors
     /// Returns an error if the saved state cannot be updated.
@@ -187,6 +212,8 @@ impl Db {
     fn remove_multipart_records(&self) -> Result<()> {
         self.storage
             .remove(format!("checksum {}", self.key).as_bytes())?;
+        self.storage
+            .remove(format!("abort {}", self.key).as_bytes())?;
         self.storage.remove(&self.key)?;
         Ok(())
     }
@@ -896,5 +923,25 @@ mod tests {
         assert_eq!(action_part.etag, "\"d41d8cd98f00b204e9800998ecf8427e\"");
         assert!(action_part.checksum.is_some());
         Ok(())
+    }
+
+    // #86: an upload replaced by a single PUT whose abort failed is marked; the mark
+    // goes with the multipart records when the abort succeeds later.
+    #[test]
+    fn test_abort_pending_is_marked_and_forgotten_with_the_upload() {
+        let dir = tempdir().unwrap();
+        let db = Db::new(&test_s3(), "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("UP1").unwrap();
+        db.save_etag("\"single\"").unwrap();
+        assert!(!db.abort_pending().unwrap());
+
+        db.mark_abort_pending().unwrap();
+        assert!(db.abort_pending().unwrap());
+        assert_eq!(db.cached_etag().unwrap().as_deref(), Some("\"single\""));
+
+        db.forget_multipart_upload().unwrap();
+        assert!(!db.abort_pending().unwrap());
+        assert_eq!(db.upload_id().unwrap(), None);
+        assert_eq!(db.cached_etag().unwrap().as_deref(), Some("\"single\""));
     }
 }
