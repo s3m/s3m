@@ -181,8 +181,20 @@ mod tests {
         fn flush(&self) {}
     }
 
+    /// Restores the maximum log level when the test ends, also when it fails.
+    struct RestoreLevel(LevelFilter);
+
+    impl Drop for RestoreLevel {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+            FILE_TO_REWRITE.take();
+        }
+    }
+
     #[tokio::test]
     async fn put_object_propagates_bad_digest_for_a_file_changed_after_hashing() {
+        // The only test in this crate that installs a logger: a logger can be set once
+        // per process, and the hook only acts on this test's thread.
         log::set_logger(&RewriteAfterChecksum).unwrap();
         let mut server = mockito::Server::new_async().await;
         let s3 = S3::new(
@@ -204,13 +216,13 @@ mod tests {
             .with_body("<Error><Code>BadDigest</Code><Message>Content-MD5 does not match the body</Message></Error>")
             .create_async().await;
 
-        let previous_level = log::max_level();
+        let restore = RestoreLevel(log::max_level());
         log::set_max_level(LevelFilter::Info);
         FILE_TO_REWRITE.set(Some(file.path().to_owned()));
         let result = PutObject::new("key", file.path(), None, None, None, None, None)
             .request(&s3, RequestOptions::default())
             .await;
-        log::set_max_level(previous_level);
+        drop(restore);
 
         reject.assert_async().await;
         assert_eq!(result.unwrap_err().code(), Some("BadDigest"));
