@@ -27,7 +27,8 @@ unset CLICOLOR_FORCE
 bin=$(realpath "$1")
 config=$(realpath "$2")
 host=$3
-target="$3/$4"
+bucket=$4
+target="$host/$bucket"
 prefix="ci/$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID:-local}-$RANDOM"
 
 work=$(mktemp -d)
@@ -37,13 +38,20 @@ created=()
 
 s3m() { "$bin" --config "$config" "$@"; }
 
-# abort_listed <label>: reads "<host path>\t<upload id>" lines and aborts each upload.
+# abort_listed <label>: reads "<key>\t<upload id>" lines and aborts each upload. Only
+# uploads under this run's prefix are touched: a line with another key, or without an
+# upload id, is an error (keys of this script have no tab or newline in them).
 abort_listed() {
-  local label=$1 path upload_id status=0
-  while IFS=$'\t' read -r path upload_id; do
-    [[ -n "$upload_id" ]] || continue
-    s3m rm "$path" --abort "$upload_id" >/dev/null 2>&1 || {
-      echo "cleanup: could not abort the upload of $path ($label)" >&2
+  local label=$1 key upload_id status=0
+  while IFS=$'\t' read -r key upload_id; do
+    [[ -n "$key$upload_id" ]] || continue
+    if [[ "$key" != "$prefix/"* || -z "$upload_id" ]]; then
+      echo "cleanup: unexpected upload '$key' ($label), not aborted" >&2
+      status=1
+      continue
+    fi
+    s3m rm "$target/$key" --abort "$upload_id" >/dev/null 2>&1 || {
+      echo "cleanup: could not abort the upload of $target/$key ($label)" >&2
       status=1
     }
   done
@@ -63,7 +71,8 @@ cleanup() {
   # uploads this run recorded in its own state.
   if [[ -d "$S3M_HOME" ]]; then
     if streams=$(s3m streams --json ls 2>/dev/null) &&
-      listed=$(jq -r --arg host "$host" '.streams[] | select(.etag == null and .upload_id != null) | [$host + "/" + .destination, .upload_id] | @tsv' <<<"$streams"); then
+      jq -e '(.streams | type) == "array"' <<<"$streams" >/dev/null &&
+      listed=$(jq -r --arg bucket "$bucket/" '.streams[] | select(.etag == null and .upload_id != null) | [(.destination | ltrimstr($bucket)), .upload_id] | join("\t")' <<<"$streams"); then
       abort_listed "recorded state" <<<"$listed" || failed=1
     else
       echo "cleanup: could not read the upload state in $S3M_HOME" >&2
@@ -75,7 +84,8 @@ cleanup() {
   # an s3m that is still running. If this script alone is killed while such a child
   # runs, the bucket's lifecycle rule for incomplete multipart uploads is the backstop.
   if uploads=$(s3m ls "$target" --multipart --prefix "$prefix/" --json 2>/dev/null) &&
-    listed=$(jq -r --arg target "$target" '.uploads[] | [$target + "/" + .key, .upload_id] | @tsv' <<<"$uploads"); then
+    jq -e '(.uploads | type) == "array"' <<<"$uploads" >/dev/null &&
+    listed=$(jq -r '.uploads[] | [.key, .upload_id] | join("\t")' <<<"$uploads"); then
     abort_listed "still open on the server" <<<"$listed" || failed=1
   else
     echo "cleanup: could not list the unfinished uploads under $target/$prefix/" >&2
