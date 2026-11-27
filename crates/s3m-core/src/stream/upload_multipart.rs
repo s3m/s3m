@@ -696,13 +696,21 @@ async fn upload_part(
     db.flush()
 }
 
-/// A 501 answer with the S3 error code `NotImplemented`: the server doesn't support
-/// what the request asked for, so sending it again can't succeed. A bare 501 from
-/// something in between (a proxy) is not that.
+/// A 501 answer with the S3 error code `NotImplemented` that names the checksum: the
+/// server doesn't support it, so sending the part again can't succeed. Cloudflare R2
+/// answers `Header 'x-amz-checksum-sha256' with value '...' not implemented`.
+///
+/// A bare 501 from something in between (a proxy) is not that, and neither is a
+/// `NotImplemented` about something else (a storage class, for example): the upload
+/// must not be aborted for it.
 fn is_not_implemented(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<crate::s3::error::Error>()
-        .is_some_and(|error| error.status() == Some(501) && error.code() == Some("NotImplemented"))
+        .is_some_and(|error| {
+            error.status() == Some(501)
+                && error.code() == Some("NotImplemented")
+                && error.to_string().to_ascii_lowercase().contains("checksum")
+        })
 }
 
 /// The server says it has no multipart upload with this id: the S3 error code
@@ -2279,6 +2287,52 @@ mod tests {
         );
         assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
         assert_eq!(db.db_parts().unwrap().len(), 2);
+    }
+
+    // #80 review: a 501 NotImplemented that isn't about the checksum (a storage class
+    // here) says nothing about the checksum. The upload was aborted for it, with a
+    // message blaming sha256. It is an error like any other: nothing is aborted, and
+    // the upload id is kept.
+    #[tokio::test]
+    async fn not_implemented_about_something_else_keeps_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        let _create = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Regex("uploads".into()))
+            .with_body(INITIATED)
+            .create_async()
+            .await;
+        let part = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(501)
+            .with_body("<Error><Code>NotImplemented</Code><Message>The storage class you specified is not implemented</Message></Error>")
+            .expect(1)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(204)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(sha256_upload(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        part.assert_async().await;
+        abort.assert_async().await;
+        assert!(!error.contains("doesn't support sha256"), "{error}");
+        assert!(error.contains("storage class"), "{error}");
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
     }
 
     // #83 review, round 2: the same part number saved as pending and as uploaded with
