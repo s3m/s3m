@@ -20,6 +20,11 @@ pub struct MultipartUploadRequest<'a> {
     pub key: &'a str,
     pub file: &'a Path,
     pub file_size: u64,
+    /// The file's modification time, in milliseconds since the Unix epoch, when its
+    /// size was read and its hash computed. The upload stops if the file is not that
+    /// one any more (<https://github.com/s3m/s3m/issues/89>). `None` checks only the
+    /// size.
+    pub file_mtime: Option<u128>,
     pub chunk_size: u64,
     pub sdb: &'a Db,
     pub acl: Option<String>,
@@ -174,6 +179,13 @@ impl SourceFile {
         })
     }
 
+    fn modified_millis(&self) -> Option<u128> {
+        self.modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|since| since.as_millis())
+    }
+
     async fn change(&self, file: &Path) -> Option<String> {
         match Self::read(file).await {
             Ok(now) if now.size != self.size => Some(size_change(self.size, now.size)),
@@ -194,9 +206,18 @@ fn size_change(before: u64, after: u64) -> String {
 
 async fn check_source_size(request: &MultipartUploadRequest<'_>) -> Result<SourceFile> {
     let source = SourceFile::read(request.file).await?;
-    if source.size != request.file_size {
+    let change = if source.size == request.file_size {
+        // The file can also have been rewritten with the same size while its hash was
+        // computed, before the upload started.
+        request
+            .file_mtime
+            .filter(|expected| source.modified_millis() != Some(*expected))
+            .map(|_| "modification time changed since it was read".to_string())
+    } else {
+        Some(size_change(request.file_size, source.size))
+    };
+    if let Some(change) = change {
         let upload_id = request.sdb.upload_id()?;
-        let change = size_change(request.file_size, source.size);
         return Err(changed_file_error(
             request.s3,
             request.key,
@@ -1072,6 +1093,7 @@ mod tests {
             key: "key",
             file: file.path(),
             file_size: 10,
+            file_mtime: None,
             chunk_size: 5,
             sdb: &db,
             acl: None,
@@ -1138,6 +1160,7 @@ mod tests {
             key: "key",
             file: file.path(),
             file_size: 10,
+            file_mtime: None,
             chunk_size: 5,
             sdb: &db,
             acl: None,
@@ -1181,6 +1204,7 @@ mod tests {
             key: "key",
             file,
             file_size: 10,
+            file_mtime: None,
             chunk_size: 5,
             sdb: db,
             acl: None,
@@ -1443,6 +1467,7 @@ mod tests {
             key: "key",
             file: file.path(),
             file_size: 10,
+            file_mtime: None,
             chunk_size: 5,
             sdb: &db,
             acl: None,
@@ -1520,6 +1545,7 @@ mod tests {
             key: "key",
             file: file.path(),
             file_size: 10,
+            file_mtime: None,
             chunk_size: 5,
             sdb: &db,
             acl: None,
@@ -1550,6 +1576,7 @@ mod tests {
             key: "key",
             file,
             file_size: 10,
+            file_mtime: None,
             chunk_size: 5,
             sdb: db,
             acl: None,
@@ -1746,6 +1773,7 @@ mod tests {
             key: "key",
             file: file.path(),
             file_size: 10,
+            file_mtime: None,
             chunk_size: 5,
             sdb: &db,
             acl: None,
@@ -1803,6 +1831,7 @@ mod tests {
             key: "key",
             file,
             file_size: 10,
+            file_mtime: None,
             chunk_size: 4,
             sdb: db,
             acl: None,
@@ -2760,5 +2789,67 @@ mod tests {
         assert!(!error.contains("no longer exists"), "{error}");
         assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
         assert_eq!(db.db_parts().unwrap().len(), 3);
+    }
+
+    // #89 review: the file was rewritten with the same size while its hash was computed,
+    // before the upload started. The modification time read with the size is passed
+    // in; a different one now stops the upload before any part is sent, and a saved
+    // upload is aborted. The same time lets the upload go on.
+    #[tokio::test]
+    async fn a_file_rewritten_before_the_upload_started_is_not_uploaded() {
+        for (rewritten, expect_abort) in [(true, true), (false, false)] {
+            let mut server = Server::new_async().await;
+            let s3 = checksum_s3(&server);
+            let dir = tempfile::tempdir().unwrap();
+            let file = tempfile::NamedTempFile::new().unwrap();
+            fs::write(file.path(), "0123456789").unwrap();
+            file.as_file().set_modified(UNIX_EPOCH).unwrap();
+            let read_at = 0_u128;
+            if rewritten {
+                fs::write(file.path(), "9876543210").unwrap();
+            }
+            let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+            db.save_upload_id("uid").unwrap();
+
+            let parts = server
+                .mock("PUT", "/bucket/key")
+                .match_query(Matcher::Any)
+                .with_header("ETag", "\"p\"")
+                .expect(if rewritten { 0 } else { 3 })
+                .create_async()
+                .await;
+            let abort = server
+                .mock("DELETE", "/bucket/key")
+                .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+                .with_status(204)
+                .expect(usize::from(expect_abort))
+                .create_async()
+                .await;
+            let complete = server
+                .mock("POST", "/bucket/key")
+                .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+                .with_body(COMPLETED_3)
+                .expect(usize::from(!rewritten))
+                .create_async()
+                .await;
+
+            let mut request = ten_bytes_in_parts_of_four(&s3, &db, file.path());
+            request.file_mtime = Some(read_at);
+            let result = upload_multipart(request).await;
+
+            for mock in [parts, abort, complete] {
+                mock.assert_async().await;
+            }
+            if rewritten {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains("modification time changed since it was read"),
+                    "{error}"
+                );
+                assert_eq!(db.upload_id().unwrap(), None);
+            } else {
+                result.unwrap();
+            }
+        }
     }
 }

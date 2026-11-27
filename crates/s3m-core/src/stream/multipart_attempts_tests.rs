@@ -47,6 +47,7 @@ async fn default_options_attempt_file_part_once_and_do_not_complete_on_failure()
         key: "key",
         file: &file,
         file_size: size,
+        file_mtime: None,
         chunk_size: size,
         sdb: &db,
         acl: None,

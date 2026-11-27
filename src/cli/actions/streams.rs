@@ -474,6 +474,7 @@ async fn resume_stream(
         key: &stream_metadata.key,
         file: &stream_metadata.source_path,
         file_size,
+        file_mtime: Some(stream_metadata.file_mtime),
         chunk_size: stream_metadata.part_size,
         sdb: &db,
         acl: None,

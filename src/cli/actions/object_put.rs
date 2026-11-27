@@ -293,6 +293,7 @@ async fn handle_standard_file_upload(
             key: &request.key,
             file: &local_file.path,
             file_size: local_file.size,
+            file_mtime: Some(local_file.mtime),
             chunk_size: part_size,
             sdb: &db,
             acl: request.acl,
