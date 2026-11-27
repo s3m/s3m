@@ -86,6 +86,72 @@ fn pipe_aliases_preserve_binary_bytes_and_empty_input() {
     }
 }
 
+// <https://github.com/s3m/s3m/issues/76>: a streamed upload printed only the ETag.
+// It reports the completion's response headers like a file upload does.
+#[test]
+fn pipe_upload_reports_the_completion_headers() {
+    let mut server = Server::new();
+    let home = tempdir().unwrap();
+    let config = create_config_file(&server.url(), "dummy", "dummy-secret");
+    let initiate = server
+        .mock("POST", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploads".into(), String::new()))
+        .with_body(INITIATE)
+        .expect(1)
+        .create();
+    let part = server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::Any)
+        .with_header("etag", "stdin-part")
+        .expect(1)
+        .create();
+    let complete = server
+        .mock("POST", "/bucket/key")
+        .match_query(Matcher::UrlEncoded(
+            "uploadId".into(),
+            "stdin-upload".into(),
+        ))
+        .with_header("x-amz-version-id", "v-123")
+        .with_header(
+            "x-amz-expiration",
+            "expiry-date=\"Fri, 27 Nov 2026 00:00:00 GMT\"",
+        )
+        .with_header("x-amz-server-side-encryption", "AES256")
+        .with_body(COMPLETE)
+        .expect(1)
+        .create();
+    let mut child = Command::new(get_s3m_binary())
+        .env("HOME", home.path())
+        .args([
+            "--config",
+            config.path().to_str().unwrap(),
+            "--pipe",
+            "s3/bucket/key",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"hello").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ETag: stdin-complete\n\
+         Expiration: expiry-date=\"Fri, 27 Nov 2026 00:00:00 GMT\"\n\
+         Server-side encryption: AES256\n\
+         Version ID: v-123\n"
+    );
+    initiate.assert();
+    part.assert();
+    complete.assert();
+}
+
 #[test]
 fn failed_pipe_reports_error_removes_buffer_and_does_not_claim_resumability() {
     let mut server = Server::new();

@@ -80,7 +80,8 @@ async fn default_options_upload_final_payload_before_completion() -> Result<()> 
             upload.assert_async().await;
             complete.assert_async().await;
             if succeeds {
-                assert_eq!(result?, "completed");
+                // The report of the upload, labelled like a file upload's (#76).
+                assert_eq!(result?, "ETag: completed");
             } else {
                 assert!(
                     result.is_err(),

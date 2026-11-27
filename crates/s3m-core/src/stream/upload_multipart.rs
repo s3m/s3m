@@ -4,9 +4,8 @@ use crate::{
     s3::{
         S3, actions,
         checksum::{Checksum, ChecksumAlgorithm},
-        responses::CompleteMultipartUploadResult,
     },
-    stream::{db::Db, iterator::PartIterator, part::Part, retry::backoff_secs},
+    stream::{db::Db, iterator::PartIterator, part::Part, retry::backoff_secs, upload_report},
 };
 use anyhow::{Result, anyhow};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -232,26 +231,6 @@ fn resumed_checksum(db: &Db, requested: Option<Checksum>) -> Result<Option<Check
         );
     }
     Ok(saved.map(Checksum::new))
-}
-
-/// The lines printed after the upload, like a single-part upload: the `ETag` and the
-/// response headers (`Version ID`, `Expiration`, ...), then the additional checksum of
-/// the whole object if one was requested.
-fn upload_report(rs: CompleteMultipartUploadResult, checksum: Option<&Checksum>) -> String {
-    let mut lines = rs.headers;
-    lines.insert("ETag", rs.e_tag);
-    let mut report = lines
-        .iter()
-        .map(|(label, value)| format!("{label}: {value}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if let Some(checksum) = checksum {
-        let checksum = checksum.report();
-        log::info!("{checksum}");
-        report.push('\n');
-        report.push_str(&checksum);
-    }
-    report
 }
 
 #[cfg(test)]

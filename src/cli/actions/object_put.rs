@@ -117,8 +117,8 @@ async fn handle_put_object(s3: &S3, request: PutObjectRequest, globals: GlobalAr
     let quiet = request.quiet;
 
     if request.pipe {
-        let etag = handle_pipe_upload(s3, request, globals).await?;
-        print_report(&etag_report(&etag), quiet);
+        let report = handle_pipe_upload(s3, request, globals).await?;
+        print_report(&report, quiet);
         return Ok(());
     }
 
@@ -170,6 +170,17 @@ async fn handle_file_upload(
 ) -> Result<String> {
     let file_path = local_file.path.as_path();
 
+    // A compressed or encrypted upload is streamed in transformed parts and sends no
+    // additional checksum. The --compress flag conflicts with --checksum already; this
+    // covers a host that compresses or encrypts through its config.
+    if request.checksum_algorithm.is_some() && (globals.compress || globals.encrypt) {
+        return Err(anyhow!(
+            "--checksum can't be used with compression or encryption: the upload is streamed \
+             and sends no additional checksum. Upload without --checksum, or to a host that \
+             doesn't compress or encrypt"
+        ));
+    }
+
     match (globals.compress, globals.encrypt) {
         (true, true) => {
             log::info!("COMPRESS + ENCRYPT - streaming encrypted and compressed file");
@@ -184,7 +195,6 @@ async fn handle_file_upload(
                 file_path,
             })
             .await
-            .map(|etag| etag_report(&etag))
         }
         (true, false) => {
             log::info!("COMPRESS - streaming compressed file");
@@ -199,7 +209,6 @@ async fn handle_file_upload(
                 file_path,
             })
             .await
-            .map(|etag| etag_report(&etag))
         }
         (false, true) => {
             log::info!("ENCRYPT - streaming encrypted file");
@@ -214,7 +223,6 @@ async fn handle_file_upload(
                 file_path,
             })
             .await
-            .map(|etag| etag_report(&etag))
         }
         (false, false) => handle_standard_file_upload(s3, request, globals, local_file).await,
     }
@@ -422,8 +430,8 @@ impl PutObjectRequest {
 }
 
 /// Print the `ETag` if not in quiet mode
-/// Streamed uploads return a bare `ETag`; file uploads return the response lines already
-/// labelled (`ETag: ...`, `Version ID: ...`), so the label is added only here.
+/// The report of an upload that was skipped because the object is already there: only
+/// its cached `ETag` is known.
 fn etag_report(etag: &str) -> String {
     format!("ETag: {etag}")
 }

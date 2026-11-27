@@ -17,7 +17,10 @@ pub mod upload_stdin_encrypted;
 use crate::{
     progressbar::Bar,
     s3::RequestOptions,
-    s3::{S3, actions, object_lock::ObjectLock, request::ProgressCallback},
+    s3::{
+        S3, actions, checksum::Checksum, object_lock::ObjectLock, request::ProgressCallback,
+        responses::CompleteMultipartUploadResult,
+    },
 };
 use aead_stream::{DecryptorBE32, EncryptorBE32};
 use anyhow::{Context as _, Result, anyhow};
@@ -556,7 +559,7 @@ pub async fn maybe_upload_part(stream: &mut Stream<'_>, buffer_size: usize) -> R
     Ok(())
 }
 
-/// Complete multipart upload
+/// Complete the multipart upload and return its report (see [`upload_report`]).
 async fn complete_multipart_upload(
     s3: &S3,
     key: &str,
@@ -606,7 +609,30 @@ async fn complete_multipart_upload(
 
     let response = action.request(s3).await?;
 
-    Ok(response.e_tag)
+    Ok(upload_report(response, None))
+}
+
+/// The lines reported after a multipart upload, like a single-part upload: the `ETag`
+/// and the response headers (`Version ID`, `Expiration`, ...), then the additional
+/// checksum of the whole object if one was requested.
+pub(crate) fn upload_report(
+    rs: CompleteMultipartUploadResult,
+    checksum: Option<&Checksum>,
+) -> String {
+    let mut lines = rs.headers;
+    lines.insert("ETag", rs.e_tag);
+    let mut report = lines
+        .iter()
+        .map(|(label, value)| format!("{label}: {value}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some(checksum) = checksum {
+        let checksum = checksum.report();
+        log::info!("{checksum}");
+        report.push('\n');
+        report.push_str(&checksum);
+    }
+    report
 }
 
 #[cfg(test)]

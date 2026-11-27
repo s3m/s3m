@@ -238,6 +238,52 @@ fn unsigned_uploads_keep_content_length_and_action_headers() -> Result<()> {
     Ok(())
 }
 
+// <https://github.com/s3m/s3m/issues/76>: a host that compresses or encrypts (set in
+// the config) streams the upload, and --checksum was silently ignored. The --compress
+// flag already conflicts with --checksum; the config settings are rejected too.
+#[test]
+fn checksum_is_rejected_when_the_host_compresses_or_encrypts() -> Result<()> {
+    for setting in [
+        "compress: true",
+        "enc_key: 0123456789abcdef0123456789abcdef",
+    ] {
+        let mut server = Server::new();
+        let fixture = Fixture::new(&server.url(), b"hello world")?;
+        let config = fs::read_to_string(&fixture.config)?;
+        fs::write(&fixture.config, format!("{config}    {setting}\n"))?;
+        let requests: Vec<_> = ["POST", "PUT"]
+            .into_iter()
+            .map(|method| {
+                server
+                    .mock(method, Matcher::Any)
+                    .match_query(Matcher::Any)
+                    .expect(0)
+                    .create()
+            })
+            .collect();
+
+        let output = fixture
+            .command()
+            .args(["--checksum", "sha256"])
+            .arg(&fixture.source)
+            .arg("s3/bucket/key")
+            .output()?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        ensure!(output.status.code() == Some(1), "{setting}: {stderr}");
+        ensure!(
+            stderr.contains("--checksum can't be used with compression or encryption"),
+            "{setting}: {stderr}"
+        );
+        for request in requests {
+            request.assert();
+        }
+        // On Windows each fixture holds the shared profile lock until dropped.
+        drop(fixture);
+    }
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/74>: the BLAKE3 hash s3m prints is labelled as such,
 // and the --checksum value is printed with its algorithm, comparable with x-amz-checksum-*.
 #[test]
