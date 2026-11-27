@@ -214,7 +214,7 @@ pub(crate) fn from_xml_root<T: serde::de::DeserializeOwned>(
                     )));
                 }
             }
-            Ok(Event::CData(_)) if depth == 0 => {
+            Ok(Event::CData(_) | Event::GeneralRef(_)) if depth == 0 => {
                 return Err(quick_xml::DeError::Custom(format!(
                     "expected a <{root}> document, got text outside it"
                 )));
@@ -849,7 +849,7 @@ DeleteMarker: []
             "{error}"
         );
         // Text after the document is not ignored either.
-        for trailing in ["upstream failure", "<![CDATA[x]]>"] {
+        for trailing in ["upstream failure", "<![CDATA[x]]>", "&#65;", "&amp;"] {
             let error = from_xml_root::<CompleteMultipartUploadResult>(
                 &format!("{complete}{trailing}"),
                 "CompleteMultipartUploadResult",
