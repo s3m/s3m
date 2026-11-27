@@ -37,8 +37,21 @@ created=()
 
 s3m() { "$bin" --config "$config" "$@"; }
 
+# abort_listed <label>: reads "<host path>\t<upload id>" lines and aborts each upload.
+abort_listed() {
+  local label=$1 path upload_id status=0
+  while IFS=$'\t' read -r path upload_id; do
+    [[ -n "$upload_id" ]] || continue
+    s3m rm "$path" --abort "$upload_id" >/dev/null 2>&1 || {
+      echo "cleanup: could not abort the upload of $path ($label)" >&2
+      status=1
+    }
+  done
+  return "$status"
+}
+
 cleanup() {
-  local status=$? failed=0 key destination upload_id
+  local status=$? failed=0 key streams uploads listed
   trap - EXIT
   for key in ${created[@]+"${created[@]}"}; do
     s3m rm "$target/$key" >/dev/null 2>&1 || {
@@ -46,24 +59,27 @@ cleanup() {
       failed=1
     }
   done
-  # A failed or interrupted multipart upload keeps its parts until aborted. If this
-  # script alone is killed while an s3m child still runs, the child holds the state
-  # lock and its upload can't be seen here; the bucket's lifecycle rule for
-  # incomplete multipart uploads is the backstop for that case.
+  # A failed or interrupted multipart upload keeps its parts until aborted. First the
+  # uploads this run recorded in its own state.
   if [[ -d "$S3M_HOME" ]]; then
-    local streams
-    if streams=$(s3m streams --json ls 2>/dev/null); then
-      while IFS=$'\t' read -r destination upload_id; do
-        [[ -n "$upload_id" ]] || continue
-        s3m rm "$host/$destination" --abort "$upload_id" >/dev/null 2>&1 || {
-          echo "cleanup: could not abort the upload of $host/$destination" >&2
-          failed=1
-        }
-      done < <(jq -r '.streams[]? | select(.etag == null and .upload_id != null) | [.destination, .upload_id] | @tsv' <<<"$streams")
+    if streams=$(s3m streams --json ls 2>/dev/null) &&
+      listed=$(jq -r --arg host "$host" '.streams[] | select(.etag == null and .upload_id != null) | [$host + "/" + .destination, .upload_id] | @tsv' <<<"$streams"); then
+      abort_listed "recorded state" <<<"$listed" || failed=1
     else
       echo "cleanup: could not read the upload state in $S3M_HOME" >&2
       failed=1
     fi
+  fi
+  # Then whatever the server still has open under this run's prefix. The state above
+  # can't show an upload whose id was never recorded, or one whose state is locked by
+  # an s3m that is still running. If this script alone is killed while such a child
+  # runs, the bucket's lifecycle rule for incomplete multipart uploads is the backstop.
+  if uploads=$(s3m ls "$target" --multipart --prefix "$prefix/" --json 2>/dev/null) &&
+    listed=$(jq -r --arg target "$target" '.uploads[] | [$target + "/" + .key, .upload_id] | @tsv' <<<"$uploads"); then
+    abort_listed "still open on the server" <<<"$listed" || failed=1
+  else
+    echo "cleanup: could not list the unfinished uploads under $target/$prefix/" >&2
+    failed=1
   fi
   rm -rf "$work"
   # Leftovers in the bucket fail an otherwise green run.
