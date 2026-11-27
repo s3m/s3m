@@ -284,6 +284,61 @@ fn checksum_is_rejected_when_the_host_compresses_or_encrypts() -> Result<()> {
     Ok(())
 }
 
+// <https://github.com/s3m/s3m/issues/77>: an upload in progress keeps the checksum it
+// was created with (here: none). Running the command again with --checksum says so on
+// stderr, sends the pending part as before, and prints no checksum line.
+#[test]
+fn rerun_with_another_checksum_warns_and_keeps_the_original() -> Result<()> {
+    let mut server = Server::new();
+    let payload = vec![7; 11 * MIB + 137];
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let (first_part, second_part) = payload.split_at(10 * MIB);
+    let init = initiate(&mut server).expect(1).create();
+    let part_1 = part_mock(&mut server, 1, first_part).expect(1).create();
+    let part_2_fails = server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+        .with_status(403)
+        .with_body("<Error><Code>AccessDenied</Code><Message>no</Message></Error>")
+        .create();
+    let first = fixture
+        .command()
+        .args(["-n", "1", "-r", "1"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    ensure!(!first.status.success(), "the first run must fail");
+    init.assert();
+    part_1.assert();
+    part_2_fails.remove();
+
+    let part_2 = part_mock(&mut server, 2, second_part)
+        .match_header("x-amz-checksum-sha256", Matcher::Missing)
+        .match_header("content-md5", Matcher::Any)
+        .expect(1)
+        .create();
+    let done = complete(&mut server).expect(1).create();
+    let second = fixture
+        .command()
+        .args(["-n", "1", "--checksum", "sha256"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    let stdout = String::from_utf8_lossy(&second.stdout);
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    ensure!(second.status.success(), "{stdout}{stderr}");
+    part_2.assert();
+    done.assert();
+    ensure!(
+        stderr.contains(
+            "warning: resuming the upload in progress with the checksum it was created with (none), not sha256"
+        ),
+        "{stderr}"
+    );
+    ensure!(!stdout.contains("(base64)"), "{stdout}");
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/74>: the BLAKE3 hash s3m prints is labelled as such,
 // and the --checksum value is printed with its algorithm, comparable with x-amz-checksum-*.
 #[test]

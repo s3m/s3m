@@ -272,6 +272,8 @@ async fn handle_standard_file_upload(
         return Ok(etag_report(&etag));
     }
 
+    warn_if_resume_keeps_another_checksum(&db, request.checksum_algorithm.as_deref())?;
+
     let additional_checksum = calculate_additional_checksum(
         &local_file.path,
         request.checksum_algorithm,
@@ -430,6 +432,27 @@ impl PutObjectRequest {
 }
 
 /// Print the `ETag` if not in quiet mode
+/// A multipart upload in progress keeps the additional checksum it was created with:
+/// the server's upload is bound to it. When this run asks for another one, say so,
+/// because the checksum the user asked for is not the one the object gets.
+fn warn_if_resume_keeps_another_checksum(db: &Db, requested: Option<&str>) -> Result<()> {
+    let Some(requested) = requested.and_then(|name| name.parse::<ChecksumAlgorithm>().ok()) else {
+        return Ok(());
+    };
+    if db.upload_id()?.is_none() {
+        return Ok(());
+    }
+    let used = db.resume_checksum(Some(&requested))?;
+    if used.as_ref() != Some(&requested) {
+        eprintln!(
+            "warning: resuming the upload in progress with the checksum it was created with ({}), not {}",
+            used.as_ref().map_or("none", ChecksumAlgorithm::name),
+            requested.name()
+        );
+    }
+    Ok(())
+}
+
 /// The report of an upload that was skipped because the object is already there: only
 /// its cached `ETag` is known.
 fn etag_report(etag: &str) -> String {

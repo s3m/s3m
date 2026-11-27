@@ -239,6 +239,30 @@ impl Db {
             .map_err(|()| anyhow::anyhow!("unknown checksum algorithm in the upload state: {name}"))
     }
 
+    /// The additional checksum algorithm to continue the upload in progress with:
+    /// the one it was created with, never what a later run asks for, because the
+    /// server's upload is bound to it.
+    ///
+    /// The record made at creation decides. A state written by an older s3m has no
+    /// record: its recorded parts decide then (they were sent with that algorithm, or
+    /// with none), and `requested` only when no part was recorded yet.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not query the db
+    pub fn resume_checksum(
+        &self,
+        requested: Option<&ChecksumAlgorithm>,
+    ) -> Result<Option<ChecksumAlgorithm>> {
+        if let Some(saved) = self.upload_checksum()? {
+            return Ok(saved);
+        }
+        if self.db_parts()?.is_empty() && self.db_uploaded()?.is_empty() {
+            return Ok(requested.cloned());
+        }
+        self.parts_checksum_algorithm()
+    }
+
     /// The checksum algorithm of the recorded parts, pending or uploaded, if they
     /// have one: what a state without [`Db::upload_checksum`] still knows.
     ///

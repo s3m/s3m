@@ -300,7 +300,8 @@ fn infer_db_key(db: &sled::Db) -> Option<String> {
         .keys()
         .filter_map(Result::ok)
         .filter_map(|key| String::from_utf8(key.to_vec()).ok())
-        .filter(|key| !key.starts_with("etag "))
+        // The upload id is stored under the db key; the other records are prefixed.
+        .filter(|key| !key.starts_with("etag ") && !key.starts_with("checksum "))
         .collect::<Vec<_>>();
     keys.sort();
     keys.dedup();
@@ -368,6 +369,25 @@ mod tests {
     // lists right after dropping its own handle waits here first.
     fn wait_for_state_lock(state_dir: &Path) {
         drop(open_state(state_dir).unwrap());
+    }
+
+    // #77 review: the upload's checksum record sits next to the upload id in the
+    // state db. Inferring the db key of a state without metadata must skip it, as it
+    // skips the etag record.
+    #[test]
+    fn test_infer_db_key_skips_the_checksum_record() {
+        use crate::s3::checksum::ChecksumAlgorithm;
+
+        let dir = tempdir().unwrap();
+        let db = Db::new(&test_s3(), "key", "stream-1", 1, dir.path()).unwrap();
+        db.save_upload_checksum(Some(&ChecksumAlgorithm::Sha256))
+            .unwrap();
+        // Only the checksum record, as after a stop before the upload id was saved.
+        assert_eq!(infer_db_key(db.db()), None);
+
+        db.save_upload_id("upload-1").unwrap();
+        db.save_etag("\"etag\"").unwrap();
+        assert_eq!(infer_db_key(db.db()), Some(db.state_key().to_string()));
     }
 
     fn test_s3() -> S3 {

@@ -100,7 +100,9 @@ impl<'a> CompleteMultipartUpload<'a> {
     /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html>
     ///
     /// The value is for reporting: the request does not send it, and the server derives
-    /// the same value from the parts' checksums.
+    /// the same value from the parts' checksums. It is `None` unless every part has a
+    /// checksum of that algorithm: a value computed from fewer parts, or from another
+    /// algorithm's digests, would not be the object's checksum.
     ///
     /// # Errors
     ///
@@ -115,15 +117,20 @@ impl<'a> CompleteMultipartUpload<'a> {
 
         // concatenate the checksums of the parts
         for part in self.parts.values() {
-            if let Some(checksum) = &part.checksum {
-                let checksum_in_bytes = Base64::decode_vec(&checksum.checksum).map_err(|e| {
-                    Error::Other(format!(
-                        "could not decode checksum: {}, {}",
-                        checksum.checksum, e
-                    ))
-                })?;
-                hasher.update(&checksum_in_bytes);
-            }
+            let Some(checksum) = part
+                .checksum
+                .as_ref()
+                .filter(|checksum| checksum.algorithm == additional_checksum.algorithm)
+            else {
+                return Ok(None);
+            };
+            let checksum_in_bytes = Base64::decode_vec(&checksum.checksum).map_err(|e| {
+                Error::Other(format!(
+                    "could not decode checksum: {}, {}",
+                    checksum.checksum, e
+                ))
+            })?;
+            hasher.update(&checksum_in_bytes);
         }
 
         Ok(Some(Checksum {
@@ -411,6 +418,52 @@ mod tests {
             "sha256 (base64): xheoOGWlJSrr1KooTDWywen6ft/oubM2FCHlVKEDMfM=-2",
             checksum.report()
         );
+    }
+
+    // The composite is the checksum of the parts' checksums: without a checksum of
+    // that algorithm on every part there is nothing to report (not the hash of fewer
+    // parts, or of another algorithm's digests).
+    #[test]
+    fn test_checksum_needs_every_part_checksum() {
+        use crate::s3::checksum::ChecksumAlgorithm;
+
+        let sha256 = |value: &str| Checksum {
+            algorithm: ChecksumAlgorithm::Sha256,
+            checksum: value.to_string(),
+        };
+        let part = |number: u16, checksum: Option<Checksum>| Part {
+            etag: format!("e{number}"),
+            number,
+            checksum,
+        };
+        let digest = "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=";
+
+        let missing = BTreeMap::from([(1, part(1, Some(sha256(digest)))), (2, part(2, None))]);
+        let action = CompleteMultipartUpload::new(
+            "key",
+            "uid",
+            missing,
+            Some(Checksum::new(ChecksumAlgorithm::Sha256)),
+        );
+        assert!(action.checksum().unwrap().is_none());
+
+        let other_algorithm = BTreeMap::from([(
+            1,
+            part(
+                1,
+                Some(Checksum {
+                    algorithm: ChecksumAlgorithm::Crc32c,
+                    checksum: "yZRlqg==".to_string(),
+                }),
+            ),
+        )]);
+        let action = CompleteMultipartUpload::new(
+            "key",
+            "uid",
+            other_algorithm,
+            Some(Checksum::new(ChecksumAlgorithm::Sha256)),
+        );
+        assert!(action.checksum().unwrap().is_none());
     }
 
     #[test]

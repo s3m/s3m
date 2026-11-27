@@ -211,26 +211,19 @@ async fn start_or_resume_upload(
     Ok((response.upload_id, additional_checksum))
 }
 
-/// The additional checksum of a multipart upload that is being resumed: the one
-/// recorded when the upload was created. A state from an older s3m has no record:
-/// then what this run asked for, or the algorithm of the parts already recorded
-/// (`streams resume` doesn't know the original `--checksum`).
+/// The additional checksum of a multipart upload that is being resumed: the one the
+/// upload was created with (see [`Db::resume_checksum`]), whatever this run asked for.
 fn resumed_checksum(db: &Db, requested: Option<Checksum>) -> Result<Option<Checksum>> {
-    let Some(saved) = db.upload_checksum()? else {
-        return Ok(match requested {
-            Some(checksum) => Some(checksum),
-            None => db.parts_checksum_algorithm()?.map(Checksum::new),
-        });
-    };
     let requested = requested.map(|checksum| checksum.algorithm);
-    if requested.is_some() && requested != saved {
+    let used = db.resume_checksum(requested.as_ref())?;
+    if requested.is_some() && requested != used {
         log::warn!(
             "Resuming with the checksum the upload was created with ({}), not {}",
-            saved.as_ref().map_or("none", ChecksumAlgorithm::name),
+            used.as_ref().map_or("none", ChecksumAlgorithm::name),
             requested.as_ref().map_or("none", ChecksumAlgorithm::name)
         );
     }
-    Ok(saved.map(Checksum::new))
+    Ok(used.map(Checksum::new))
 }
 
 #[cfg(test)]
@@ -822,6 +815,68 @@ mod tests {
         assert!(error.contains("--checksum crc32c"), "{error}");
         assert_eq!(db.upload_id().unwrap(), None);
         assert_eq!(db.upload_checksum().unwrap(), None);
+    }
+
+    // #77 review: a state from an older s3m has no record, and its parts were sent
+    // without a checksum. Running the command again with --checksum must not change
+    // what the pending part carries, nor print a checksum the server doesn't have.
+    #[tokio::test]
+    async fn resume_of_an_old_state_keeps_parts_without_a_checksum() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        let uploaded = Part::new(1, 0, 5, None).set_etag("\"p1\"".into());
+        db.db_uploaded()
+            .unwrap()
+            .insert(
+                1_u16.to_be_bytes(),
+                to_bytes::<RkyvError>(&uploaded).unwrap().as_slice(),
+            )
+            .unwrap();
+        db.create_part(2, 5, 5, None).unwrap();
+
+        let part = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+            .match_header("x-amz-checksum-sha256", Matcher::Missing)
+            .match_header("content-md5", Matcher::Any)
+            .with_header("etag", "\"p2\"")
+            .expect(1)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_body(COMPLETED)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let report = upload_multipart(MultipartUploadRequest {
+            s3: &s3,
+            key: "key",
+            file: file.path(),
+            file_size: 10,
+            chunk_size: 5,
+            sdb: &db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: Some(Checksum::new(ChecksumAlgorithm::Sha256)),
+            max_requests: 1,
+            globals: RequestOptions::default(),
+        })
+        .await
+        .unwrap();
+
+        part.assert_async().await;
+        complete.assert_async().await;
+        assert_eq!(report, "ETag: \"done-2\"");
     }
 
     // A new upload records its algorithm (or that it has none), and a resume keeps
