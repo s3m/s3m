@@ -115,6 +115,9 @@ rkyv = { version = "0.8", features = ["bytecheck"] }
 testcontainers = "0.28"
 tokio-util = { version = "0.7", features = ["codec"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [[bench]]
 name = "sha256_md5_digest_benchmark"
 harness = false

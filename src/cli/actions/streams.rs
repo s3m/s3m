@@ -794,71 +794,41 @@ mod tests {
     }
 
     #[cfg(unix)]
-    async fn rewrite_source_during_config_read(config: &Path, source: &Path, endpoint: &str) {
-        use std::{process::Stdio, time::Duration};
-        use tokio::{
-            io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader},
-            process::Command,
-            time::timeout,
-        };
+    fn rewrite_source_during_config_read(config: &Path, source: &Path, endpoint: &str) {
+        use std::{io::Write as _, time::Duration};
 
         // Opening the FIFO for writing unblocks only once resume has validated
         // the original source and reached the read of the host configuration.
-        let mut writer = Command::new("sh")
-            .args([
-                "-c",
-                r#"exec 3>"$1"; printf '%s\n' ready; exec cat >&3"#,
-                "sh",
-            ])
-            .arg(config)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
-        let mut lines = BufReader::new(writer.stdout.take().unwrap()).lines();
-        let ready = timeout(Duration::from_secs(10), lines.next_line())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            ready.as_deref(),
-            Some("ready"),
-            "resume did not open the config FIFO"
-        );
+        let mut writer = fs::OpenOptions::new().write(true).open(config).unwrap();
         let mut replacement = tempfile::NamedTempFile::new_in(source.parent().unwrap()).unwrap();
-        std::io::Write::write_all(&mut replacement, b"modified").unwrap();
+        replacement.write_all(b"modified").unwrap();
         replacement
             .as_file()
             .set_modified(UNIX_EPOCH + Duration::from_secs(20))
             .unwrap();
         replacement.persist(source).unwrap();
-        let mut input = writer.stdin.take().unwrap();
-        input.write_all(
-            format!("hosts:\n  s3:\n    endpoint: {endpoint}\n    access_key: fixture\n    secret_key: local-only\n").as_bytes(),
-        ).await.unwrap();
-        drop(input);
-        assert!(writer.wait().await.unwrap().success());
+        write!(
+            writer,
+            "hosts:\n  s3:\n    endpoint: {endpoint}\n    access_key: fixture\n    secret_key: local-only\n"
+        )
+        .unwrap();
     }
 
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn streams_resume_rejects_a_same_size_rewrite_after_validation() {
         use mockito::{Matcher, Server};
-        use std::process::Command;
+        use std::{ffi::CString, io, os::unix::fs::OpenOptionsExt as _, thread};
 
         let mut server = Server::new_async().await;
         let endpoint = server.url();
         let base = tempdir().unwrap();
         let (source, id) = same_size_resume_fixture(base.path(), &endpoint);
         let config = base.path().join("config.yml");
-        assert!(
-            Command::new("mkfifo")
-                .arg(&config)
-                .status()
-                .unwrap()
-                .success()
-        );
+        let fifo_path = CString::new(config.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: fifo_path is a valid NUL-terminated path for the duration of the call.
+        let result = unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) };
+        assert_eq!(result, 0, "mkfifo failed: {}", io::Error::last_os_error());
         let abort = server
             .mock("DELETE", "/bucket/key")
             .match_query(Matcher::UrlEncoded("uploadId".into(), "upload-1".into()))
@@ -874,6 +844,11 @@ mod tests {
             .create_async()
             .await;
 
+        let writer_config = config.clone();
+        let writer = thread::spawn(move || {
+            rewrite_source_during_config_read(&writer_config, &source, &endpoint);
+        });
+
         let resume_config = config.clone();
         let resume_base = base.path().to_owned();
         let resume = tokio::spawn(async move {
@@ -886,9 +861,16 @@ mod tests {
                 GlobalArgs::new(),
             )
             .await
-        });
-        rewrite_source_during_config_read(&config, &source, &endpoint).await;
-        let error = resume.await.unwrap().unwrap_err();
+        })
+        .await;
+        // Release the writer even if resume failed before opening the FIFO.
+        let _reader = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&config)
+            .unwrap();
+        writer.join().unwrap();
+        let error = resume.unwrap().unwrap_err();
 
         assert!(
             error

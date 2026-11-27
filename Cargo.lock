@@ -2762,6 +2762,7 @@ dependencies = [
  "http",
  "indicatif",
  "jiff 1.0.3",
+ "libc",
  "log",
  "md5",
  "mockito",
