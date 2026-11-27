@@ -1,0 +1,95 @@
+---
+name: AWS Checks
+
+# Checks against a dedicated AWS S3 bucket with Object Lock and versioning
+# (scripts/aws-check.sh): Object Lock uploads with checksums, version listings over
+# several pages and with delete markers. Everything it writes is deleted again.
+# Runs only where the AWS_* secrets exist, so pull requests from forks never reach
+# it. The secrets are given only to the steps that use them, never to checkout, the
+# build or third-party actions.
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - sandbox
+  workflow_dispatch:
+
+concurrency:
+  group: aws-checks
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  aws:
+    name: AWS Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check for AWS credentials
+        id: secrets
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+        run: |
+          if [[ -n "$AWS_REGION" && -n "$AWS_ACCESS_KEY" && -n "$AWS_SECRET_KEY" && -n "$AWS_BUCKET" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::AWS_* secrets are not set; skipping the AWS checks"
+          fi
+
+      - name: Checkout
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        if: steps.secrets.outputs.present == 'true'
+        uses: ./.github/actions/rust-toolchain
+
+      # Dependency sources only: compiled artifacts depend on the floating stable
+      # compiler, which this key does not capture.
+      - name: Cache cargo registry
+        if: steps.secrets.outputs.present == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-aws-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-aws-cargo-
+
+      - name: Build s3m
+        if: steps.secrets.outputs.present == 'true'
+        run: cargo build --locked --bin s3m
+
+      # JSON strings are valid YAML, so any character in a secret survives intact.
+      - name: Write the s3m config
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+        run: |
+          umask 077
+          config="$RUNNER_TEMP/s3m-aws.yml"
+          rm -f "$config"
+          jq -n '{hosts: {aws: {region: env.AWS_REGION,
+            access_key: env.AWS_ACCESS_KEY, secret_key: env.AWS_SECRET_KEY}}}' > "$config"
+
+      - name: Run the AWS checks
+        if: steps.secrets.outputs.present == 'true'
+        env:
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+        run: scripts/aws-check.sh target/debug/s3m "$RUNNER_TEMP/s3m-aws.yml" aws "$AWS_BUCKET"
+
+      - name: Remove the s3m config
+        if: always() && steps.secrets.outputs.present == 'true'
+        run: rm -f "$RUNNER_TEMP/s3m-aws.yml"
