@@ -1091,6 +1091,35 @@ fn head_mock(server: &mut ServerGuard, expected: usize) -> Mock {
         .create()
 }
 
+// #75 review: a header that isn't ASCII (user metadata stored as raw UTF-8 here) made
+// `get -m` fail with "failed to convert header to a str". It is shown as far as it
+// can be read, next to the other headers.
+#[test]
+fn get_meta_shows_a_header_that_is_not_ascii() -> Result<()> {
+    let mut server = Server::new();
+    let head = server
+        .mock("HEAD", OBJECT_PATH)
+        .with_header("etag", "\"meta-etag\"")
+        .with_header("x-amz-meta-owner", "zoë")
+        .expect(1)
+        .create();
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["get", OBJECT, "-m"];
+    let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
+
+    let fields: Vec<(&str, &str)> = stdout
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim(), value.trim()))
+        .collect();
+    for expected in [("etag", "\"meta-etag\""), ("x-amz-meta-owner", "zoë")] {
+        ensure!(fields.contains(&expected), "{expected:?} in {stdout}");
+    }
+    head.assert();
+    Ok(())
+}
+
 #[test]
 fn get_meta_reads_headers_without_downloading_the_body() -> Result<()> {
     let mut server = Server::new();

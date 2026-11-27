@@ -1,6 +1,6 @@
 use crate::s3::error::Result;
 use crate::{
-    s3::actions::{Action, response_error},
+    s3::actions::{Action, header_text, response_error},
     s3::{S3, request, tools},
 };
 use reqwest::Method;
@@ -42,7 +42,9 @@ impl<'a> HeadObject<'a> {
             let mut h: BTreeMap<String, String> = BTreeMap::new();
             for (key, value) in response.headers() {
                 if !value.is_empty() {
-                    h.insert(key.as_str().to_string(), value.to_str()?.to_string());
+                    // Shown as far as it can be read: one header that isn't ASCII
+                    // must not hide the others.
+                    h.insert(key.as_str().to_string(), header_text(value));
                 }
             }
             Ok(h)

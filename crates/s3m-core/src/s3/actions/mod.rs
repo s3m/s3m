@@ -205,12 +205,28 @@ fn has_additional_checksum(headers: &BTreeMap<&str, &str>) -> bool {
     })
 }
 
+/// A response header value as text to show: bytes that aren't UTF-8 become U+FFFD,
+/// and control characters and the Unicode line separators are escaped (`\t`,
+/// `\u{2028}`), so a value can't start a line of its own in s3m's output.
+pub(crate) fn header_text(value: &reqwest::header::HeaderValue) -> String {
+    let text = String::from_utf8_lossy(value.as_bytes());
+    let mut shown = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+            shown.extend(character.escape_default());
+        } else {
+            shown.push(character);
+        }
+    }
+    shown
+}
+
 /// The response headers of an upload (`PutObject`, `CompleteMultipartUpload`) that
 /// s3m reports, labelled as it prints them.
 ///
 /// They are only shown: the upload is already stored when they arrive, so a value
-/// that isn't visible ASCII is shown as far as it can be read, and never fails the
-/// upload.
+/// that isn't visible ASCII is shown as far as it can be read (see [`header_text`]),
+/// and never fails the upload.
 pub(crate) fn upload_response_headers(headers: &HeaderMap) -> BTreeMap<&'static str, String> {
     let mut report = BTreeMap::new();
     for (header, label) in [
@@ -220,10 +236,7 @@ pub(crate) fn upload_response_headers(headers: &HeaderMap) -> BTreeMap<&'static 
         ("x-emc-previous-object-size", "Previous object size"),
     ] {
         if let Some(value) = headers.get(header) {
-            report.insert(
-                label,
-                String::from_utf8_lossy(value.as_bytes()).into_owned(),
-            );
+            report.insert(label, header_text(value));
         }
     }
     report
@@ -339,6 +352,19 @@ mod tests {
         assert_eq!(
             report.get("Server-side encryption").map(String::as_str),
             Some("AES\u{fffd}256")
+        );
+
+        // A tab or a Unicode line separator would split the line for whoever parses
+        // the report: they are shown escaped.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-amz-expiration",
+            HeaderValue::from_bytes("rule\tone\u{2028}ETag: \"forged\"".as_bytes())?,
+        );
+        let report = upload_response_headers(&headers);
+        assert_eq!(
+            report.get("Expiration").map(String::as_str),
+            Some("rule\\tone\\u{2028}ETag: \"forged\"")
         );
         Ok(())
     }
