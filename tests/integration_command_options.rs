@@ -422,6 +422,57 @@ fn ls_buckets_fallback_keeps_paginating_without_max_buckets() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn ls_buckets_fallback_uses_either_trigger_and_never_readds_max_buckets() -> Result<()> {
+    for (status, error_code) in [(501, "OtherError"), (400, "NotImplemented")] {
+        let mut server = Server::new();
+        let rejected = server
+            .mock("GET", "/")
+            .match_query(Matcher::Any)
+            .match_request(exact_query(&[("max-buckets", "10000")]))
+            .with_status(status)
+            .with_body(format!("<Error><Code>{error_code}</Code></Error>"))
+            .expect(1)
+            .create();
+        let first = server
+            .mock("GET", "/")
+            .match_query(Matcher::Missing)
+            .with_body("<ListAllMyBucketsResult><Buckets/><ContinuationToken>second</ContinuationToken></ListAllMyBucketsResult>")
+            .expect(1)
+            .create();
+        let second = server
+            .mock("GET", "/")
+            .match_query(Matcher::Any)
+            .match_request(exact_query(&[("continuation-token", "second")]))
+            .with_body("<ListAllMyBucketsResult><Buckets/></ListAllMyBucketsResult>")
+            .expect(1)
+            .create();
+        let forbidden = server
+            .mock("GET", "/")
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("continuation-token".into(), "second".into()),
+                Matcher::Regex("max-buckets=".into()),
+            ]))
+            .with_status(501)
+            .expect(0)
+            .create();
+
+        let cli = Cli::new(&server.url())?;
+        let output = cli.run(&["ls", "s3"])?;
+        ensure!(
+            output.status.success(),
+            "ListBuckets must fall back for HTTP {status} / {error_code}: {}",
+            text(&output.stderr)
+        );
+        ensure!(
+            forbidden.matched(),
+            "ListBuckets sent max-buckets on a later page after falling back"
+        );
+        assert_all(&[rejected, first, second]);
+    }
+    Ok(())
+}
+
 // #79: the fallback is tried once. When the request without `max-buckets` fails too
 // (a key that can't list buckets, as on R2), that error is the one reported.
 #[test]
