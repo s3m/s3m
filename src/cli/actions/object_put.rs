@@ -340,8 +340,15 @@ async fn abort_replaced_multipart_upload(s3: &S3, host: &str, key: &str, db: &Db
     let abort = actions::AbortMultipartUpload::new(key, &upload_id);
     if let Err(error) = abort.request_if_open(s3).await {
         let command = abort.command(host, s3.bucket().unwrap_or_default());
+        // The object is stored, but the multipart upload stays open. Without its saved
+        // ETag the state shows the upload as unfinished: `streams clean` keeps it, and
+        // the next run uploads the file again and retries the abort.
+        let kept = match db.forget_etag() {
+            Ok(()) => "the next run uploads the file again and retries the abort",
+            Err(_) => "its state could not be updated",
+        };
         eprintln!(
-            "warning: could not abort the previous multipart upload ({error}). Abort it with `{command}`"
+            "warning: could not abort the previous multipart upload ({error}); {kept}. Abort it with `{command}`"
         );
     } else if let Err(error) = db.forget_multipart_upload() {
         eprintln!(

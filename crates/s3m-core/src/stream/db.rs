@@ -160,6 +160,18 @@ impl Db {
         Ok(())
     }
 
+    /// Forget the saved `ETag` only, keeping the multipart upload id and parts. The
+    /// state then shows an unfinished upload again, which `streams clean` keeps.
+    ///
+    /// # Errors
+    /// Returns an error if the saved state cannot be updated.
+    pub fn forget_etag(&self) -> Result<()> {
+        self.storage
+            .remove(format!("etag {}", self.key).as_bytes())?;
+        self.flush()?;
+        Ok(())
+    }
+
     /// Clear the multipart upload id and parts while keeping the saved `ETag`.
     ///
     /// # Errors
