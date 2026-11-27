@@ -145,34 +145,40 @@ fn single_put_after_interrupted_multipart(abort_status: usize) -> Result<()> {
     abort.remove();
 
     if abort_status == 403 {
-        // The next run uploads the file again and retries the abort, which works now.
-        let put = server
-            .mock("PUT", "/bucket/key")
-            .match_query(Matcher::Missing)
-            .with_header("etag", "single")
-            .expect(1)
-            .create();
-        let abort = server
-            .mock("DELETE", "/bucket/key")
-            .match_query(Matcher::UrlEncoded("uploadId".into(), "UP1".into()))
-            .with_status(204)
-            .expect(1)
-            .create();
-        let output = fixture
-            .command()
-            .arg(&fixture.source)
-            .arg("s3/bucket/key")
-            .output()?;
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        ensure!(output.status.code() == Some(0), "{stderr}");
-        ensure!(!stderr.contains("warning:"), "{stderr}");
-        put.assert();
-        abort.assert();
-        let state = fixture.home.entries()?;
-        let entry = state.first().context("single-part upload state")?;
-        assert_eq!(entry.etag.as_deref(), Some("single"));
-        assert_eq!(entry.upload_id, None);
+        rerun_retries_the_abort(&mut server, &fixture)?;
     }
+    Ok(())
+}
+
+/// After a failed abort, the next run uploads the file again and retries the abort,
+/// which works now; the state then holds the new `ETag` and no upload id.
+fn rerun_retries_the_abort(server: &mut mockito::ServerGuard, fixture: &Fixture) -> Result<()> {
+    let put = server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::Missing)
+        .with_header("etag", "single")
+        .expect(1)
+        .create();
+    let abort = server
+        .mock("DELETE", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("uploadId".into(), "UP1".into()))
+        .with_status(204)
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(output.status.code() == Some(0), "{stderr}");
+    ensure!(!stderr.contains("warning:"), "{stderr}");
+    put.assert();
+    abort.assert();
+    let state = fixture.home.entries()?;
+    let entry = state.first().context("single-part upload state")?;
+    assert_eq!(entry.etag.as_deref(), Some("single"));
+    assert_eq!(entry.upload_id, None);
     Ok(())
 }
 
