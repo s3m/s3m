@@ -51,11 +51,16 @@ impl Credentials {
 mod tests {
     use super::*;
 
+    // The variables are unset through temp_env, which holds one lock for every test
+    // that changes the environment: without it this test could run while
+    // test_credentials_env has them set, and read "env-access".
     #[test]
     fn test_credentials() {
-        let creds = Credentials::new("access", &SecretString::new("secret".into()));
-        assert_eq!(creds.aws_access_key_id(), "access");
-        assert_eq!(creds.aws_secret_access_key(), "secret");
+        temp_env::with_vars_unset(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"], || {
+            let creds = Credentials::new("access", &SecretString::new("secret".into()));
+            assert_eq!(creds.aws_access_key_id(), "access");
+            assert_eq!(creds.aws_secret_access_key(), "secret");
+        });
     }
 
     #[test]
