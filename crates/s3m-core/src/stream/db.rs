@@ -9,6 +9,8 @@ use anyhow::{Result, ensure};
 use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 use std::{
     collections::BTreeMap,
+    fs::{self, File},
+    io,
     path::{Path, PathBuf},
     thread::sleep,
     time::Duration,
@@ -52,19 +54,54 @@ pub(crate) fn open_state_once(path: &Path) -> sled::Result<sled::Db> {
 fn open_state_with(path: &Path, attempts: u32, delay: Duration) -> sled::Result<sled::Db> {
     let mut attempt = 1;
     loop {
-        let result = sled::Config::new()
-            .path(path)
-            .use_compression(false)
-            .mode(sled::Mode::LowSpace)
-            .open();
+        let result = try_open_state(path);
         match result {
-            Err(error) if attempt < attempts && is_lock_error(&error.to_string()) => {
+            Err(error) if attempt < attempts && is_busy(&error) => {
                 attempt += 1;
                 sleep(delay);
             }
             result => return result,
         }
     }
+}
+
+pub(super) fn is_busy(error: &sled::Error) -> bool {
+    matches!(error, sled::Error::Io(e) if e.kind() == io::ErrorKind::WouldBlock)
+        || is_lock_error(&error.to_string())
+}
+
+/// Outside the directory being removed so Windows can delete every file in it.
+pub(super) fn cleanup_lock(streams: &Path) -> io::Result<File> {
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(streams.join(".clean.lock"))
+}
+
+const CLEANING: &str = "stream cleanup in progress";
+
+fn try_open_state(path: &Path) -> sled::Result<sled::Db> {
+    // A cleaner takes the exclusive lock only from its final inspection until
+    // unlink. The shared lock covers this open attempt, never a running upload
+    // or the sleep between sled lock retries.
+    let _opening = if let Some(streams) = path.parent().filter(|p| p.ends_with("streams")) {
+        fs::create_dir_all(streams)?;
+        let lock = cleanup_lock(streams)?;
+        lock.try_lock_shared().map_err(|error| match error {
+            fs::TryLockError::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, CLEANING),
+            fs::TryLockError::Error(error) => error,
+        })?;
+        Some(lock)
+    } else {
+        None
+    };
+    sled::Config::new()
+        .path(path)
+        .use_compression(false)
+        .mode(sled::Mode::LowSpace)
+        .open()
 }
 
 #[derive(Debug, Clone)]

@@ -1,6 +1,6 @@
 //! Ownership of the single database older s3m versions kept for a file hash.
 use super::{
-    db::{is_lock_error, open_state, open_state_once},
+    db::{is_busy, is_lock_error, open_state, open_state_once},
     state::{StreamEntry, StreamMetadata, StreamStatus, load_metadata, read_record},
 };
 use anyhow::Result;
@@ -10,8 +10,10 @@ use std::{collections::BTreeSet, path::Path};
 /// names just one. If it is busy, only wait for a matching or unknown owner.
 pub(super) fn open_for_key(path: &Path, key: &str) -> sled::Result<Option<sled::Db>> {
     match open_state_once(path) {
-        Err(error) if is_lock_error(&error.to_string()) => {
-            if load_metadata(path).is_ok_and(|metadata| metadata.db_key != key) {
+        Err(error) if is_busy(&error) => {
+            if is_lock_error(&error.to_string())
+                && load_metadata(path).is_ok_and(|metadata| metadata.db_key != key)
+            {
                 Ok(None)
             } else {
                 open_state(path).map(Some)

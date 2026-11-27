@@ -1093,3 +1093,48 @@ fn clean_keeps_an_upload_with_torn_metadata() {
 
 #[path = "support/streams_destinations.rs"]
 mod streams_destinations;
+
+#[test]
+fn clean_removes_completed_uploads_with_unreadable_metadata() {
+    for layout in LAYOUTS {
+        for args in [&["streams", "clean"][..], &["--clean"]] {
+            for torn in [false, true] {
+                let home = tempdir().unwrap();
+                write_config(home.path());
+                let (metadata, db) =
+                    create_state(layout, home.path(), "done", Some("completed-uid"));
+                db.db_parts().unwrap().clear().unwrap();
+                db.save_etag("\"done-2\"").unwrap();
+                let dir = db.path().to_owned();
+                drop(db);
+                let yaml = dir.join("state.yml");
+                if torn {
+                    fs::write(yaml, "id: [").unwrap();
+                } else {
+                    fs::remove_file(yaml).unwrap();
+                }
+                wait_for_state_lock(home.path(), &metadata.id);
+                assert_eq!(show_json(home.path(), &metadata.id)["status"], "complete");
+                assert!(run_streams(home.path(), args).status.success());
+                assert!(!dir.exists(), "{args:?} kept {}", metadata.id);
+            }
+        }
+    }
+}
+
+#[test]
+fn saved_id_retention_reason_starts_with_text() {
+    let home = tempdir().unwrap();
+    write_config(home.path());
+    let (metadata, db) = create_state(Layout::Current, home.path(), "broken", None);
+    db.db().insert("another key 1", "still-open").unwrap();
+    db.flush().unwrap();
+    drop(db);
+    wait_for_state_lock(home.path(), &metadata.id);
+    let shown = show_json(home.path(), &metadata.id);
+    assert_eq!(shown["status"], "broken");
+    assert_eq!(
+        shown["error"],
+        "kept because the database has a saved upload id"
+    );
+}

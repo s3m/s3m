@@ -1,5 +1,5 @@
 use crate::stream::{
-    db::{DB_PARTS, DB_UPLOADED, is_lock_error, open_state_once},
+    db::{DB_PARTS, DB_UPLOADED, cleanup_lock, is_busy, open_state_once},
     legacy,
     part::Part,
 };
@@ -156,7 +156,7 @@ fn replace_metadata(dir: &Path, metadata: &StreamMetadata) -> Result<()> {
 /// Will return `Err` if scanning the streams directory fails
 pub fn scan_streams(base_path: &Path) -> Result<Vec<StreamEntry>> {
     let mut entries = Vec::new();
-    visit_streams(base_path, |_, states, _| {
+    visit_streams(base_path, false, |_, states, _| {
         entries.extend(states);
         Ok(())
     })?;
@@ -168,16 +168,17 @@ pub fn scan_streams(base_path: &Path) -> Result<Vec<StreamEntry>> {
     Ok(entries)
 }
 
-/// Inspect and, for clean, remove each directory while holding its sled lock.
+/// Inspect under the sled lock, then close the database before the visitor removes its files.
 fn visit_streams(
     base_path: &Path,
+    cleaning: bool,
     mut visit: impl FnMut(&Path, Vec<StreamEntry>, bool) -> Result<()>,
 ) -> Result<()> {
     let streams = streams_dir(base_path);
     if !streams.try_exists()? {
         return Ok(());
     }
-    for dir in fs::read_dir(streams)? {
+    for dir in fs::read_dir(&streams)? {
         let dir = dir?;
         if dir.file_type()?.is_dir() {
             let path = dir.path();
@@ -189,9 +190,21 @@ fn visit_streams(
                 .map_err(|error| anyhow::anyhow!("{error}"))
                 .and_then(|db| inspect_directory(&id, &path, db));
             let (entries, removable) = result.unwrap_or_else(|error| {
-                let entry = load_entry(&id, &path, load_metadata(&path), Err(error));
+                let mut entry = load_entry(&id, &path, load_metadata(&path), Err(error));
+                if entry.metadata.is_some() && db.as_ref().is_err_and(is_busy) {
+                    entry.status = StreamStatus::Active;
+                }
                 (vec![entry], false)
             });
+            // Keep new opens out between dropping sled and removing its files.
+            let _removal = if cleaning && removable {
+                let lock = cleanup_lock(&streams)?;
+                lock.lock()?;
+                Some(lock)
+            } else {
+                None
+            };
+            drop(db);
             visit(&path, entries, removable)?;
         }
     }
@@ -219,9 +232,13 @@ fn inspect_directory(id: &str, path: &Path, db: &sled::Db) -> Result<(Vec<Stream
     let snapshot = inspect_db(db, key);
     let mut entry = load_entry(id, path, metadata, snapshot);
     let removable = match entry.status {
-        StreamStatus::Broken if has_upload_id(db)? => {
+        StreamStatus::Broken | StreamStatus::Complete if has_upload_id(db)? => {
+            entry.status = StreamStatus::Broken;
             let reason = entry.error.get_or_insert_with(String::new);
-            reason.push_str("; kept because the database has a saved upload id");
+            if !reason.is_empty() {
+                reason.push_str("; ");
+            }
+            reason.push_str("kept because the database has a saved upload id");
             false
         }
         StreamStatus::Broken | StreamStatus::Complete => true,
@@ -248,10 +265,7 @@ fn load_entry(
             let parts_total = snapshot.parts_pending + snapshot.parts_uploaded;
             // An upload whose abort is still pending is not done: `streams clean`
             // must keep the only record of it.
-            let status = if snapshot.etag.is_some()
-                && !snapshot.abort_pending
-                && (metadata.is_some() || snapshot.upload_id.is_none())
-            {
+            let status = if snapshot.etag.is_some() && !snapshot.abort_pending {
                 StreamStatus::Complete
             } else if snapshot.upload_id.is_none() || metadata.is_none() {
                 StreamStatus::Broken
@@ -282,17 +296,12 @@ fn load_entry(
         }
         Err(error) => {
             let error_message = metadata_error.unwrap_or_else(|| error.to_string());
-            let status = if metadata.is_some() && is_lock_error(&error_message) {
-                StreamStatus::Active
-            } else {
-                StreamStatus::Broken
-            };
 
             StreamEntry {
                 id: id.to_string(),
                 state_dir: state_dir.to_path_buf(),
                 metadata,
-                status,
+                status: StreamStatus::Broken,
                 upload_id: None,
                 etag: None,
                 parts_total: 0,
@@ -366,7 +375,9 @@ pub(super) fn read_record(db: &sled::Db, key: &str) -> Result<Option<String>> {
 
 fn has_upload_id(db: &sled::Db) -> Result<bool> {
     for key in db.iter().keys() {
-        if legacy::record_owner(std::str::from_utf8(&key?)?).is_none() {
+        let key = key?;
+        let key = std::str::from_utf8(&key)?;
+        if legacy::record_owner(key).is_none() && !legacy::is_complete(db, key)? {
             return Ok(true);
         }
     }
@@ -420,7 +431,7 @@ fn now_secs() -> u64 {
 pub fn clean_streams(base_path: &Path) -> Result<CleanSummary> {
     let mut summary = CleanSummary::default();
 
-    visit_streams(base_path, |path, states, removable| {
+    visit_streams(base_path, true, |path, states, removable| {
         let ids = states.into_iter().map(|entry| entry.id);
         if removable {
             fs::remove_dir_all(path)?;
@@ -446,7 +457,7 @@ mod tests {
     use super::*;
     use crate::{
         s3::{Credentials, Region, S3},
-        stream::db::{Db, open_state},
+        stream::db::{Db, is_lock_error, open_state},
     };
     use secrecy::SecretString;
     use tempfile::tempdir;
@@ -490,6 +501,61 @@ mod tests {
             Some("bucket".to_string()),
             false,
         )
+    }
+
+    #[test]
+    fn cleanup_releases_the_database_before_removal() {
+        let dir = tempdir().unwrap();
+        let (db, id) = fixture_db(false, "done", dir.path());
+        db.save_etag("\"done\"").unwrap();
+        drop(db);
+        wait_for_state_lock(&state_dir(dir.path(), &id));
+        visit_streams(dir.path(), true, |path, _, removable| {
+            assert!(removable);
+            // Linux permits unlinking locked files. Take the underlying file
+            // lock to check sled has closed it before removal.
+            let file = fs::File::options()
+                .read(true)
+                .write(true)
+                .open(path.join("db"))?;
+            file.try_lock()?;
+            drop(file);
+            fs::remove_dir_all(path)?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn an_upload_cannot_reopen_a_directory_during_removal() {
+        let dir = tempdir().unwrap();
+        let (db, id) = fixture_db(false, "done", dir.path());
+        db.save_etag("\"done\"").unwrap();
+        drop(db);
+        wait_for_state_lock(&state_dir(dir.path(), &id));
+        visit_streams(dir.path(), true, |path, _, removable| {
+            assert!(removable);
+            assert!(
+                open_state_once(path)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("stream cleanup in progress")
+            );
+            fs::remove_dir_all(path)?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn completed_id_only_counts_as_open_while_abort_is_pending() {
+        let dir = tempdir().unwrap();
+        let (db, _) = fixture_db(false, "done", dir.path());
+        db.save_upload_id("uid").unwrap();
+        db.save_etag("\"etag\"").unwrap();
+        assert!(!has_upload_id(db.db()).unwrap());
+        db.mark_abort_pending().unwrap();
+        assert!(has_upload_id(db.db()).unwrap());
     }
 
     mod legacy_tests;
@@ -639,6 +705,10 @@ mod tests {
                     .unwrap()
                     .contains("could not acquire lock")
             );
+            let cleanup = cleanup_lock(&streams_dir(dir.path())).unwrap();
+            cleanup.lock().unwrap();
+            let busy = scan_streams(dir.path()).unwrap();
+            assert_eq!(busy[0].status, StreamStatus::Active);
         }
     }
 
