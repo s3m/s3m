@@ -5,8 +5,11 @@
 #
 # Covers what neither R2 nor the RustFS integration tests can show: Object Lock
 # uploads with --checksum (#73), the server's composite checksum after a multipart
-# upload (#88), version listings longer than one page (#90) and listings in which
-# versions and delete markers alternate (#91).
+# upload (#88), version listings longer than one page (#90), listings in which
+# versions and delete markers alternate (#91), and the Version ID and Expiration that
+# multipart and streamed uploads report (#75, #76; the bucket needs a lifecycle rule
+# that expires current versions). Then the interrupted and changing uploads of
+# scripts/provider-scenarios.sh.
 #
 # Everything is written under ci/<unique prefix>/ and removed again: legal holds are
 # released, every version and delete marker is deleted (with
@@ -50,6 +53,10 @@ markers="$work/markers"
 : >"$markers"
 
 s3m() { "$bin" --config "$config" "$@"; }
+# Cleanup deletes every version under the prefix; nothing to record per key.
+track() { :; }
+# shellcheck source=scripts/provider-scenarios.sh
+source "$(dirname "$(realpath "$0")")/provider-scenarios.sh"
 
 # Only keys of this run, without characters that would break the tab-separated rows.
 # shellcheck disable=SC2016 # $prefix is a jq variable
@@ -242,6 +249,19 @@ output=$(upload big-plain.bin "$work/big.bin" "${part[@]}" 2>&1) || fail "big-pl
 grep -q '^ETag: ".*-3"$' <<<"$output" || fail "big-plain.bin: no multipart ETag in: $output"
 check_download big-plain.bin "$work/big.bin"
 
+# Multipart and streamed uploads report the headers of the final answer (#75, #76).
+# check_report <name> <output>
+check_report() {
+  grep -q '^Version ID: .' <<<"$2" || fail "$1: no Version ID in: $2"
+  grep -q '^Expiration: .*rule-id=' <<<"$2" || fail "$1: no Expiration in: $2"
+  echo "ok  $1  Version ID and Expiration reported"
+}
+check_report big-plain.bin "$output"
+output=$(s3m --retries 1 --pipe "$target/$prefix/pipe.bin" <"$work/small.bin" 2>&1) || fail "pipe.bin: $output"
+check_report pipe.bin "$output"
+output=$(upload compress.zst "$work/small.bin" --compress 2>&1) || fail "compress.zst: $output"
+check_report compress.zst "$output"
+
 # --checksum, single-part and multipart. AWS keeps a composite checksum of the parts
 # and returns it when the upload completes; s3m compares it with its own (#88).
 for alg in crc32 crc32c sha1 sha256; do
@@ -282,5 +302,7 @@ rows=$(version_rows "$prefix/page/") || fail "get --versions $prefix/page/ faile
 count=$(wc -l <<<"$rows")
 [[ $count -eq 1001 ]] || fail "get --versions $prefix/page/: expected 1001 versions, got $count"
 echo "ok  get --versions over two pages ($count versions)"
+
+run_provider_scenarios
 
 echo "all AWS checks passed"

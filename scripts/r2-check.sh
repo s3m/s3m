@@ -8,7 +8,8 @@
 # and an API token limited to it. Needs jq.
 #
 # Known R2 limitation, checked at the end: multipart uploads with --checksum sha1 or
-# sha256 (R2 answers 501 for per-part SHA checksums, #80).
+# sha256 (R2 answers 501 for per-part SHA checksums, #80). Then the interrupted and
+# changing uploads of scripts/provider-scenarios.sh.
 set -euo pipefail
 
 if [[ $# -ne 4 ]]; then
@@ -37,6 +38,8 @@ export S3M_HOME="$work/home"
 created=()
 
 s3m() { "$bin" --config "$config" "$@"; }
+# shellcheck source=scripts/provider-scenarios.sh
+source "$(dirname "$(realpath "$0")")/provider-scenarios.sh"
 
 # abort_listed <label>: reads "<key>\t<upload id>" lines and aborts each upload. Only
 # uploads under this run's prefix are touched: a line with another key, or without an
@@ -174,6 +177,19 @@ awk -v key="$prefix/big-plain.bin" '$NF == key { found = 1 } END { exit !found }
   fail "ls $target doesn't list $prefix/big-plain.bin"
 echo "ok  ls without a prefix"
 
+# Listing buckets: R2 answers 501 to max-buckets, and s3m asks again without it (#79).
+# The output is not printed: the token may see other buckets. A token limited to the
+# test bucket may not list buckets at all (403 AccessDenied): then this is skipped.
+if buckets=$(s3m ls "$host" 2>&1); then
+  awk -v b="$bucket" '$NF == b { found = 1 } END { exit !found }' <<<"$buckets" ||
+    fail "ls $host doesn't list the test bucket (output not shown)"
+  echo "ok  ls $host"
+elif grep -q '^Error: Code: AccessDenied$' <<<"$buckets"; then
+  echo "skip  ls $host: the token may not list buckets"
+else
+  fail "ls $host failed: $(grep -E '^(Error|HTTP Status Code|Message):' <<<"$buckets" | tr '\n' ' ')"
+fi
+
 # Single-part with --checksum: R2 rejects Content-MD5 next to x-amz-checksum-* (#73).
 for alg in crc32 crc32c sha1 sha256; do
   check_checksum "small-$alg.bin" "$work/small.bin" "$alg"
@@ -196,5 +212,7 @@ fi
 grep -q "doesn't support sha256 checksums on the parts of a multipart upload, and the upload was aborted" <<<"$output" ||
   fail "big-sha256.bin: unexpected error: $output"
 echo "ok  big-sha256.bin  rejected at once and aborted"
+
+run_provider_scenarios
 
 echo "all R2 checks passed"
