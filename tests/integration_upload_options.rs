@@ -339,6 +339,56 @@ fn rerun_with_another_checksum_warns_and_keeps_the_original() -> Result<()> {
     Ok(())
 }
 
+// #77 review: the warning is about resuming a multipart upload. A larger --buffer
+// uploads the file as a single part instead, with the checksum that was asked for:
+// nothing is resumed, so nothing is warned about.
+#[test]
+fn single_part_rerun_after_an_interrupted_multipart_does_not_warn() -> Result<()> {
+    let mut server = Server::new();
+    let payload = vec![7; 11 * MIB + 137];
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let (first_part, _) = payload.split_at(10 * MIB);
+    let init = initiate(&mut server).expect(1).create();
+    let part_1 = part_mock(&mut server, 1, first_part).expect(1).create();
+    let part_2_fails = server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+        .with_status(403)
+        .with_body("<Error><Code>AccessDenied</Code><Message>no</Message></Error>")
+        .create();
+    let first = fixture
+        .command()
+        .args(["-n", "1", "-r", "1"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    ensure!(!first.status.success(), "the first run must fail");
+    init.assert();
+    part_1.assert();
+    part_2_fails.remove();
+
+    let put = server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::Missing)
+        .match_header("x-amz-checksum-sha256", Matcher::Any)
+        .with_header("etag", "single")
+        .expect(1)
+        .create();
+    let second = fixture
+        .command()
+        .args(["--buffer", "20971520", "--checksum", "sha256"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    let stdout = String::from_utf8_lossy(&second.stdout);
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    ensure!(second.status.success(), "{stdout}{stderr}");
+    put.assert();
+    ensure!(!stderr.contains("warning:"), "{stderr}");
+    ensure!(stdout.contains("sha256 (base64): "), "{stdout}");
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/74>: the BLAKE3 hash s3m prints is labelled as such,
 // and the --checksum value is printed with its algorithm, comparable with x-amz-checksum-*.
 #[test]

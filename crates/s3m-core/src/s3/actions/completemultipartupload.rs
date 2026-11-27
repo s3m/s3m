@@ -111,6 +111,9 @@ impl<'a> CompleteMultipartUpload<'a> {
         let Some(additional_checksum) = &self.additional_checksum else {
             return Ok(None);
         };
+        if self.parts.is_empty() {
+            return Ok(None);
+        }
 
         // hash the checksums of the parts with the additional checksum algorithm
         let mut hasher = additional_checksum.hasher();
@@ -461,6 +464,15 @@ mod tests {
             "key",
             "uid",
             other_algorithm,
+            Some(Checksum::new(ChecksumAlgorithm::Sha256)),
+        );
+        assert!(action.checksum().unwrap().is_none());
+
+        // No parts: nothing to combine.
+        let action = CompleteMultipartUpload::new(
+            "key",
+            "uid",
+            BTreeMap::new(),
             Some(Checksum::new(ChecksumAlgorithm::Sha256)),
         );
         assert!(action.checksum().unwrap().is_none());

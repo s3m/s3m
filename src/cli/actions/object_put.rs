@@ -272,8 +272,7 @@ async fn handle_standard_file_upload(
         return Ok(etag_report(&etag));
     }
 
-    warn_if_resume_keeps_another_checksum(&db, request.checksum_algorithm.as_deref())?;
-
+    let requested_checksum = request.checksum_algorithm.clone();
     let additional_checksum = calculate_additional_checksum(
         &local_file.path,
         request.checksum_algorithm,
@@ -283,6 +282,7 @@ async fn handle_standard_file_upload(
     log::debug!("additional checksum: {additional_checksum:#?}");
 
     if local_file.size > part_size {
+        warn_if_resume_keeps_another_checksum(&db, requested_checksum.as_deref())?;
         let etag = upload_multipart(MultipartUploadRequest {
             s3,
             key: &request.key,
@@ -431,7 +431,6 @@ impl PutObjectRequest {
     }
 }
 
-/// Print the `ETag` if not in quiet mode
 /// A multipart upload in progress keeps the additional checksum it was created with:
 /// the server's upload is bound to it. When this run asks for another one, say so,
 /// because the checksum the user asked for is not the one the object gets.
@@ -459,6 +458,7 @@ fn etag_report(etag: &str) -> String {
     format!("ETag: {etag}")
 }
 
+/// Print the upload's report unless in quiet mode
 fn print_report(report: &str, quiet: bool) {
     if !quiet {
         println!("{}", report.trim_end());

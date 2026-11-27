@@ -263,22 +263,29 @@ impl Db {
         self.parts_checksum_algorithm()
     }
 
-    /// The checksum algorithm of the recorded parts, pending or uploaded, if they
-    /// have one: what a state without [`Db::upload_checksum`] still knows.
+    /// The checksum algorithm of the recorded parts, pending and uploaded: what a
+    /// state without [`Db::upload_checksum`] still knows. `None` unless there are
+    /// parts and every one of them has a checksum of the same algorithm.
     ///
     /// # Errors
     ///
     /// Will return `Err` if can not read the parts
     pub fn parts_checksum_algorithm(&self) -> Result<Option<ChecksumAlgorithm>> {
+        let mut algorithm = None;
         for tree in [self.db_uploaded()?, self.db_parts()?] {
             for part in tree.iter().values() {
                 let part = from_bytes::<Part, RkyvError>(&part?)?;
-                if let Some(checksum) = part.get_checksum() {
-                    return Ok(Some(checksum.algorithm));
+                let Some(checksum) = part.get_checksum() else {
+                    return Ok(None);
+                };
+                match &algorithm {
+                    None => algorithm = Some(checksum.algorithm),
+                    Some(first) if *first != checksum.algorithm => return Ok(None),
+                    Some(_) => {}
                 }
             }
         }
-        Ok(None)
+        Ok(algorithm)
     }
 
     /// # Errors
@@ -405,6 +412,36 @@ mod tests {
         let error = open_state_once(dir.path()).unwrap_err().to_string();
         assert!(is_lock_error(&error), "{error}");
         drop(held);
+    }
+
+    // #77 review: the parts of an older state name an algorithm only when all of them
+    // agree. A part without a checksum, or with another algorithm, means there is no
+    // single algorithm to continue with.
+    #[test]
+    fn test_parts_checksum_algorithm_needs_every_part_to_agree() {
+        let checksum = |algorithm| Some(Checksum::new(algorithm));
+        let dir = tempdir().unwrap();
+        let db = Db::new(&test_s3(), "key", "checksum", 1, dir.path()).unwrap();
+        assert_eq!(db.parts_checksum_algorithm().unwrap(), None);
+
+        db.create_part(1, 0, 5, checksum(ChecksumAlgorithm::Sha256))
+            .unwrap();
+        db.create_part(2, 5, 5, checksum(ChecksumAlgorithm::Sha256))
+            .unwrap();
+        assert_eq!(
+            db.parts_checksum_algorithm().unwrap(),
+            Some(ChecksumAlgorithm::Sha256)
+        );
+
+        db.create_part(3, 10, 5, None).unwrap();
+        assert_eq!(db.parts_checksum_algorithm().unwrap(), None);
+
+        db.db_parts().unwrap().clear().unwrap();
+        db.create_part(1, 0, 5, checksum(ChecksumAlgorithm::Sha256))
+            .unwrap();
+        db.create_part(2, 5, 5, checksum(ChecksumAlgorithm::Crc32c))
+            .unwrap();
+        assert_eq!(db.parts_checksum_algorithm().unwrap(), None);
     }
 
     // <https://github.com/s3m/s3m/issues/77>: the algorithm of the upload in progress
