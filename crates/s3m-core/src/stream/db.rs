@@ -37,26 +37,35 @@ pub(crate) fn is_lock_error(error: &str) -> bool {
 /// Will return `Err` if the database can not be opened, or if its lock is still
 /// held after a short wait
 pub(crate) fn open_state(path: &Path) -> sled::Result<sled::Db> {
-    open_state_with(path, LOCK_ATTEMPTS, LOCK_RETRY_DELAY)
+    retry_sled_lock(LOCK_ATTEMPTS, LOCK_RETRY_DELAY, || {
+        let _opening = lock_for_open(path)?;
+        open_database(path)
+    })
 }
 
-/// Open an upload's state without waiting for its lock: for listing the states,
-/// where a held lock means another s3m is uploading and waiting would only slow
-/// the listing down.
-///
-/// # Errors
-///
-/// Will return `Err` if the database can not be opened or its lock is held
-pub(crate) fn open_state_once(path: &Path) -> sled::Result<sled::Db> {
-    open_state_with(path, 1, Duration::ZERO)
+/// Listings wait briefly for cleanup, but try sled only once.
+pub(crate) fn open_state_once(path: &Path) -> sled::Result<Option<sled::Db>> {
+    if !path.try_exists()? {
+        return Ok(None);
+    }
+    let _opening = lock_for_open(path)?;
+    // Cleanup could have unlinked the directory while we waited for the lock.
+    path.try_exists()?.then(|| open_database(path)).transpose()
 }
 
-fn open_state_with(path: &Path, attempts: u32, delay: Duration) -> sled::Result<sled::Db> {
+pub(super) fn open_existing_state(path: &Path) -> sled::Result<Option<sled::Db>> {
+    retry_sled_lock(LOCK_ATTEMPTS, LOCK_RETRY_DELAY, || open_state_once(path))
+}
+
+fn retry_sled_lock<T>(
+    attempts: u32,
+    delay: Duration,
+    open: impl Fn() -> sled::Result<T>,
+) -> sled::Result<T> {
     let mut attempt = 1;
     loop {
-        let result = try_open_state(path);
-        match result {
-            Err(error) if attempt < attempts && is_busy(&error) => {
+        match open() {
+            Err(error) if attempt < attempts && is_lock_error(&error.to_string()) => {
                 attempt += 1;
                 sleep(delay);
             }
@@ -82,21 +91,26 @@ pub(super) fn cleanup_lock(streams: &Path) -> io::Result<File> {
 
 const CLEANING: &str = "stream cleanup in progress";
 
-fn try_open_state(path: &Path) -> sled::Result<sled::Db> {
-    // A cleaner takes the exclusive lock only from its final inspection until
-    // unlink. The shared lock covers this open attempt, never a running upload
-    // or the sleep between sled lock retries.
-    let _opening = if let Some(streams) = path.parent().filter(|p| p.ends_with("streams")) {
-        fs::create_dir_all(streams)?;
-        let lock = cleanup_lock(streams)?;
-        lock.try_lock_shared().map_err(|error| match error {
-            fs::TryLockError::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, CLEANING),
-            fs::TryLockError::Error(error) => error,
-        })?;
-        Some(lock)
-    } else {
-        None
+fn lock_for_open(path: &Path) -> io::Result<Option<File>> {
+    let Some(streams) = path.parent().filter(|p| p.ends_with("streams")) else {
+        return Ok(None);
     };
+    fs::create_dir_all(streams)?;
+    let lock = cleanup_lock(streams)?;
+    // Cleanup holds this lock only from its final inspection through unlink.
+    // Release our shared lock after each sled open attempt.
+    for attempt in 1..=LOCK_ATTEMPTS {
+        match lock.try_lock_shared() {
+            Ok(()) => return Ok(Some(lock)),
+            Err(fs::TryLockError::Error(error)) => return Err(error),
+            Err(fs::TryLockError::WouldBlock) if attempt == LOCK_ATTEMPTS => break,
+            Err(fs::TryLockError::WouldBlock) => sleep(LOCK_RETRY_DELAY),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::WouldBlock, CLEANING))
+}
+
+fn open_database(path: &Path) -> sled::Result<sled::Db> {
     sled::Config::new()
         .path(path)
         .use_compression(false)
@@ -125,14 +139,22 @@ impl Db {
     pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &Path) -> Result<Self> {
         let state_key = format!("{} {key} {mtime}", s3.upload_host());
         let state_dir = Self::destination_dir(path, checksum, &state_key);
-        if state_dir.try_exists()? {
-            return Self::open(&state_dir, state_key);
+        if let Some(storage) = open_existing_state(&state_dir)? {
+            return Ok(Self {
+                storage,
+                key: state_key,
+                state_dir,
+            });
         }
         let previous_key = format!("{} {key} {mtime}", s3.previous_upload_host());
         if previous_key != state_key {
             let previous_dir = Self::destination_dir(path, checksum, &previous_key);
-            if previous_dir.try_exists()? {
-                return Self::open(&previous_dir, previous_key);
+            if let Some(storage) = open_existing_state(&previous_dir)? {
+                return Ok(Self {
+                    storage,
+                    key: previous_key,
+                    state_dir: previous_dir,
+                });
             }
         }
 
@@ -140,9 +162,7 @@ impl Db {
         let old_dir = Self::state_dir(path, checksum);
         let host: String = s3.hash().chars().take(8).collect();
         let old_key = format!("{host} {key} {mtime}");
-        if old_dir.try_exists()?
-            && let Some(storage) = legacy::open_for_key(&old_dir, &old_key)?
-        {
+        if let Some(storage) = legacy::open_for_key(&old_dir, &old_key)? {
             let metadata = state::load_metadata(&old_dir).ok();
             let owners = legacy::unfinished_owners(&storage, metadata.as_ref())?;
             if owners.contains(&old_key) {
@@ -193,7 +213,12 @@ impl Db {
     ///
     /// Will return `Err` if can not open an existing db
     pub fn open_existing(path: &Path, key: String) -> Result<Self> {
-        let storage = open_state(path)?;
+        let storage = open_existing_state(path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "stream state directory no longer exists: {}",
+                path.display()
+            )
+        })?;
         let metadata = state::load_metadata(path).ok();
         let owners = legacy::unfinished_owners(&storage, metadata.as_ref())?;
         ensure!(owners.len() <= 1, "{}: {}", path.display(), legacy::SHARED);
@@ -607,10 +632,25 @@ mod tests {
         });
 
         // A budget of several seconds, so a slow machine can't run out of attempts.
-        let reopened = open_state_with(dir.path(), 500, Duration::from_millis(10));
+        let reopened = retry_sled_lock(500, Duration::from_millis(10), || {
+            open_state_once(dir.path())
+        });
 
         release.join().unwrap();
-        assert!(reopened.is_ok(), "{:?}", reopened.err());
+        assert!(reopened.unwrap().is_some());
+    }
+
+    #[test]
+    fn listing_reports_a_sled_lock_even_if_released_within_the_retry_window() {
+        let dir = tempdir().unwrap();
+        let held = open_state(dir.path()).unwrap();
+        let release = std::thread::spawn(move || {
+            sleep(Duration::from_millis(100));
+            drop(held);
+        });
+        let result = open_state_once(dir.path());
+        release.join().unwrap();
+        assert!(is_lock_error(&result.unwrap_err().to_string()));
     }
 
     // A lock that stays held (another s3m is uploading) is still reported.

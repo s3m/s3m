@@ -430,7 +430,7 @@ fn validate_resume_db(
         return Err(anyhow!("Stream state {id} is already complete"));
     }
 
-    if entry.parts_total == 0 {
+    if db.db_parts()?.is_empty() && db.db_uploaded()?.is_empty() {
         return Err(anyhow!(
             "Stream state {id} has no multipart parts to resume; run the upload again \
              (s3m <file> <host>/<bucket>/<key>), which plans them"
@@ -702,47 +702,70 @@ mod tests {
         assert_eq!(rendered["error"], "bad state");
     }
 
+    fn resumable_state(base: &Path, legacy: bool) -> (Db, String) {
+        let db = if legacy {
+            let path = Db::state_dir(base, "good");
+            fs::create_dir_all(&path).unwrap();
+            Db::open_existing(&path, "legacy key 1".to_owned())
+        } else {
+            Db::new(&test_s3("bucket"), "key", "good", 1, base)
+        }
+        .unwrap();
+        let id = db.path().file_name().unwrap().to_str().unwrap().to_owned();
+        db.save_upload_id("upload-1").unwrap();
+        db.create_part(1, 0, 1, None).unwrap();
+        db.db_parts().unwrap().flush().unwrap();
+        write_metadata(
+            base,
+            &StreamMetadata {
+                version: 1,
+                id: id.clone(),
+                host: "s3".to_string(),
+                bucket: "bucket".to_string(),
+                key: "key".to_string(),
+                source_path: PathBuf::from("/tmp/file"),
+                checksum: "good".to_string(),
+                file_size: 1,
+                file_mtime: 1,
+                part_size: 1,
+                db_key: db.state_key().to_string(),
+                created_at: 1,
+                updated_at: Some(1),
+                pipe: false,
+                compress: false,
+                encrypt: false,
+                mode: StreamMode::FileMultipart,
+            },
+        )
+        .unwrap();
+
+        (db, id)
+    }
+
+    #[test]
+    fn resume_reads_parts_after_a_locked_listing() {
+        for uploaded in [false, true] {
+            let dir = tempdir().unwrap();
+            let (db, id) = resumable_state(dir.path(), false);
+            if uploaded {
+                let key = 1_u16.to_be_bytes();
+                let part = db.db_parts().unwrap().remove(key).unwrap().unwrap();
+                db.db_uploaded().unwrap().insert(key, part).unwrap();
+            }
+            let entry = find_entry(dir.path(), &id).unwrap();
+            assert_eq!(entry.status, StreamStatus::Active);
+            assert_eq!(entry.parts_total, 0);
+            drop(db);
+            let metadata = validate_resume_entry(&entry, &id).unwrap();
+            validate_resume_db(&entry, &metadata, &id).unwrap();
+        }
+    }
+
     #[test]
     fn test_clean_streams_state_keeps_resumable_entries() {
         for legacy in [true, false] {
             let dir = tempdir().unwrap();
-            let db = if legacy {
-                Db::open_existing(
-                    &Db::state_dir(dir.path(), "good"),
-                    "legacy key 1".to_owned(),
-                )
-            } else {
-                Db::new(&test_s3("bucket"), "key", "good", 1, dir.path())
-            }
-            .unwrap();
-            let id = db.path().file_name().unwrap().to_str().unwrap().to_owned();
-            db.save_upload_id("upload-1").unwrap();
-            db.create_part(1, 0, 1, None).unwrap();
-            db.db_parts().unwrap().flush().unwrap();
-            write_metadata(
-                dir.path(),
-                &StreamMetadata {
-                    version: 1,
-                    id: id.clone(),
-                    host: "s3".to_string(),
-                    bucket: "bucket".to_string(),
-                    key: "key".to_string(),
-                    source_path: PathBuf::from("/tmp/file"),
-                    checksum: "good".to_string(),
-                    file_size: 1,
-                    file_mtime: 1,
-                    part_size: 1,
-                    db_key: db.state_key().to_string(),
-                    created_at: 1,
-                    updated_at: Some(1),
-                    pipe: false,
-                    compress: false,
-                    encrypt: false,
-                    mode: StreamMode::FileMultipart,
-                },
-            )
-            .unwrap();
-
+            let (_db, id) = resumable_state(dir.path(), legacy);
             let summary = clean_streams_state(dir.path()).unwrap();
             assert_eq!(summary.removed, Vec::<String>::new());
             assert_eq!(summary.kept, [id]);

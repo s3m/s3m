@@ -182,7 +182,9 @@ fn visit_streams(
         let dir = dir?;
         if dir.file_type()?.is_dir() {
             let path = dir.path();
-            let db = open_state_once(&path);
+            let Some(db) = open_state_once(&path).transpose() else {
+                continue;
+            };
             let name = dir.file_name();
             let id = name.to_string_lossy();
             let result = db
@@ -548,6 +550,52 @@ mod tests {
     }
 
     #[test]
+    fn listing_waits_for_transient_cleanup() {
+        let dir = tempdir().unwrap();
+        let (db, id) = fixture_db(false, "done", dir.path());
+        db.save_etag("done").unwrap();
+        drop(db);
+        wait_for_state_lock(&state_dir(dir.path(), &id));
+        let lock = cleanup_lock(&streams_dir(dir.path())).unwrap();
+        lock.lock().unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            drop(lock);
+        });
+        let entries = scan_streams(dir.path()).unwrap();
+        release.join().unwrap();
+        assert_eq!(entries[0].status, StreamStatus::Complete);
+    }
+
+    #[test]
+    fn legacy_probe_skips_a_directory_removed_under_the_cleanup_lock() {
+        let dir = tempdir().unwrap();
+        let path = state_dir(dir.path(), "legacy");
+        fs::create_dir_all(&path).unwrap();
+        let lock = cleanup_lock(&streams_dir(dir.path())).unwrap();
+        lock.lock().unwrap();
+        std::thread::scope(|scope| {
+            let candidate = &path;
+            scope.spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                fs::remove_dir_all(candidate).unwrap();
+                drop(lock);
+            });
+            assert!(legacy::open_for_key(&path, "old key 1").unwrap().is_none());
+        });
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn resume_leaves_a_removed_directory_absent() {
+        let dir = tempdir().unwrap();
+        let path = state_dir(dir.path(), "gone");
+        let result = Db::open_existing(&path, "old key 1".into());
+        assert!(result.is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn completed_id_only_counts_as_open_while_abort_is_pending() {
         let dir = tempdir().unwrap();
         let (db, _) = fixture_db(false, "done", dir.path());
@@ -561,11 +609,9 @@ mod tests {
     mod legacy_tests;
 
     fn legacy_db(id: &str, base: &Path) -> Db {
-        Db::open_existing(
-            &state_dir(base, id),
-            format!("{} key 1", &test_s3().hash()[..8]),
-        )
-        .unwrap()
+        let path = state_dir(base, id);
+        fs::create_dir_all(&path).unwrap();
+        Db::open_existing(&path, format!("{} key 1", &test_s3().hash()[..8])).unwrap()
     }
 
     fn fixture_db(legacy: bool, hash: &str, base: &Path) -> (Db, String) {

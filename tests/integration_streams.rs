@@ -110,10 +110,11 @@ const LAYOUTS: [Layout; 2] = [Layout::Legacy, Layout::Current];
 impl Layout {
     fn open(self, s3: &S3, key: &str, hash: &str, mtime: u128, base: &Path) -> Db {
         let db = match self {
-            Self::Legacy => Db::open_existing(
-                &state_dir(base, hash),
-                format!("{} {key} {mtime}", &s3.hash()[..8]),
-            ),
+            Self::Legacy => {
+                let path = state_dir(base, hash);
+                fs::create_dir_all(&path).unwrap();
+                Db::open_existing(&path, format!("{} {key} {mtime}", &s3.hash()[..8]))
+            }
             Self::Current => Db::new(s3, key, hash, mtime, base),
         }
         .unwrap();

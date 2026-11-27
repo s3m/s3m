@@ -385,11 +385,9 @@ hosts:
             Some("bucket".to_string()),
             false,
         );
-        let db = Db::open_existing(
-            &state_dir(tmp_dir.path(), "good"),
-            format!("{} key 1", &s3.hash()[..8]),
-        )
-        .unwrap();
+        let path = state_dir(tmp_dir.path(), "good");
+        std::fs::create_dir_all(&path).unwrap();
+        let db = Db::open_existing(&path, format!("{} key 1", &s3.hash()[..8])).unwrap();
         db.save_upload_id("upload-1").unwrap();
         db.create_part(1, 0, 10, None).unwrap();
         db.db_parts().unwrap().flush().unwrap();

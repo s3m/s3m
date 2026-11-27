@@ -2591,6 +2591,7 @@ mod tests {
         let key = "v2-endpoint=STORAGE.EXAMPLE%3A443%2F&bucket=bucket key 1";
         let id = format!("v2-{}", blake3::hash(format!("hash\0{key}").as_bytes()));
         let path = Db::state_dir(dir.path(), &id);
+        std::fs::create_dir_all(&path).unwrap();
         let db = Db::open_existing(&path, key.into()).unwrap();
         db.save_upload_id("previous-v2").unwrap();
         assert!(super::started_here(&at("https://storage.example"), &db));
@@ -2641,11 +2642,9 @@ mod tests {
         assert!(error.contains("no longer exists"), "{error}");
         assert_eq!(db.upload_id().unwrap(), None);
 
-        let legacy = Db::open_existing(
-            &dir.path().join("old"),
-            format!("{} key 1", &s3.hash()[..8]),
-        )
-        .unwrap();
+        let path = dir.path().join("old");
+        std::fs::create_dir(&path).unwrap();
+        let legacy = Db::open_existing(&path, format!("{} key 1", &s3.hash()[..8])).unwrap();
         assert!(super::started_here(&s3, &legacy));
         assert!(!super::started_here(&rotated, &legacy));
     }
