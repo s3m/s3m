@@ -375,8 +375,9 @@ async fn abort_and_forget(
         .await
     {
         Ok(_) => {}
-        // Already gone on the server.
-        Err(abort) if upload_is_gone(&abort, false) => {}
+        // Already gone on the server. Only the server the upload was started on can
+        // say so: another one never had it (see [`started_here`]).
+        Err(abort) if upload_is_gone(&abort, false) && started_here(s3, db) => {}
         Err(abort) => return Err(abort),
     }
     if let Err(forget) = forget_aborted_upload(db) {
@@ -729,6 +730,15 @@ impl std::fmt::Display for UploadGone {
 
 impl std::error::Error for UploadGone {}
 
+/// Whether the host's endpoint, bucket and keys are the ones the saved upload was started
+/// with: the state key starts with their hash. `streams resume` opens a saved state by
+/// its key, whatever the host's configuration is now.
+fn started_here(s3: &S3, db: &Db) -> bool {
+    s3.hash()
+        .get(..8)
+        .is_some_and(|host| db.state_key().starts_with(host))
+}
+
 /// Nothing can be sent to an upload the server no longer has, so every later run would
 /// fail the same way (<https://github.com/s3m/s3m/issues/84>). Its saved state is
 /// removed, and the next run starts a new upload. Returns the error to report.
@@ -737,11 +747,7 @@ impl std::error::Error for UploadGone {}
 /// started on: `streams resume` opens a saved state by its key, whatever the host's
 /// configuration is now, and the server that has the upload may still have it.
 fn forget_gone_upload(s3: &S3, db: &Db, answer: &str) -> anyhow::Error {
-    let started_here = s3
-        .hash()
-        .get(..8)
-        .is_some_and(|host| db.state_key().starts_with(host));
-    if !started_here {
+    if !started_here(s3, db) {
         return anyhow!(
             "the server has no such multipart upload, but the host's endpoint, bucket or \
              keys are not the ones this upload was started with, so its saved state was \
@@ -2217,5 +2223,46 @@ mod tests {
         assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
         assert_eq!(db.db_uploaded().unwrap().len(), 1);
         assert_eq!(db.check().unwrap(), None);
+    }
+
+    // #84 review, round 2: the abort paths (#80, #83) also took a 404 NoSuchUpload as
+    // "already aborted". From another server than the one the upload was started on,
+    // it proves nothing: the state is kept, and the error says the abort failed.
+    #[tokio::test]
+    async fn an_abort_answered_by_another_host_keeps_the_upload() {
+        let mut server = Server::new_async().await;
+        let started_on = S3::new(
+            &Credentials::new("AKIA", &SecretString::new("secret".into())),
+            &Region::custom("us-east-1", "http://127.0.0.1:9"),
+            Some("bucket".to_string()),
+            false,
+        );
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&started_on, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        // Part 2 saved with a range that isn't this file's: the upload is aborted.
+        db.create_parts([(1, 0, 4), (2, 4, 6)], None).unwrap();
+
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(404)
+            .with_body(NO_SUCH_UPLOAD)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        abort.assert_async().await;
+        assert!(error.contains("could not be aborted"), "{error}");
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.db_parts().unwrap().len(), 2);
     }
 }
