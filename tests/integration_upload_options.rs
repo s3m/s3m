@@ -867,6 +867,74 @@ fn multipart_upload_rejects_another_document_as_its_initiation() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn verbose_multipart_upload_redacts_part_and_completion_authorization() -> Result<()> {
+    let mut server = Server::new();
+    let payload = vec![7; 5 * MIB + 1];
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let authorization = Matcher::Regex("Credential=protocol/.*Signature=".into());
+    let init = initiate(&mut server)
+        .match_header("authorization", authorization.clone())
+        .expect(1)
+        .create();
+    let parts: Vec<_> = payload
+        .chunks(5 * MIB)
+        .enumerate()
+        .map(|(index, bytes)| {
+            part_mock(&mut server, index + 1, bytes)
+                .match_header("authorization", authorization.clone())
+                .expect(1)
+                .create()
+        })
+        .collect();
+    let done = complete(&mut server)
+        .match_header("authorization", authorization)
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .args(["-vv", "-n", "1", "-r", "1", "-b", "5242880"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    ensure!(output.status.success(), "verbose multipart upload failed");
+    for mock in [init, done].into_iter().chain(parts) {
+        mock.assert();
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let logs = || stderr.split("HTTP method: ").skip(1);
+    let put_logs: Vec<_> = logs()
+        .filter(|line| line.starts_with("PUT, Headers:"))
+        .collect();
+    ensure!(
+        put_logs.len() == 2,
+        "expected two multipart part request logs"
+    );
+    for entry in put_logs {
+        check_logged_authorization(entry, "multipart part PUT")?;
+    }
+    let mut post_logs = logs().filter(|line| line.starts_with("POST, Headers:"));
+    let completion = post_logs
+        .nth(1)
+        .context("missing multipart completion request log")?;
+    ensure!(
+        post_logs.next().is_none(),
+        "expected only initiation and completion POST logs"
+    );
+    check_logged_authorization(completion, "multipart completion POST")
+}
+
+fn check_logged_authorization(entry: &str, request: &str) -> Result<()> {
+    ensure!(
+        entry.contains(r#""authorization": "<redacted>""#)
+            && !entry.contains("Credential=")
+            && !entry.contains("Signature="),
+        "{request} log must redact Authorization"
+    );
+    Ok(())
+}
+
 // #75: the completion headers are only shown. A value outside ASCII must not turn an
 // upload the server has already completed into a failure.
 #[test]
