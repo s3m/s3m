@@ -752,6 +752,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_create_parts_publishes_the_whole_plan_at_once() {
+        let dir = tempdir().unwrap();
+        let db = Db::new(&test_s3(), "key", "checksum", 1, dir.path()).unwrap();
+        let parts = [(1, 0, 5), (2, 5, 3)]
+            .into_iter()
+            .inspect(|(number, _, _)| {
+                if *number == 2 {
+                    let visible = db.pending_part_ranges().unwrap();
+                    assert!(
+                        visible.is_empty(),
+                        "a partial part plan was visible before yielding part two: {visible:?}"
+                    );
+                }
+            });
+
+        db.create_parts(parts, None).unwrap();
+
+        assert_eq!(
+            db.pending_part_ranges().unwrap(),
+            BTreeMap::from([(1, (0, 5)), (2, (5, 3))])
+        );
+    }
+
     // #83: an uploaded part that can't be decoded is an error for both readers, never a
     // part left out of the completion.
     #[test]
