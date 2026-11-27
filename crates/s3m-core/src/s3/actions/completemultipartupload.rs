@@ -11,7 +11,7 @@ use crate::{
 };
 use base64ct::{Base64, Encoding};
 use bytes::Bytes;
-use quick_xml::{de::from_str, se::to_string};
+use quick_xml::se::to_string;
 use reqwest::Method;
 use serde::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
 use std::collections::BTreeMap;
@@ -180,12 +180,19 @@ impl<'a> CompleteMultipartUpload<'a> {
 
             // S3 can answer 200 OK and still fail the upload, with an <Error> document
             // in the body (the response is only sent once processing finished).
-            if from_str::<ErrorResponse>(&body).is_ok() {
+            // Only an <Error> document: another document with a <Code> is not one.
+            if from_xml_root::<ErrorResponse>(&body, "Error").is_ok() {
                 return Err(api_error(status, &headers, Some(body)));
             }
 
             let mut rs: CompleteMultipartUploadResult =
                 from_xml_root(&body, "CompleteMultipartUploadResult")?;
+            // The ETag is what confirms the object: an empty one confirms nothing.
+            if rs.e_tag.trim().is_empty() {
+                return Err(Error::Other(
+                    "CompleteMultipartUpload answered without an ETag".to_string(),
+                ));
+            }
             rs.headers = upload_response_headers(&headers);
             Ok(rs)
         } else {

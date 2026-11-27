@@ -184,23 +184,41 @@ pub(crate) fn from_xml_root<T: serde::de::DeserializeOwned>(
 ) -> std::result::Result<T, quick_xml::DeError> {
     use quick_xml::events::Event;
 
+    // The name of every top-level element: a document has exactly one.
     let mut reader = quick_xml::Reader::from_str(body);
-    let found = loop {
+    let mut top_level = Vec::new();
+    let mut depth = 0_usize;
+    loop {
         match reader.read_event() {
-            Ok(Event::Start(element) | Event::Empty(element)) => {
-                break element.local_name().as_ref().to_string();
+            Ok(Event::Start(element)) => {
+                if depth == 0 {
+                    top_level.push(element.local_name().as_ref().to_string());
+                }
+                depth += 1;
             }
-            Ok(Event::Eof) => break String::new(),
+            Ok(Event::Empty(element)) if depth == 0 => {
+                top_level.push(element.local_name().as_ref().to_string());
+            }
+            Ok(Event::End(_)) => depth = depth.saturating_sub(1),
+            Ok(Event::Eof) => break,
             Ok(_) => {}
             Err(error) => return Err(quick_xml::DeError::Custom(error.to_string())),
         }
-    };
-    if found != root {
-        return Err(quick_xml::DeError::Custom(format!(
-            "expected a <{root}> document, got <{found}>"
-        )));
     }
-    quick_xml::de::from_str(body)
+    match top_level.as_slice() {
+        [found] if found == root => quick_xml::de::from_str(body),
+        [found] => Err(quick_xml::DeError::Custom(format!(
+            "expected a <{root}> document, got <{found}>"
+        ))),
+        [] => Err(quick_xml::DeError::Custom(format!(
+            "expected a <{root}> document, got no element"
+        ))),
+        found => Err(quick_xml::DeError::Custom(format!(
+            "expected one <{root}> document, got {}: <{}>",
+            found.len(),
+            found.join(">, <")
+        ))),
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -741,6 +759,25 @@ DeleteMarker: []
         .unwrap_err()
         .to_string();
         assert!(error.contains("got <ListPartsResult>"), "{error}");
+
+        // A second document after the expected one (an <Error> here) is not ignored.
+        let error = from_xml_root::<CompleteMultipartUploadResult>(
+            &format!("{complete}<Error><Code>InternalError</Code></Error>"),
+            "CompleteMultipartUploadResult",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("got 2: <CompleteMultipartUploadResult>, <Error>"),
+            "{error}"
+        );
+        // Comments and processing instructions around the document are fine.
+        let parsed: CompleteMultipartUploadResult = from_xml_root(
+            &format!("\u{feff}<!-- a -->\n{complete}\n<!-- b -->\n"),
+            "CompleteMultipartUploadResult",
+        )
+        .unwrap();
+        assert_eq!(parsed.e_tag, "\"etag-3\"");
 
         for body in ["", "not xml", "<?xml version=\"1.0\"?>"] {
             assert!(

@@ -505,41 +505,63 @@ fn upload_output_labels_blake3_and_additional_checksum() -> Result<()> {
 #[test]
 fn multipart_upload_rejects_another_document_as_its_completion() -> Result<()> {
     let payload = vec![9; 11 * MIB + 137];
-
-    let mut server = Server::new();
-    let fixture = Fixture::new(&server.url(), &payload)?;
-    let _init = initiate(&mut server).expect(1).create();
-    let _parts: Vec<_> = payload
-        .chunks(10 * MIB)
-        .enumerate()
-        .map(|(i, bytes)| part_mock(&mut server, i + 1, bytes).expect(1).create())
-        .collect();
-    let wrong = server
-        .mock("POST", "/bucket/key")
-        .match_query(Matcher::UrlEncoded("uploadId".into(), "UP1".into()))
-        .with_status(200)
-        .with_body("<CopyObjectResult><ETag>\"other\"</ETag><LastModified>2026-11-27T00:00:00.000Z</LastModified></CopyObjectResult>")
-        .expect(1)
-        .create();
-
-    let output = fixture
-        .command()
-        .args(["-n", "1"])
-        .arg(&fixture.source)
-        .arg("s3/bucket/key")
-        .output()?;
-
-    wrong.assert();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    ensure!(!output.status.success(), "{stdout}{stderr}");
-    ensure!(!stdout.contains("ETag"), "{stdout}");
-    ensure!(
-        stderr.contains(
-            "expected a <CompleteMultipartUploadResult> document, got <CopyObjectResult>"
+    let result =
+        "<CompleteMultipartUploadResult><ETag>\"done\"</ETag></CompleteMultipartUploadResult>";
+    for (body, message) in [
+        (
+            "<CopyObjectResult><ETag>\"other\"</ETag><LastModified>2026-11-27T00:00:00.000Z</LastModified></CopyObjectResult>".to_string(),
+            "expected a <CompleteMultipartUploadResult> document, got <CopyObjectResult>",
         ),
-        "{stderr}"
-    );
+        // A second document after the result: the answer is not one result.
+        (
+            format!("{result}<Error><Code>InternalError</Code><Message>m</Message></Error>"),
+            "got 2: <CompleteMultipartUploadResult>, <Error>",
+        ),
+        // An empty ETag confirms nothing.
+        (
+            "<CompleteMultipartUploadResult><ETag/></CompleteMultipartUploadResult>".to_string(),
+            "CompleteMultipartUpload answered without an ETag",
+        ),
+        // A <Code> in another document is not an S3 error: NoSuchUpload here must not
+        // make s3m forget the upload (#84).
+        (
+            "<ReplicaStatus><Code>NoSuchUpload</Code></ReplicaStatus>".to_string(),
+            "expected a <CompleteMultipartUploadResult> document, got <ReplicaStatus>",
+        ),
+    ] {
+        let mut server = Server::new();
+        let fixture = Fixture::new(&server.url(), &payload)?;
+        let _init = initiate(&mut server).expect(1).create();
+        let _parts: Vec<_> = payload
+            .chunks(10 * MIB)
+            .enumerate()
+            .map(|(i, bytes)| part_mock(&mut server, i + 1, bytes).expect(1).create())
+            .collect();
+        let wrong = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "UP1".into()))
+            .with_status(200)
+            .with_body(&body)
+            .expect(1)
+            .create();
+
+        let output = fixture
+            .command()
+            .args(["-n", "1"])
+            .arg(&fixture.source)
+            .arg("s3/bucket/key")
+            .output()?;
+
+        wrong.assert();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        ensure!(!output.status.success(), "{body}: {stdout}{stderr}");
+        ensure!(!stdout.contains("ETag"), "{body}: {stdout}");
+        ensure!(stderr.contains(message), "{body}: {stderr}");
+        ensure!(!stderr.contains("no longer exists"), "{body}: {stderr}");
+        // On Windows each fixture holds the shared profile lock until dropped.
+        drop(fixture);
+    }
     Ok(())
 }
 
