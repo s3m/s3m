@@ -1289,18 +1289,35 @@ mod tests {
 
     const CRC32_COMPOSITE: &str = "3O3KWw==-2";
 
-    async fn complete_with_crc32(response_value: Option<&str>, mismatch: bool) {
+    struct CompletionChecksum {
+        algorithm: ChecksumAlgorithm,
+        parts: [&'static str; 2],
+        composite: &'static str,
+    }
+
+    const CRC32_COMPLETION: CompletionChecksum = CompletionChecksum {
+        algorithm: ChecksumAlgorithm::Crc32,
+        parts: ["3aRwJA==", "Ex2gcA=="],
+        composite: CRC32_COMPOSITE,
+    };
+
+    async fn complete_with_checksum(
+        fixture: &CompletionChecksum,
+        response_value: Option<&str>,
+        mismatch: bool,
+    ) {
+        let algorithm = &fixture.algorithm;
+        let name = algorithm.name();
         let mut server = Server::new_async().await;
         let s3 = checksum_s3(&server);
         let dir = tempfile::tempdir().unwrap();
         let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
         db.save_upload_id("uid").unwrap();
-        db.save_upload_checksum(Some(&ChecksumAlgorithm::Crc32))
-            .unwrap();
-        for (number, offset, crc32) in [(1_u16, 0, "3aRwJA=="), (2, 5, "Ex2gcA==")] {
+        db.save_upload_checksum(Some(algorithm)).unwrap();
+        for ((number, offset), digest) in [(1_u16, 0), (2, 5)].into_iter().zip(fixture.parts) {
             let checksum = Checksum {
-                algorithm: ChecksumAlgorithm::Crc32,
-                checksum: crc32.into(),
+                algorithm: algorithm.clone(),
+                checksum: digest.into(),
             };
             let part = Part::new(number, offset, 5, Some(checksum)).set_etag(format!("p{number}"));
             db.db_uploaded()
@@ -1314,9 +1331,10 @@ mod tests {
 
         let body = response_value.map_or_else(
             || COMPLETED.to_string(),
-            |crc32| {
+            |remote| {
                 const END: &str = "</CompleteMultipartUploadResult>";
-                COMPLETED.replace(END, &format!("<ChecksumCRC32>{crc32}</ChecksumCRC32>{END}"))
+                let field = format!("Checksum{}", algorithm.as_algorithm());
+                COMPLETED.replace(END, &format!("<{field}>{remote}</{field}>{END}"))
             },
         );
         let complete = server
@@ -1339,21 +1357,24 @@ mod tests {
             "uid",
             &db,
             10,
-            Some(Checksum::new(ChecksumAlgorithm::Crc32)),
+            Some(Checksum::new(algorithm.clone())),
         )
         .await;
 
         complete.assert_async().await;
         abort.assert_async().await;
         if mismatch {
-            let error = result.unwrap_err().to_string();
+            let Err(error) = result else {
+                panic!("multipart completion accepted a mismatched {name} composite checksum");
+            };
+            let error = error.to_string();
             assert!(
-                error.contains(
-                    "the object was stored but does not have the crc32 checksum s3m computed"
-                ),
+                error.contains(&format!(
+                    "the object was stored but does not have the {name} checksum s3m computed"
+                )),
                 "{error}"
             );
-            assert!(error.contains(CRC32_COMPOSITE), "{error}");
+            assert!(error.contains(fixture.composite), "{error}");
             assert!(error.contains(response_value.unwrap().trim()), "{error}");
             assert_eq!(db.cached_etag().unwrap(), None);
             assert_eq!(db.upload_id().unwrap(), None);
@@ -1362,7 +1383,7 @@ mod tests {
         } else {
             assert_eq!(
                 result.unwrap(),
-                format!("ETag: \"done-2\"\ncrc32 (base64): {CRC32_COMPOSITE}")
+                format!("ETag: \"done-2\"\n{name} (base64): {}", fixture.composite)
             );
             assert_eq!(db.cached_etag().unwrap().as_deref(), Some("\"done-2\""));
         }
@@ -1371,10 +1392,10 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_a_different_composite_completion_checksum_and_forgets_upload() {
-        complete_with_crc32(Some("AAAAAA==-2"), true).await;
+        complete_with_checksum(&CRC32_COMPLETION, Some("AAAAAA==-2"), true).await;
         // #88 review: white space around the value didn't hide a mismatch: the line
         // break made it look like a full-object value, which is not compared.
-        complete_with_crc32(Some("\n  AAAAAA==-2\n"), true).await;
+        complete_with_checksum(&CRC32_COMPLETION, Some("\n  AAAAAA==-2\n"), true).await;
     }
 
     #[tokio::test]
@@ -1388,8 +1409,54 @@ mod tests {
             Some(padded.as_str()),
             Some(""),
         ] {
-            complete_with_crc32(value, false).await;
+            complete_with_checksum(&CRC32_COMPLETION, value, false).await;
         }
+    }
+
+    // These are the base64 digests of "01234" and "56789" and their composite.
+    #[tokio::test]
+    async fn mismatched_crc32c_completion_checksum_clears_the_upload() {
+        complete_with_checksum(
+            &CompletionChecksum {
+                algorithm: ChecksumAlgorithm::Crc32c,
+                parts: ["b6UdmA==", "g7Vl2A=="],
+                composite: "atZQiA==-2",
+            },
+            Some("AAAAAA==-2"),
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn mismatched_sha1_completion_checksum_clears_the_upload() {
+        complete_with_checksum(
+            &CompletionChecksum {
+                algorithm: ChecksumAlgorithm::Sha1,
+                parts: [
+                    "EZBKTot39iQuLSiHBQI62tAKkxA=",
+                    "8iMdKHHmkKKZVwT3ope9e8ZL5yA=",
+                ],
+                composite: "xuXD6FV6aMhWMkT/onBu6oPiTnI=-2",
+            },
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAA=-2"),
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn mismatched_sha256_completion_checksum_clears_the_upload() {
+        complete_with_checksum(
+            &CompletionChecksum {
+                algorithm: ChecksumAlgorithm::Sha256,
+                parts: [SHA256_PART_1, SHA256_PART_2],
+                composite: SHA256_COMPOSITE,
+            },
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=-2"),
+            true,
+        )
+        .await;
     }
 
     // #77: the upload id is saved but s3m stopped before recording the parts. The
