@@ -133,19 +133,7 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     .await;
 
     if let Err(error) = parts_uploaded {
-        return Err(match error.downcast::<UnsupportedChecksum>() {
-            Ok(unsupported) => {
-                abort_unsupported_checksum(
-                    request.s3,
-                    request.key,
-                    &upload_id,
-                    request.sdb,
-                    unsupported,
-                )
-                .await
-            }
-            Err(error) => error,
-        });
+        return Err(parts_error(request.s3, request.key, &upload_id, request.sdb, error).await);
     }
 
     // finish progress bar
@@ -187,7 +175,13 @@ async fn complete_upload(
     let action =
         actions::CompleteMultipartUpload::new(key, upload_id, uploaded, additional_checksum);
     let checksum = action.checksum()?;
-    let rs = action.request(s3).await?;
+    let rs = match action.request(s3).await {
+        Ok(rs) => rs,
+        Err(error) if error.code() == Some("NoSuchUpload") => {
+            return Err(forget_gone_upload(db, &error.to_string()));
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     // cleanup uploads tree
     db.db_uploaded()?.clear()?;
@@ -482,10 +476,32 @@ where
     Ok(())
 }
 
-/// A part's error as one message, as it has always been reported. The unsupported
-/// checksum marker keeps its type: the upload is aborted for it once the parts stop.
+/// What to report when the parts could not all be uploaded. Two errors end the upload
+/// for good, and its saved state with it: a part checksum the server doesn't
+/// implement, and a multipart upload the server no longer has.
+async fn parts_error(
+    s3: &S3,
+    key: &str,
+    upload_id: &str,
+    db: &Db,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let error = match error.downcast::<UnsupportedChecksum>() {
+        Ok(unsupported) => {
+            return abort_unsupported_checksum(s3, key, upload_id, db, unsupported).await;
+        }
+        Err(error) => error,
+    };
+    match error.downcast::<UploadGone>() {
+        Ok(gone) => forget_gone_upload(db, &gone.answer),
+        Err(error) => error,
+    }
+}
+
+/// A part's error as one message, as it has always been reported. The markers that
+/// end the upload keep their type: they are acted on once the parts stop.
 fn flatten_error(error: anyhow::Error) -> anyhow::Error {
-    if error.is::<UnsupportedChecksum>() {
+    if error.is::<UnsupportedChecksum>() || error.is::<UploadGone>() {
         error
     } else {
         anyhow!("{error}")
@@ -560,6 +576,14 @@ async fn upload_part(
             }
 
             Err(e) => {
+                // The upload this part belongs to is gone: no retry can succeed.
+                if is_no_such_upload(&e) {
+                    return Err(UploadGone {
+                        answer: e.to_string(),
+                    }
+                    .into());
+                }
+
                 // Only before any part was accepted: after that, the server does
                 // support the checksum. No retry can succeed; the upload is aborted
                 // once, after every part in flight has stopped.
@@ -615,6 +639,47 @@ fn is_not_implemented(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<crate::s3::error::Error>()
         .is_some_and(|error| error.status() == Some(501) && error.code() == Some("NotImplemented"))
+}
+
+/// The S3 error code `NoSuchUpload`: the server has no multipart upload with this id.
+fn is_no_such_upload(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<crate::s3::error::Error>()
+        .is_some_and(|error| error.code() == Some("NoSuchUpload"))
+}
+
+/// The server no longer has the multipart upload: it was aborted (by hand, or by a
+/// lifecycle rule for incomplete uploads), or an earlier run completed it and lost the
+/// answer.
+#[derive(Debug)]
+struct UploadGone {
+    /// The server's answer.
+    answer: String,
+}
+
+impl std::fmt::Display for UploadGone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.answer)
+    }
+}
+
+impl std::error::Error for UploadGone {}
+
+/// Nothing can be sent to an upload the server no longer has, so every later run would
+/// fail the same way (<https://github.com/s3m/s3m/issues/84>). Its saved state is
+/// removed, and the next run starts a new upload. Returns the error to report.
+fn forget_gone_upload(db: &Db, answer: &str) -> anyhow::Error {
+    if let Err(forget) = forget_aborted_upload(db) {
+        return anyhow!(
+            "the multipart upload saved for this file no longer exists on the server, and \
+             its saved state could not be removed ({forget}).\n{answer}"
+        );
+    }
+    anyhow!(
+        "the multipart upload saved for this file no longer exists on the server: it was \
+         aborted or it expired, or an earlier run completed it and lost the answer. Its \
+         saved state was removed; run the upload again to start a new one.\n{answer}"
+    )
 }
 
 /// A part's additional checksum was rejected as not implemented, before any part was
@@ -1688,5 +1753,132 @@ mod tests {
         upload(2, 4, 4);
         uploaded_parts_cover(&db, 10).unwrap();
         assert_eq!(mismatch(11), "they hold 10 bytes, the file has 11");
+    }
+
+    const NO_SUCH_UPLOAD: &str = "<Error><Code>NoSuchUpload</Code><Message>The specified multipart upload does not exist.</Message></Error>";
+
+    // <https://github.com/s3m/s3m/issues/84>: the saved multipart upload was aborted
+    // on the server (by hand, or by a lifecycle rule). Every run sent its parts to the
+    // dead upload id, three times each, and failed; no command removed the state. The
+    // first NoSuchUpload now ends the run and removes the state, and the next run
+    // starts a new upload.
+    #[tokio::test]
+    async fn a_part_for_an_upload_the_server_no_longer_has_forgets_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.create_parts([(1, 0, 4), (2, 4, 4), (3, 8, 2)], None)
+            .unwrap();
+
+        let gone = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(404)
+            .with_body(NO_SUCH_UPLOAD)
+            .expect(1)
+            .create_async()
+            .await;
+        let mut request = ten_bytes_in_parts_of_four(&s3, &db, file.path());
+        request.globals.retries = 3;
+        let error = upload_multipart(request).await.unwrap_err().to_string();
+
+        gone.assert_async().await;
+        assert!(
+            error.contains("no longer exists on the server") && error.contains("NoSuchUpload"),
+            "{error}"
+        );
+        assert!(
+            error.contains("run the upload again to start a new one"),
+            "{error}"
+        );
+        assert_eq!(db.upload_id().unwrap(), None);
+        assert!(db.db_parts().unwrap().is_empty());
+        gone.remove_async().await;
+
+        // The next run starts a new upload and sends every part to it.
+        let create = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Regex("uploads".into()))
+            .with_body("<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>new-id</UploadId></InitiateMultipartUploadResult>")
+            .expect(1)
+            .create_async()
+            .await;
+        let parts = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "new-id".into()))
+            .with_header("ETag", "\"fresh\"")
+            .expect(3)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "new-id".into()))
+            .with_body(COMPLETED_3)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let report = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap();
+
+        create.assert_async().await;
+        parts.assert_async().await;
+        complete.assert_async().await;
+        assert_eq!(report, "ETag: \"done-3\"");
+    }
+
+    // #84: every part is uploaded, and the completion answers NoSuchUpload (the upload
+    // was aborted, or an earlier completion went through and its answer was lost).
+    #[tokio::test]
+    async fn a_completion_for_an_upload_the_server_no_longer_has_forgets_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        for (number, seek, chunk) in [(1_u16, 0, 4), (2, 4, 4), (3, 8, 2)] {
+            let part = Part::new(number, seek, chunk, None).set_etag(format!("\"p{number}\""));
+            db.db_uploaded()
+                .unwrap()
+                .insert(
+                    number.to_be_bytes(),
+                    to_bytes::<RkyvError>(&part).unwrap().as_slice(),
+                )
+                .unwrap();
+        }
+
+        let sent = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(404)
+            .with_body(NO_SUCH_UPLOAD)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        sent.assert_async().await;
+        complete.assert_async().await;
+        assert!(error.contains("no longer exists on the server"), "{error}");
+        assert_eq!(db.upload_id().unwrap(), None);
+        assert!(db.db_uploaded().unwrap().is_empty());
+        assert_eq!(db.check().unwrap(), None);
     }
 }
