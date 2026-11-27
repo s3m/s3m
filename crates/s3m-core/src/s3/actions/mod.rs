@@ -311,16 +311,19 @@ mod tests {
     // A server may put bytes outside ASCII in a header s3m only shows (a lifecycle
     // rule id in x-amz-expiration, for example). The upload is stored by then.
     #[test]
-    fn test_upload_response_headers_shows_values_that_are_not_ascii() {
+    fn test_upload_response_headers_shows_values_that_are_not_ascii()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use reqwest::header::HeaderValue;
+
         let mut headers = HeaderMap::new();
-        headers.insert("x-amz-version-id", "7e5dee92".parse().unwrap());
+        headers.insert("x-amz-version-id", HeaderValue::from_static("7e5dee92"));
         headers.insert(
             "x-amz-expiration",
-            reqwest::header::HeaderValue::from_bytes("rule-id=\"règle\"".as_bytes()).unwrap(),
+            HeaderValue::from_bytes("rule-id=\"règle\"".as_bytes())?,
         );
         headers.insert(
             "x-amz-server-side-encryption",
-            reqwest::header::HeaderValue::from_bytes(b"AES\xff256").unwrap(),
+            HeaderValue::from_bytes(b"AES\xff256")?,
         );
 
         let report = upload_response_headers(&headers);
@@ -337,6 +340,7 @@ mod tests {
             report.get("Server-side encryption").map(String::as_str),
             Some("AES\u{fffd}256")
         );
+        Ok(())
     }
 
     #[test]
