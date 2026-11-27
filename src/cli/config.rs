@@ -112,7 +112,7 @@ pub struct MonitorRule {
     pub size: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct Host {
     pub endpoint: Option<String>,
     pub region: Option<String>,
@@ -132,6 +132,27 @@ pub struct Host {
 
     pub enc_key: Option<SecretString>,
     pub compress: Option<bool>,
+}
+
+// The access key id is not shown in debug output, only whether one is set (the
+// secret and the encryption key are `SecretString`s, which never print their value):
+// `-vv` output ends up in bug reports and CI logs (#87).
+impl std::fmt::Debug for Host {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Host")
+            .field("endpoint", &self.endpoint)
+            .field("region", &self.region)
+            .field(
+                "access_key",
+                &crate::s3::credentials::masked_access_key(&self.access_key),
+            )
+            .field("secret_key", &self.secret_key)
+            .field("bucket", &self.bucket)
+            .field("buckets", &self.buckets)
+            .field("enc_key", &self.enc_key)
+            .field("compress", &self.compress)
+            .finish()
+    }
 }
 
 impl Config {

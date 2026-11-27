@@ -209,6 +209,14 @@ fn verbose_request_logs_hide_signing_credentials() -> Result<()> {
     ] {
         ensure!(stderr.contains(header), "missing {header}: {stderr}");
     }
+    // The setup dumps are still there for debugging, with the access key id masked.
+    for dump in ["config: Config", "host: Host", "S3:", "action: "] {
+        ensure!(stderr.contains(dump), "missing {dump}: {stderr}");
+    }
+    ensure!(
+        stderr.contains("access_key: \"<redacted>\""),
+        "access key not masked: {stderr}"
+    );
     Ok(())
 }
 

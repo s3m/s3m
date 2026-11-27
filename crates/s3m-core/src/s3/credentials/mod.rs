@@ -1,12 +1,33 @@
 use secrecy::{ExposeSecret, SecretString};
 use std::env;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Credentials {
     // AWS_ACCESS_KEY_ID
     key: String,
     // AWS_SECRET_ACCESS_KEY
     secret: SecretString,
+}
+
+/// What to show for an access key id in debug output: whether one is set, never the
+/// id itself. Debug output ends up in bug reports and CI logs
+/// (<https://github.com/s3m/s3m/issues/87>).
+#[must_use]
+pub const fn masked_access_key(key: &str) -> &'static str {
+    if key.is_empty() {
+        "<empty>"
+    } else {
+        "<redacted>"
+    }
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("key", &masked_access_key(&self.key))
+            .field("secret", &self.secret)
+            .finish()
+    }
 }
 
 impl Credentials {
@@ -97,5 +118,24 @@ mod tests {
             Credentials::with_overrides("access", &secret, Some("env-access".to_string()), None);
         assert_eq!(creds.aws_access_key_id(), "env-access");
         assert_eq!(creds.aws_secret_access_key(), "secret");
+    }
+
+    // #87: the debug output of the credentials shows neither the access key id nor
+    // the secret, only whether a key is set.
+    #[test]
+    fn test_debug_hides_the_keys() {
+        let creds = Credentials::with_overrides(
+            "AKIAIOSFODNN7EXAMPLE",
+            &SecretString::new("wJalrXUtnFEMI".into()),
+            None,
+            None,
+        );
+        let shown = format!("{creds:#?}");
+        assert!(!shown.contains("AKIAIOSFODNN7EXAMPLE"), "{shown}");
+        assert!(!shown.contains("wJalrXUtnFEMI"), "{shown}");
+        assert!(shown.contains("<redacted>"), "{shown}");
+
+        let none = Credentials::with_overrides("", &SecretString::new("".into()), None, None);
+        assert!(format!("{none:?}").contains("<empty>"));
     }
 }
