@@ -591,6 +591,36 @@ fn single_part_rerun_after_an_interrupted_multipart_does_not_warn() -> Result<()
     Ok(())
 }
 
+#[test]
+fn verbose_upload_labels_the_blake3_hash() -> Result<()> {
+    let mut server = Server::new();
+    let payload = b"payload for the verbose checksum report";
+    let fixture = Fixture::new(&server.url(), payload)?;
+    let put = server
+        .mock("PUT", "/bucket/key")
+        .match_body(payload.to_vec())
+        .with_header("etag", "stored")
+        .expect(1)
+        .create();
+
+    let output = fixture
+        .command()
+        .arg("-v")
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(output.status.success(), "verbose PUT failed: {stderr}");
+    let hash = blake3::hash(payload).to_hex();
+    let label = format!("blake3: {hash}");
+    ensure!(
+        stderr.lines().any(|line| line.ends_with(&label)),
+        "verbose log must label the BLAKE3 hash as blake3: {stderr}"
+    );
+    put.assert();
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/74>: the BLAKE3 hash s3m prints is labelled as such,
 // and the --checksum value is printed with its algorithm, comparable with x-amz-checksum-*.
 #[test]

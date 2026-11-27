@@ -100,3 +100,78 @@ impl Bar {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Bar;
+    use anyhow::{Context, Result, ensure};
+    use indicatif::{ProgressDrawTarget, TermLike};
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+    };
+
+    #[derive(Clone, Debug, Default)]
+    struct CapturedTerminal(Arc<Mutex<String>>);
+
+    impl TermLike for CapturedTerminal {
+        fn width(&self) -> u16 {
+            80
+        }
+
+        fn move_cursor_up(&self, _: usize) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn move_cursor_down(&self, _: usize) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn move_cursor_right(&self, _: usize) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn move_cursor_left(&self, _: usize) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn write_line(&self, text: &str) -> io::Result<()> {
+            self.write_str(text)?;
+            self.write_str("\n")
+        }
+
+        fn write_str(&self, text: &str) -> io::Result<()> {
+            self.0
+                .lock()
+                .map_err(|_| io::Error::other("terminal capture lock poisoned"))?
+                .push_str(text);
+            Ok(())
+        }
+
+        fn clear_line(&self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn flush(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn spinner_labels_the_blake3_hash() -> Result<()> {
+        let terminal = CapturedTerminal::default();
+        let spinner = Bar::new_spinner().progress.context("missing spinner")?;
+        spinner.disable_steady_tick();
+        spinner.set_draw_target(ProgressDrawTarget::term_like(Box::new(terminal.clone())));
+        spinner.tick();
+        let rendered = terminal
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("terminal capture lock poisoned"))?;
+        ensure!(
+            rendered.contains("blake3: "),
+            "spinner must use the blake3 label, rendered {rendered:?}"
+        );
+        Ok(())
+    }
+}
