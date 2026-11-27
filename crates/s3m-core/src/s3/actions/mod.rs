@@ -208,12 +208,10 @@ fn has_additional_checksum(headers: &BTreeMap<&str, &str>) -> bool {
 /// The response headers of an upload (`PutObject`, `CompleteMultipartUpload`) that
 /// s3m reports, labelled as it prints them.
 ///
-/// # Errors
-///
-/// Will return `Err` if a header value is not visible ASCII
-pub(crate) fn upload_response_headers(
-    headers: &HeaderMap,
-) -> Result<BTreeMap<&'static str, String>> {
+/// They are only shown: the upload is already stored when they arrive, so a value
+/// that isn't visible ASCII is shown as far as it can be read, and never fails the
+/// upload.
+pub(crate) fn upload_response_headers(headers: &HeaderMap) -> BTreeMap<&'static str, String> {
     let mut report = BTreeMap::new();
     for (header, label) in [
         ("x-amz-version-id", "Version ID"),
@@ -222,10 +220,13 @@ pub(crate) fn upload_response_headers(
         ("x-emc-previous-object-size", "Previous object size"),
     ] {
         if let Some(value) = headers.get(header) {
-            report.insert(label, value.to_str()?.to_string());
+            report.insert(
+                label,
+                String::from_utf8_lossy(value.as_bytes()).into_owned(),
+            );
         }
     }
-    Ok(report)
+    report
 }
 
 /// Build a structured [`Error::Api`] from a non-2xx S3 response.
@@ -306,6 +307,37 @@ pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A server may put bytes outside ASCII in a header s3m only shows (a lifecycle
+    // rule id in x-amz-expiration, for example). The upload is stored by then.
+    #[test]
+    fn test_upload_response_headers_shows_values_that_are_not_ascii() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-version-id", "7e5dee92".parse().unwrap());
+        headers.insert(
+            "x-amz-expiration",
+            reqwest::header::HeaderValue::from_bytes("rule-id=\"règle\"".as_bytes()).unwrap(),
+        );
+        headers.insert(
+            "x-amz-server-side-encryption",
+            reqwest::header::HeaderValue::from_bytes(b"AES\xff256").unwrap(),
+        );
+
+        let report = upload_response_headers(&headers);
+
+        assert_eq!(
+            report.get("Version ID").map(String::as_str),
+            Some("7e5dee92")
+        );
+        assert_eq!(
+            report.get("Expiration").map(String::as_str),
+            Some("rule-id=\"règle\"")
+        );
+        assert_eq!(
+            report.get("Server-side encryption").map(String::as_str),
+            Some("AES\u{fffd}256")
+        );
+    }
 
     #[test]
     fn test_has_additional_checksum() {

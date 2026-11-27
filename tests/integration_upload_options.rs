@@ -499,6 +499,48 @@ fn upload_output_labels_blake3_and_additional_checksum() -> Result<()> {
 // <https://github.com/s3m/s3m/issues/75>: a multipart upload prints the version id and
 // lifecycle expiration of the CompleteMultipartUpload response, like a single-part upload,
 // and a 200 OK response with an <Error> document fails the upload with the S3 error.
+// #75: the completion headers are only shown. A value outside ASCII must not turn an
+// upload the server has already completed into a failure.
+#[test]
+fn multipart_upload_succeeds_when_a_reported_header_is_not_ascii() -> Result<()> {
+    let expiration = "expiry-date=\"Sat, 09 Jan 2027 06:39:10 GMT\", rule-id=\"règle-45j\"";
+    let payload = vec![9; 11 * MIB + 137];
+
+    let mut server = Server::new();
+    let fixture = Fixture::new(&server.url(), &payload)?;
+    let _init = initiate(&mut server).expect(1).create();
+    let _parts: Vec<_> = payload
+        .chunks(10 * MIB)
+        .enumerate()
+        .map(|(i, bytes)| part_mock(&mut server, i + 1, bytes).expect(1).create())
+        .collect();
+    let done = complete(&mut server)
+        .with_header("x-amz-expiration", expiration)
+        .expect(1)
+        .create();
+
+    let output = fixture
+        .command()
+        .args(["-n", "1"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    ensure!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    done.assert();
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let expected = format!("Expiration: {expiration}");
+    for line in ["ETag: done", expected.as_str()] {
+        ensure!(lines.contains(&line), "{line} not in {stdout}");
+    }
+    Ok(())
+}
+
 #[test]
 fn multipart_upload_reports_response_headers_and_error_documents() -> Result<()> {
     let expiration = "expiry-date=\"Sat, 09 Jan 2027 06:39:10 GMT\", rule-id=\"expire-45d\"";

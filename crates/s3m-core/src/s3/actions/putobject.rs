@@ -74,7 +74,7 @@ impl<'a> PutObject<'a> {
         .await?;
 
         if response.status().is_success() {
-            let mut h: BTreeMap<&str, String> = upload_response_headers(response.headers())?;
+            let mut h: BTreeMap<&str, String> = upload_response_headers(response.headers());
             if let Some(etag) = response.headers().get("ETag") {
                 h.insert("ETag", etag.to_str()?.to_string());
             }

@@ -185,7 +185,7 @@ impl<'a> CompleteMultipartUpload<'a> {
             }
 
             let mut rs: CompleteMultipartUploadResult = from_str(&body)?;
-            rs.headers = upload_response_headers(&headers)?;
+            rs.headers = upload_response_headers(&headers);
             Ok(rs)
         } else {
             Err(response_error(response).await)
