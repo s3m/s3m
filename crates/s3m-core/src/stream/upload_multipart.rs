@@ -1748,6 +1748,91 @@ mod tests {
         assert_eq!(db.uploaded_parts().unwrap().len(), 1);
     }
 
+    #[tokio::test]
+    async fn checksum_501_after_an_accepted_part_honors_the_retry_budget() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        let first = part_mock(&mut server, 1, "01234")
+            .expect(1)
+            .create_async()
+            .await;
+        let retry = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+            .with_status(501)
+            .with_body(SHA256_NOT_IMPLEMENTED)
+            .expect(2)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let mut request = sha256_upload(&s3, &db, file.path());
+        request.globals.retries = 2;
+        let error = upload_multipart(request).await.unwrap_err();
+
+        first.assert_async().await;
+        assert!(
+            retry.matched_async().await,
+            "checksum 501 after an accepted part must use both attempts: {error}"
+        );
+        abort.assert_async().await;
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.uploaded_parts().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unsupported_part_checksum_requires_both_501_and_not_implemented() {
+        for (status, code) in [(501, "InternalError"), (503, "NotImplemented")] {
+            let mut server = Server::new_async().await;
+            let s3 = checksum_s3(&server);
+            let dir = tempfile::tempdir().unwrap();
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            file.write_all(b"0123456789").unwrap();
+            let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+            db.save_upload_id("uid").unwrap();
+            let part = server
+                .mock("PUT", "/bucket/key")
+                .match_query(Matcher::Any)
+                .with_status(status)
+                .with_body(format!(
+                    "<Error><Code>{code}</Code><Message>x-amz-checksum-sha256 failed</Message></Error>"
+                ))
+                .expect(1)
+                .create_async()
+                .await;
+            let abort = server
+                .mock("DELETE", "/bucket/key")
+                .match_query(Matcher::Any)
+                .with_status(204)
+                .expect(0)
+                .create_async()
+                .await;
+
+            let error = upload_multipart(sha256_upload(&s3, &db, file.path()))
+                .await
+                .unwrap_err()
+                .to_string();
+
+            part.assert_async().await;
+            assert!(
+                abort.matched_async().await,
+                "HTTP {status} / {code} must not abort the upload for an unsupported checksum"
+            );
+            assert!(error.contains(code), "{error}");
+            assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        }
+    }
+
     // A new upload records its algorithm (or that it has none), and a resume keeps
     // that choice even when it is run with another --checksum: the server's upload
     // was created without one, so its parts can't carry one.
