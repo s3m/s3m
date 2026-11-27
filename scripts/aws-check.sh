@@ -237,7 +237,8 @@ release_hold hold-crc32.bin || fail "hold-crc32.bin: immediate legal hold releas
 # Versions and delete markers alternating in key order (#91):
 # Version(a), DeleteMarker(b), Version(b), DeleteMarker(c), Version(c).
 for name in a b c; do
-  output=$(upload "v/$name" "$work/tiny.bin" 2>&1) || fail "v/$name: $output"
+  output=$(retry upload "v/$name" "$work/tiny.bin" 2>&1) ||
+    fail "v/$name: setup upload failed after 3 attempts: $output"
 done
 mark_deleted v/b
 mark_deleted v/c
@@ -249,9 +250,18 @@ jq -e --arg p "$prefix/v/" '
 echo "ok  get --versions with interleaved delete markers"
 
 # More versions than one page of ListObjectVersions (1,000) (#90).
-seq -w 0 1000 | xargs -d '\n' -P "$jobs" -I{} \
-  "$bin" --config "$config" --retries 1 -q "$work/tiny.bin" "$target/$prefix/page/{}" >/dev/null ||
-  fail "uploading the objects for the paging check failed"
+# s3m's --retries does not cover the single-part PUTs used for this fixture.
+(
+  export -f retry
+  # shellcheck disable=SC2016 # expanded by the worker Bash
+  seq -w 0 1000 | xargs -r -d '\n' -P "$jobs" -n 1 bash -c '
+    key=$4/$5
+    if ! errors=$(retry "$1" --config "$2" --retries 1 -q "$3" "$key" 2>&1 >/dev/null); then
+      printf "FAIL: %s: setup upload failed after 3 attempts\n%s\n" "$key" "$errors" >&2
+      exit 1
+    fi
+  ' bash "$bin" "$config" "$work/tiny.bin" "$target/$prefix/page"
+) || fail "uploading the objects for the paging check failed"
 listing=$(version_listing "$prefix/page/") || fail "get --versions $prefix/page/ failed"
 actual=$(jq -r '.[].key' <<<"$listing" | LC_ALL=C sort)
 expected=$(seq -w 0 1000 | sed "s|^|$prefix/page/|")
