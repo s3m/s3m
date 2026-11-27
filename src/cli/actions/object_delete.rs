@@ -431,7 +431,11 @@ fn format_delete_objects_errors(errors: &[crate::s3::responses::DeleteError]) ->
             None => error.key.clone(),
         };
 
-        let _ = write!(message, "\n - {object}: {} ({})", error.message, error.code);
+        if error.message.is_empty() {
+            let _ = write!(message, "\n - {object}: {}", error.code);
+        } else {
+            let _ = write!(message, "\n - {object}: {} ({})", error.message, error.code);
+        }
     }
 
     message
@@ -502,6 +506,19 @@ mod tests {
         assert!(message.contains("DeleteObjects returned 2 object error(s):"));
         assert!(message.contains("one: Access Denied (AccessDenied)"));
         assert!(message.contains("two?versionId=v2: try again (InternalError)"));
+    }
+
+    // <https://github.com/s3m/s3m/issues/81>: an error without a <Message> prints its code.
+    #[test]
+    fn test_format_delete_objects_errors_without_message() {
+        let message = format_delete_objects_errors(&[DeleteError {
+            key: "one".to_string(),
+            version_id: None,
+            code: "AccessDenied".to_string(),
+            message: String::new(),
+        }]);
+
+        assert!(message.ends_with("\n - one: AccessDenied"), "{message}");
     }
 
     #[test]

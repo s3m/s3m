@@ -25,8 +25,8 @@ pub struct Owner {
     #[serde(rename = "DisplayName")]
     /// Object owner's name.
     pub display_name: Option<String>,
-    #[serde(rename = "ID")]
-    /// Object owner's ID.
+    #[serde(rename = "ID", default)]
+    /// Object owner's ID. Empty when the server leaves it out.
     pub id: String,
 }
 
@@ -35,7 +35,7 @@ pub struct Owner {
 pub struct Initiator {
     #[serde(rename = "DisplayName")]
     pub display_name: Option<String>,
-    #[serde(rename = "ID")]
+    #[serde(rename = "ID", default)]
     pub id: String,
 }
 
@@ -45,12 +45,13 @@ pub struct Object {
     #[serde(rename = "LastModified")]
     /// Date and time the object was last modified.
     pub last_modified: String,
-    #[serde(rename = "ETag")]
+    #[serde(rename = "ETag", default)]
     /// The entity tag is an MD5 hash of the object. The `ETag` only reflects changes to the
-    /// contents of an object, not its metadata.
+    /// contents of an object, not its metadata. Empty when the server leaves it out.
     pub e_tag: String,
-    #[serde(rename = "StorageClass")]
-    /// STANDARD | `STANDARD_IA` | `REDUCED_REDUNDANCY` | GLACIER
+    #[serde(rename = "StorageClass", default)]
+    /// STANDARD | `STANDARD_IA` | `REDUCED_REDUNDANCY` | GLACIER. Empty when the server
+    /// leaves it out.
     pub storage_class: String,
     #[serde(rename = "Key")]
     /// The object's key
@@ -66,8 +67,8 @@ pub struct Object {
 /// The parsed result of a s3 bucket listing
 #[derive(Deserialize, Debug, Clone)]
 pub struct ListBucketResult {
-    #[serde(rename = "Name")]
-    /// Name of the bucket.
+    #[serde(rename = "Name", default)]
+    /// Name of the bucket. Empty when the server leaves it out.
     pub name: String,
     #[serde(rename = "NextMarker")]
     /// When the response is truncated (that is, the `IsTruncated` element value in the response
@@ -78,8 +79,9 @@ pub struct ListBucketResult {
     #[serde(rename = "Delimiter")]
     /// A delimiter is a character you use to group keys.
     pub delimiter: Option<String>,
-    #[serde(rename = "MaxKeys")]
-    /// Sets the maximum number of keys returned in the response body.
+    #[serde(rename = "MaxKeys", default)]
+    /// Sets the maximum number of keys returned in the response body. 0 when the
+    /// server leaves it out.
     pub max_keys: i32,
     #[serde(rename = "Prefix", default)]
     /// Limits the response to keys that begin with the specified prefix. Empty when
@@ -228,12 +230,13 @@ pub struct DeleteError {
     #[serde(default)]
     pub version_id: Option<String>,
     pub code: String,
+    #[serde(default)]
     pub message: String,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct ListMultipartUploadsResult {
-    #[serde(rename = "Bucket")]
+    #[serde(rename = "Bucket", default)]
     pub bucket: String,
     #[serde(rename = "KeyMarker")]
     pub key_marker: Option<String>,
@@ -247,7 +250,7 @@ pub struct ListMultipartUploadsResult {
     pub delimiter: Option<String>,
     #[serde(rename = "NextUploadIdMarker")]
     pub next_upload_id_marker: Option<String>,
-    #[serde(rename = "MaxUploads")]
+    #[serde(rename = "MaxUploads", default)]
     pub max_uploads: usize,
     #[serde(rename = "IsTruncated", deserialize_with = "bool_deserializer")]
     pub is_truncated: bool,
@@ -269,7 +272,7 @@ pub struct Upload {
     pub key: String,
     #[serde(rename = "Owner")]
     pub owner: Option<Owner>,
-    #[serde(rename = "StorageClass")]
+    #[serde(rename = "StorageClass", default)]
     pub storage_class: String,
     #[serde(rename = "UploadId")]
     pub upload_id: String,
@@ -319,10 +322,13 @@ pub struct Grantee {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ListVersionsResult {
+    #[serde(default)]
     pub name: String,
     pub prefix: Option<String>,
+    #[serde(default)]
     pub key_marker: String,
     pub version_id_marker: Option<String>,
+    #[serde(default)]
     pub max_keys: i32,
     pub is_truncated: bool,
     #[serde(rename = "Version", default)]
@@ -342,6 +348,7 @@ pub struct Version {
     #[serde(rename = "LastModified")]
     pub last_modified: String,
 
+    #[serde(default)]
     pub e_tag: String,
 
     #[serde(default)]
@@ -353,6 +360,7 @@ pub struct Version {
     pub size: u64,
     #[serde(default)]
     pub owner: Owner,
+    #[serde(default)]
     pub storage_class: String,
 }
 
@@ -578,5 +586,118 @@ DeleteMarker: []
         assert_eq!(parsed.versions[0].owner.id, "");
         assert_eq!(parsed.delete_markers.len(), 1);
         assert_eq!(parsed.delete_markers[0].owner.id, "");
+    }
+
+    // <https://github.com/s3m/s3m/issues/81>: elements the S3 API reference marks as
+    // not required, and that s3m doesn't need to list, delete or page, may be left out
+    // by a server. Each test below leaves out every such element of one response.
+    #[test]
+    fn test_list_bucket_result_without_optional_elements() {
+        let xml = r"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>a.txt</Key><LastModified>2026-11-27T00:00:00.000Z</LastModified><Size>3</Size><Owner><DisplayName>alice</DisplayName></Owner></Contents><Contents><Key>b.txt</Key><LastModified>2026-11-27T00:00:00.000Z</LastModified><Size>4</Size><Owner/></Contents></ListBucketResult>";
+        let parsed: ListBucketResult = quick_xml::de::from_str(xml).unwrap();
+
+        assert_eq!(parsed.name, "");
+        assert_eq!(parsed.max_keys, 0);
+        assert_eq!(parsed.contents.len(), 2);
+        let object = &parsed.contents[0];
+        assert_eq!(object.key, "a.txt");
+        assert_eq!(object.size, 3);
+        assert_eq!(object.e_tag, "");
+        assert_eq!(object.storage_class, "");
+        let owner = object.owner.as_ref().unwrap();
+        assert_eq!(owner.display_name.as_deref(), Some("alice"));
+        assert_eq!(owner.id, "");
+        assert_eq!(parsed.contents[1].owner.as_ref().unwrap().id, "");
+    }
+
+    #[test]
+    fn test_list_multipart_uploads_result_without_optional_elements() {
+        let xml = r"<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>a.bin</Key><UploadId>upload-1</UploadId><Initiated>2026-11-27T00:00:00.000Z</Initiated><Initiator><DisplayName>alice</DisplayName></Initiator><Owner><DisplayName>alice</DisplayName></Owner></Upload></ListMultipartUploadsResult>";
+        let parsed: ListMultipartUploadsResult = quick_xml::de::from_str(xml).unwrap();
+
+        assert_eq!(parsed.bucket, "");
+        assert_eq!(parsed.max_uploads, 0);
+        let uploads = parsed.upload.unwrap();
+        assert_eq!(uploads.len(), 1);
+        assert_eq!(uploads[0].key, "a.bin");
+        assert_eq!(uploads[0].upload_id, "upload-1");
+        assert_eq!(uploads[0].storage_class, "");
+        assert_eq!(uploads[0].initiator.as_ref().unwrap().id, "");
+        assert_eq!(uploads[0].owner.as_ref().unwrap().id, "");
+    }
+
+    #[test]
+    fn test_list_versions_result_without_optional_elements() {
+        let xml = r"<ListVersionsResult><IsTruncated>false</IsTruncated><Version><Key>a.txt</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest><LastModified>2026-11-27T00:00:00.000Z</LastModified><Size>3</Size><Owner><DisplayName>alice</DisplayName></Owner></Version><DeleteMarker><Key>b.txt</Key><VersionId>v2</VersionId><IsLatest>true</IsLatest><LastModified>2026-11-27T00:00:00.000Z</LastModified><Owner/></DeleteMarker></ListVersionsResult>";
+        let parsed: ListVersionsResult = quick_xml::de::from_str(xml).unwrap();
+
+        assert_eq!(parsed.name, "");
+        assert_eq!(parsed.key_marker, "");
+        assert_eq!(parsed.max_keys, 0);
+        assert_eq!(parsed.versions.len(), 1);
+        let version = &parsed.versions[0];
+        assert_eq!(version.key, "a.txt");
+        assert_eq!(version.version_id, "v1");
+        assert_eq!(version.size, 3);
+        assert_eq!(version.e_tag, "");
+        assert_eq!(version.storage_class, "");
+        assert_eq!(version.owner.display_name.as_deref(), Some("alice"));
+        assert_eq!(version.owner.id, "");
+        assert_eq!(parsed.delete_markers.len(), 1);
+        assert_eq!(parsed.delete_markers[0].owner.id, "");
+    }
+
+    #[test]
+    fn test_delete_error_without_message() {
+        let xml = r"<DeleteResult><Error><Key>a.txt</Key><Code>AccessDenied</Code></Error></DeleteResult>";
+        let parsed: DeleteObjectsResult = quick_xml::de::from_str(xml).unwrap();
+
+        assert_eq!(parsed.errors.len(), 1);
+        assert_eq!(parsed.errors[0].code, "AccessDenied");
+        assert_eq!(parsed.errors[0].message, "");
+    }
+
+    // What s3m needs stays required: without IsTruncated a listing could end early
+    // without notice, and an entry without its key, size or date can't be used.
+    #[test]
+    fn test_listing_elements_that_stay_required() {
+        let missing = |xml: &str, field: &str| {
+            let error = quick_xml::de::from_str::<ListBucketResult>(xml)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(&format!("missing field `{field}`")),
+                "{error}"
+            );
+        };
+        missing(
+            r"<ListBucketResult><Name>bucket</Name></ListBucketResult>",
+            "IsTruncated",
+        );
+        missing(
+            r"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><LastModified>2026-11-27T00:00:00.000Z</LastModified><Size>3</Size></Contents></ListBucketResult>",
+            "Key",
+        );
+        missing(
+            r"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>a.txt</Key><LastModified>2026-11-27T00:00:00.000Z</LastModified></Contents></ListBucketResult>",
+            "Size",
+        );
+        missing(
+            r"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>a.txt</Key><Size>3</Size></Contents></ListBucketResult>",
+            "LastModified",
+        );
+
+        let error = quick_xml::de::from_str::<ListVersionsResult>(
+            r"<ListVersionsResult><Name>bucket</Name></ListVersionsResult>",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("missing field `IsTruncated`"), "{error}");
+        let error = quick_xml::de::from_str::<ListMultipartUploadsResult>(
+            r"<ListMultipartUploadsResult><Bucket>bucket</Bucket></ListMultipartUploadsResult>",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("missing field `IsTruncated`"), "{error}");
     }
 }

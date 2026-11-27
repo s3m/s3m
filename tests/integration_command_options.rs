@@ -195,6 +195,88 @@ fn ls_accepts_a_listing_without_a_prefix_element() -> Result<()> {
     Ok(())
 }
 
+// <https://github.com/s3m/s3m/issues/81>: a server may leave out the elements of a
+// listing that the S3 API reference marks as not required. `ls` failed with
+// "missing field `StorageClass`" (or `ETag`, `ID`, `Name`, `MaxKeys`), although it
+// only needs the key, the size and the date. In `--json` a missing value is "".
+#[test]
+fn ls_accepts_a_listing_without_optional_elements() -> Result<()> {
+    let mut server = Server::new();
+    let body = r#"<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>a.txt</Key><LastModified>2026-03-14T08:00:00.000Z</LastModified><Size>6</Size><Owner><DisplayName>alice</DisplayName></Owner></Contents></ListBucketResult>"#;
+    let list = server
+        .mock("GET", "/bucket")
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&[("list-type", "2"), ("max-keys", "1000")]))
+        .with_body(body)
+        .expect(2)
+        .create();
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["ls", "s3/bucket"];
+    let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
+    ensure!(stdout.trim_end().ends_with("6 B a.txt"), "{stdout}");
+
+    let args = ["ls", "s3/bucket", "--json"];
+    let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
+    let json: Value = serde_json::from_str(&stdout)?;
+    assert_eq!(
+        json.get("objects"),
+        Some(&json!([{
+            "bucket": "bucket",
+            "key": "a.txt",
+            "size_bytes": 6,
+            "last_modified": "2026-03-14T08:00:00.000Z",
+            "etag": "",
+            "storage_class": ""
+        }]))
+    );
+    list.assert();
+    Ok(())
+}
+
+// #81: the same for in-progress multipart uploads (`Bucket`, `MaxUploads`,
+// `StorageClass` and the `ID` of the initiator and owner left out).
+#[test]
+fn ls_multipart_accepts_a_listing_without_optional_elements() -> Result<()> {
+    let mut server = Server::new();
+    let body = r#"<?xml version="1.0" encoding="UTF-8"?><ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>a.bin</Key><UploadId>upload-1</UploadId><Initiated>2026-03-14T08:00:00.000Z</Initiated><Initiator><DisplayName>alice</DisplayName></Initiator><Owner><DisplayName>alice</DisplayName></Owner></Upload></ListMultipartUploadsResult>"#;
+    let list = server
+        .mock("GET", "/bucket")
+        .match_query(Matcher::Any)
+        .match_request(|request| {
+            request
+                .path_and_query()
+                .split_once('?')
+                .is_some_and(|(_, query)| query.split('&').any(|pair| pair == "uploads="))
+        })
+        .with_body(body)
+        .expect(2)
+        .create();
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["ls", "s3/bucket", "--multipart"];
+    let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
+    ensure!(
+        stdout.contains("upload-1") && stdout.contains("a.bin"),
+        "{stdout}"
+    );
+
+    let args = ["ls", "s3/bucket", "--multipart", "--json"];
+    let stdout = expect_exit(&cli.run(&args)?, 0, &args)?;
+    let json: Value = serde_json::from_str(&stdout)?;
+    assert_eq!(
+        json.get("uploads"),
+        Some(&json!([{
+            "key": "a.bin",
+            "upload_id": "upload-1",
+            "initiated": "2026-03-14T08:00:00.000Z",
+            "storage_class": ""
+        }]))
+    );
+    list.assert();
+    Ok(())
+}
+
 // <https://github.com/s3m/s3m/issues/79>: Cloudflare R2 doesn't implement the
 // `max-buckets` parameter of ListBuckets and answers 501, so `ls <host>` failed there.
 // s3m asks again without it; `--number` is enforced by s3m, so it still limits the list.
@@ -1061,6 +1143,46 @@ fn versions_body(entries: &[(&str, bool, &str, u64)]) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult><Name>bucket</Name><Prefix>dir/data.bin</Prefix><KeyMarker></KeyMarker><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>{versions}</ListVersionsResult>"#
     )
+}
+
+// <https://github.com/s3m/s3m/issues/81>: s3m never sends `key-marker`, so a server
+// may leave out <KeyMarker>, and `get --versions` failed with "missing field
+// `KeyMarker`". `Name`, `MaxKeys`, `ETag`, `StorageClass` and the owner's `ID` are
+// optional too.
+#[test]
+fn get_versions_accepts_a_listing_without_optional_elements() -> Result<()> {
+    let mut server = Server::new();
+    let body = r#"<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult><Prefix>dir/data.bin</Prefix><IsTruncated>false</IsTruncated><Version><Key>dir/data.bin</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest><LastModified>2026-03-14T08:00:00.000Z</LastModified><Size>42</Size><Owner><DisplayName>alice</DisplayName></Owner></Version></ListVersionsResult>"#;
+    let list = server
+        .mock("GET", "/bucket")
+        .match_query(Matcher::Any)
+        .match_request(exact_query(&[("versions", ""), ("prefix", "dir/data.bin")]))
+        .with_body(body)
+        .expect(2)
+        .create();
+    let cli = Cli::new(&server.url())?;
+
+    let args = ["get", OBJECT, "--versions"];
+    let text_out = expect_exit(&cli.run(&args)?, 0, &args)?;
+    assert_eq!(
+        text_out,
+        "[2026-03-14 08:00:00 UTC]       42 B dir/data.bin (latest) ID: v1\n"
+    );
+
+    let args = ["get", OBJECT, "--versions", "--json"];
+    let json_out = expect_exit(&cli.run(&args)?, 0, &args)?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&json_out)?,
+        json!({
+            "bucket": "bucket",
+            "key_prefix": "dir/data.bin",
+            "versions": [
+                {"key": "dir/data.bin", "version_id": "v1", "is_latest": true, "last_modified": "2026-03-14T08:00:00.000Z", "size_bytes": 42, "etag": "", "storage_class": ""}
+            ]
+        })
+    );
+    list.assert();
+    Ok(())
 }
 
 #[test]
