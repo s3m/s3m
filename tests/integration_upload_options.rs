@@ -831,6 +831,42 @@ fn single_put_reports_a_non_ascii_response_header() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn multipart_upload_rejects_another_document_as_its_initiation() -> Result<()> {
+    let mut server = Server::new();
+    let fixture = Fixture::new(&server.url(), &vec![9; 5 * MIB + 1])?;
+    let wrong = initiate(&mut server)
+        .with_body("<ListPartsResult><UploadId>UP1</UploadId></ListPartsResult>")
+        .expect(1)
+        .create();
+    let part = server
+        .mock("PUT", "/bucket/key")
+        .match_query(Matcher::Any)
+        .expect(0)
+        .create();
+
+    let output = fixture
+        .command()
+        .args(["-n", "1", "-r", "1", "-b", "5242880"])
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+    wrong.assert();
+    ensure!(
+        part.matched(),
+        "sent a multipart part after accepting the wrong initiation XML root"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        !output.status.success()
+            && stderr.contains(
+                "expected a <InitiateMultipartUploadResult> document, got <ListPartsResult>"
+            ),
+        "multipart initiation must reject the wrong XML root: {stderr}"
+    );
+    Ok(())
+}
+
 // #75: the completion headers are only shown. A value outside ASCII must not turn an
 // upload the server has already completed into a failure.
 #[test]
