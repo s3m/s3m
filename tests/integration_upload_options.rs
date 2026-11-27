@@ -797,6 +797,40 @@ fn multipart_upload_rejects_another_document_as_its_completion() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn single_put_reports_a_non_ascii_response_header() -> Result<()> {
+    let mut server = Server::new();
+    let fixture = Fixture::new(&server.url(), b"hello world")?;
+    let expiration = "rule-id=\"règle-45j\"";
+    let put = server
+        .mock("PUT", "/bucket/key")
+        .match_body("hello world")
+        .with_header("etag", "stored")
+        .with_header("x-amz-expiration", expiration)
+        .expect(1)
+        .create();
+    let output = fixture
+        .command()
+        .arg(&fixture.source)
+        .arg("s3/bucket/key")
+        .output()?;
+
+    put.assert();
+    ensure!(
+        output.status.success(),
+        "a non-ASCII Expiration header must not fail a stored single PUT: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in ["ETag: stored", &format!("Expiration: {expiration}")] {
+        ensure!(
+            stdout.lines().any(|shown| shown == line),
+            "missing {line}: {stdout}"
+        );
+    }
+    Ok(())
+}
+
 // #75: the completion headers are only shown. A value outside ASCII must not turn an
 // upload the server has already completed into a failure.
 #[test]
