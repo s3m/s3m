@@ -342,9 +342,11 @@ async fn upload_part(
             }
 
             Err(e) => {
+                // Only before any part was accepted: after that, the server does
+                // support the checksum, and aborting would discard uploaded parts.
                 if let Some(checksum) = additional_checksum
                     .as_ref()
-                    .filter(|_| is_not_implemented(&e))
+                    .filter(|_| is_not_implemented(&e) && processed.is_empty())
                 {
                     return Err(abort_unsupported_checksum(s3, key, uid, db, checksum, &e).await);
                 }
@@ -383,18 +385,22 @@ async fn upload_part(
     db.flush()
 }
 
-/// A 501 `NotImplemented` answer: the server doesn't support what the request asked
-/// for, so sending it again can't succeed.
+/// A 501 answer with the S3 error code `NotImplemented`: the server doesn't support
+/// what the request asked for, so sending it again can't succeed. A bare 501 from
+/// something in between (a proxy) is not that.
 fn is_not_implemented(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<crate::s3::error::Error>()
-        .is_some_and(|error| error.status() == Some(501))
+        .is_some_and(|error| error.status() == Some(501) && error.code() == Some("NotImplemented"))
 }
 
-/// The server rejected a part's additional checksum as not implemented (Cloudflare R2
-/// does for SHA-1 and SHA-256). Neither a retry nor a resume can succeed, and the
-/// upload in progress would keep its algorithm, so it is aborted and forgotten: the
-/// next run starts a new upload. Returns the error to report.
+/// The server rejected the first parts' additional checksum as not implemented
+/// (Cloudflare R2 does for SHA-1 and SHA-256). Neither a retry nor a resume can
+/// succeed, and the upload in progress would keep its algorithm, so it is aborted and
+/// forgotten: the next run starts a new upload. Returns the error to report.
+///
+/// When the abort fails the upload is still open on the server: the state is kept,
+/// and the error says how to abort it.
 async fn abort_unsupported_checksum(
     s3: &S3,
     key: &str,
@@ -403,21 +409,45 @@ async fn abort_unsupported_checksum(
     checksum: &Checksum,
     error: &anyhow::Error,
 ) -> anyhow::Error {
-    if let Err(abort) = actions::AbortMultipartUpload::new(key, upload_id)
+    let algorithm = checksum.algorithm.name();
+    let advice = "Use another --checksum algorithm (Cloudflare R2 accepts crc32 and crc32c on \
+                  multipart uploads), or a --buffer larger than the file to upload it as a \
+                  single part.";
+
+    let aborted = match actions::AbortMultipartUpload::new(key, upload_id)
         .request(s3)
         .await
     {
-        log::warn!("Could not abort the multipart upload: {abort}");
+        Ok(_) => Ok(()),
+        // Already gone: another part's failure aborted it first.
+        Err(abort) if abort.code() == Some("NoSuchUpload") => Ok(()),
+        Err(abort) => Err(abort),
+    };
+
+    match aborted {
+        Ok(()) => {
+            if let Err(forget) = forget_aborted_upload(db) {
+                log::warn!("Could not forget the aborted multipart upload: {forget}");
+            }
+            anyhow!(
+                "the server doesn't support {algorithm} checksums on the parts of a multipart \
+                 upload, and the upload was aborted. {advice}\n{error}"
+            )
+        }
+        Err(abort) => anyhow!(
+            "the server doesn't support {algorithm} checksums on the parts of a multipart \
+             upload. The multipart upload could not be aborted ({abort}); abort it with \
+             `s3m rm <host>/<bucket>/{key} --abort {upload_id}`. {advice}\n{error}"
+        ),
     }
-    if let Err(forget) = db.forget_upload() {
-        log::warn!("Could not forget the multipart upload: {forget}");
-    }
-    anyhow!(
-        "the server doesn't support {} checksums on the parts of a multipart upload, \
-         and the upload was aborted. Use --checksum crc32c, or a --buffer larger than \
-         the file to upload it as a single part.\n{error}",
-        checksum.algorithm.name()
-    )
+}
+
+/// Forget an upload the server no longer has, with the parts planned for it.
+fn forget_aborted_upload(db: &Db) -> Result<()> {
+    db.forget_upload()?;
+    db.db_parts()?.clear()?;
+    db.db_uploaded()?.clear()?;
+    Ok(())
 }
 
 async fn try_upload_part(request: UploadPartRequest<'_>) -> Result<String> {
@@ -812,7 +842,11 @@ mod tests {
             error.contains("doesn't support sha256 checksums on the parts of a multipart upload"),
             "{error}"
         );
-        assert!(error.contains("--checksum crc32c"), "{error}");
+        assert!(error.contains("and the upload was aborted"), "{error}");
+        assert!(
+            error.contains("Use another --checksum algorithm"),
+            "{error}"
+        );
         assert_eq!(db.upload_id().unwrap(), None);
         assert_eq!(db.upload_checksum().unwrap(), None);
     }
@@ -877,6 +911,129 @@ mod tests {
         part.assert_async().await;
         complete.assert_async().await;
         assert_eq!(report, "ETag: \"done-2\"");
+    }
+
+    const SHA256_NOT_IMPLEMENTED: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NotImplemented</Code><Message>Header 'x-amz-checksum-sha256' not implemented</Message></Error>"#;
+    const INITIATED: &str = "<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>uid</UploadId></InitiateMultipartUploadResult>";
+
+    fn sha256_upload<'a>(
+        s3: &'a S3,
+        db: &'a Db,
+        file: &'a std::path::Path,
+    ) -> MultipartUploadRequest<'a> {
+        MultipartUploadRequest {
+            s3,
+            key: "key",
+            file,
+            file_size: 10,
+            chunk_size: 5,
+            sdb: db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: Some(Checksum::new(ChecksumAlgorithm::Sha256)),
+            max_requests: 1,
+            globals: RequestOptions {
+                retries: 1,
+                ..RequestOptions::default()
+            },
+        }
+    }
+
+    // #80 review: when the abort itself fails, the upload is still open on the
+    // server. The error must not claim it was aborted, and the state keeps the upload
+    // id so it can still be found and aborted.
+    #[tokio::test]
+    async fn part_checksum_not_implemented_reports_a_failed_abort() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        let _create = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Regex("uploads".into()))
+            .with_body(INITIATED)
+            .create_async()
+            .await;
+        let _part = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(501)
+            .with_body(SHA256_NOT_IMPLEMENTED)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(403)
+            .with_body("<Error><Code>AccessDenied</Code><Message>no</Message></Error>")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(sha256_upload(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        abort.assert_async().await;
+        assert!(!error.contains("the upload was aborted"), "{error}");
+        assert!(error.contains("could not be aborted"), "{error}");
+        assert!(error.contains("--abort uid"), "{error}");
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+    }
+
+    // #80 review: a 501 after a part was accepted with its checksum is not "the
+    // server doesn't support this checksum". The parts already uploaded are kept,
+    // and nothing is aborted.
+    #[tokio::test]
+    async fn not_implemented_after_an_uploaded_part_keeps_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        let _create = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Regex("uploads".into()))
+            .with_body(INITIATED)
+            .create_async()
+            .await;
+        let part_1 = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "1".into()))
+            .match_header("x-amz-checksum-sha256", SHA256_PART_1)
+            .with_header("etag", "\"p1\"")
+            .expect(1)
+            .create_async()
+            .await;
+        let _part_2 = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("partNumber".into(), "2".into()))
+            .with_status(501)
+            .with_body(SHA256_NOT_IMPLEMENTED)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(sha256_upload(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        part_1.assert_async().await;
+        abort.assert_async().await;
+        assert!(!error.contains("aborted"), "{error}");
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.uploaded_parts().unwrap().len(), 1);
     }
 
     // A new upload records its algorithm (or that it has none), and a resume keeps
