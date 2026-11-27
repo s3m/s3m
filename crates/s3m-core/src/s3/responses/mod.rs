@@ -169,9 +169,9 @@ pub struct ErrorResponse {
 
 #[derive(Deserialize, Debug)]
 pub struct InitiateMultipartUploadResult {
-    #[serde(rename = "Bucket")]
+    #[serde(rename = "Bucket", default)]
     pub bucket: String,
-    #[serde(rename = "Key")]
+    #[serde(rename = "Key", default)]
     pub key: String,
     #[serde(rename = "UploadId")]
     pub upload_id: String,
@@ -179,11 +179,11 @@ pub struct InitiateMultipartUploadResult {
 
 #[derive(Deserialize, Debug)]
 pub struct CompleteMultipartUploadResult {
-    #[serde(rename = "Location")]
+    #[serde(rename = "Location", default)]
     pub location: String,
-    #[serde(rename = "Bucket")]
+    #[serde(rename = "Bucket", default)]
     pub bucket: String,
-    #[serde(rename = "Key")]
+    #[serde(rename = "Key", default)]
     pub key: String,
     #[serde(rename = "ETag")]
     pub e_tag: String,
@@ -369,8 +369,9 @@ pub struct Version {
 pub struct DeleteMarker {
     pub key: String,
     pub version_id: String,
+    #[serde(default)]
     pub is_latest: bool,
-    #[serde(rename = "LastModified")]
+    #[serde(rename = "LastModified", default)]
     pub last_modified: String,
     #[serde(default)]
     pub owner: Owner,
@@ -628,7 +629,7 @@ DeleteMarker: []
 
     #[test]
     fn test_list_versions_result_without_optional_elements() {
-        let xml = r"<ListVersionsResult><IsTruncated>false</IsTruncated><Version><Key>a.txt</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest><LastModified>2026-11-27T00:00:00.000Z</LastModified><Size>3</Size><Owner><DisplayName>alice</DisplayName></Owner></Version><DeleteMarker><Key>b.txt</Key><VersionId>v2</VersionId><IsLatest>true</IsLatest><LastModified>2026-11-27T00:00:00.000Z</LastModified><Owner/></DeleteMarker></ListVersionsResult>";
+        let xml = r"<ListVersionsResult><IsTruncated>false</IsTruncated><Version><Key>a.txt</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest><LastModified>2026-11-27T00:00:00.000Z</LastModified><Size>3</Size><Owner><DisplayName>alice</DisplayName></Owner></Version><DeleteMarker><Key>b.txt</Key><VersionId>v2</VersionId><Owner/></DeleteMarker></ListVersionsResult>";
         let parsed: ListVersionsResult = quick_xml::de::from_str(xml).unwrap();
 
         assert_eq!(parsed.name, "");
@@ -644,7 +645,44 @@ DeleteMarker: []
         assert_eq!(version.owner.display_name.as_deref(), Some("alice"));
         assert_eq!(version.owner.id, "");
         assert_eq!(parsed.delete_markers.len(), 1);
-        assert_eq!(parsed.delete_markers[0].owner.id, "");
+        let marker = &parsed.delete_markers[0];
+        assert_eq!(marker.key, "b.txt");
+        assert_eq!(marker.version_id, "v2");
+        assert!(!marker.is_latest);
+        assert_eq!(marker.last_modified, "");
+        assert_eq!(marker.owner.id, "");
+    }
+
+    // #81: s3m reads only the upload id of an initiated upload, and the ETag (and the
+    // checksums) of a completed one; the bucket, key and location are echoed back.
+    #[test]
+    fn test_multipart_results_without_echoed_elements() {
+        let xml = r"<InitiateMultipartUploadResult><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>";
+        let parsed: InitiateMultipartUploadResult = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(parsed.upload_id, "upload-1");
+        assert_eq!(parsed.bucket, "");
+        assert_eq!(parsed.key, "");
+
+        let xml = r#"<CompleteMultipartUploadResult><ETag>"etag-3"</ETag></CompleteMultipartUploadResult>"#;
+        let parsed: CompleteMultipartUploadResult = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(parsed.e_tag, "\"etag-3\"");
+        assert_eq!(parsed.location, "");
+        assert_eq!(parsed.bucket, "");
+        assert_eq!(parsed.key, "");
+
+        // The upload id and the ETag are what s3m needs from them.
+        let error = quick_xml::de::from_str::<InitiateMultipartUploadResult>(
+            r"<InitiateMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key></InitiateMultipartUploadResult>",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("missing field `UploadId`"), "{error}");
+        let error = quick_xml::de::from_str::<CompleteMultipartUploadResult>(
+            r"<CompleteMultipartUploadResult><Bucket>bucket</Bucket><Key>key</Key></CompleteMultipartUploadResult>",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("missing field `ETag`"), "{error}");
     }
 
     #[test]
