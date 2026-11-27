@@ -33,6 +33,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features
 
+      # docs.rs builds the docs after a release; a rustdoc warning fails that build.
+      - name: Docs
+        run: cargo doc --workspace --no-deps
+
   check:
     name: Check
     runs-on: ubuntu-latest

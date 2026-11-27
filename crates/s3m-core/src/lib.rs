@@ -5,7 +5,7 @@
 //! embedded by other applications. The two top-level modules are:
 //!
 //! - [`s3`]: the S3 client ([`S3`]), credentials, region, signing, and the
-//!   typed request [`Error`](s3::Error) returned by every action.
+//!   typed request [`Error`] returned by every action.
 //! - [`stream`]: resumable multipart uploads plus the compression/encryption
 //!   transfer pipelines.
 

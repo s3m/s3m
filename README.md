@@ -550,7 +550,7 @@ just container            # start MinIO (idempotent)
 just test-integration     # run MinIO-backed e2e tests against that MinIO
 # or in one go
 just container test-integration
-# full suite (fmt + clippy + unit + integration)
+# full suite (fmt + clippy + docs + unit + integration)
 just test
 # hunt a flaky test: run a target many times, failed runs are kept in target/stress/
 just test-stress                        # the streams tests, 100 times

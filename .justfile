@@ -1,5 +1,5 @@
 # Run all tests (unit + e2e integration tests with RustFS)
-test: clippy fmt test-unit test-integration
+test: clippy fmt doc test-unit test-integration
 
 # Run only unit tests (both workspace crates: s3m + s3m-core)
 test-unit:
@@ -135,6 +135,10 @@ clippy:
 
 fmt:
   cargo fmt --all -- --check
+
+# Build the docs the way docs.rs does: a rustdoc warning is an error
+doc:
+  cargo doc --workspace --no-deps
 
 coverage:
   CARGO_INCREMENTAL=0 RUSTFLAGS='-Cinstrument-coverage' LLVM_PROFILE_FILE='{{justfile_directory()}}/coverage-%p-%m.profraw' cargo test --workspace
