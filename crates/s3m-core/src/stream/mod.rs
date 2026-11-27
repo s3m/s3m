@@ -1181,15 +1181,7 @@ mod tests {
     }
 
     fn create_test_s3() -> S3 {
-        S3::new(
-            &Credentials::new(
-                "AKIAIOSFODNN7EXAMPLE",
-                &SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
-            ),
-            &"us-west-1".parse::<Region>().unwrap(),
-            Some("test-bucket".to_string()),
-            false,
-        )
+        create_mock_s3("http://127.0.0.1:0".into(), Some("test-bucket"))
     }
 
     #[tokio::test]
@@ -1318,50 +1310,55 @@ mod tests {
         assert_eq!(stream.etags.len(), 1);
     }
 
-    #[tokio::test]
-    async fn test_complete_multipart_upload_single_part() {
-        let s3 = create_test_s3();
-        let etags = vec!["etag1".to_string()];
+    async fn assert_complete_multipart_request(etags: Vec<String>) {
+        use std::fmt::Write as _;
+
+        let mut server = Server::new_async().await;
+        let s3 = create_mock_s3(server.url(), Some("test-bucket"));
+        let mut body = String::from("<CompleteMultipartUpload>");
+        for (index, etag) in etags.iter().enumerate() {
+            let number = index + 1;
+            write!(
+                body,
+                "<Part><ETag>{etag}</ETag><PartNumber>{number}</PartNumber></Part>"
+            )
+            .unwrap();
+        }
+        body.push_str("</CompleteMultipartUpload>");
+        let complete = server
+            .mock("POST", "/test-bucket/test-key")
+            .match_query(Matcher::Exact("uploadId=upload-123".into()))
+            .match_body(Matcher::Exact(body))
+            .with_header("x-amz-version-id", "version-1")
+            .with_body("<CompleteMultipartUploadResult><ETag>completed</ETag></CompleteMultipartUploadResult>")
+            .expect(1)
+            .create_async()
+            .await;
 
         let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
 
-        // This will fail because we're not mocking the S3 API, but we're testing the part number conversion logic
-        // The important part is that it doesn't panic and correctly creates the parts map
-        assert!(result.is_err(), "Expected error due to unmocked S3 API");
+        complete.assert_async().await;
+        assert_eq!(result.unwrap(), "ETag: completed\nVersion ID: version-1");
+    }
+
+    #[tokio::test]
+    async fn test_complete_multipart_upload_single_part() {
+        assert_complete_multipart_request(vec!["etag1".into()]).await;
     }
 
     #[tokio::test]
     async fn test_complete_multipart_upload_100_parts() {
-        let s3 = create_test_s3();
-        let etags: Vec<String> = (1..=100).map(|i| format!("etag{i}")).collect();
-
-        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
-
-        // Should not panic, will fail at API call
-        assert!(result.is_err(), "Expected error due to unmocked S3 API");
+        assert_complete_multipart_request((1..=100).map(|i| format!("etag{i}")).collect()).await;
     }
 
     #[tokio::test]
     async fn test_complete_multipart_upload_1000_parts() {
-        let s3 = create_test_s3();
-        let etags: Vec<String> = (1..=1000).map(|i| format!("etag{i}")).collect();
-
-        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
-
-        // Should not panic, will fail at API call
-        assert!(result.is_err(), "Expected error due to unmocked S3 API");
+        assert_complete_multipart_request((1..=1000).map(|i| format!("etag{i}")).collect()).await;
     }
 
     #[tokio::test]
     async fn test_complete_multipart_upload_exactly_10000_parts() {
-        let s3 = create_test_s3();
-        let etags: Vec<String> = (1..=10_000).map(|i| format!("etag{i}")).collect();
-
-        let result = complete_multipart_upload(&s3, "test-key", "upload-123", etags).await;
-
-        // Should not panic with exactly 10,000 parts (the S3 maximum)
-        // Will fail at API call but that's expected
-        assert!(result.is_err(), "Expected error due to unmocked S3 API");
+        assert_complete_multipart_request((1..=10_000).map(|i| format!("etag{i}")).collect()).await;
     }
 
     #[tokio::test]
