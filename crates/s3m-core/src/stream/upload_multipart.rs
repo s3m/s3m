@@ -2184,4 +2184,54 @@ mod tests {
             assert_eq!(db.db_parts().unwrap().len(), parts);
         }
     }
+
+    // #83 review, round 2: the same part number saved as pending and as uploaded with
+    // different ranges can't be trusted either way.
+    #[tokio::test]
+    async fn a_part_saved_with_two_ranges_aborts_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.create_parts([(1, 0, 4), (2, 4, 4), (3, 8, 2)], None)
+            .unwrap();
+        let uploaded = Part::new(2, 4, 6, None).set_etag("\"p2\"".to_string());
+        db.db_uploaded()
+            .unwrap()
+            .insert(
+                2_u16.to_be_bytes(),
+                to_bytes::<RkyvError>(&uploaded).unwrap().as_slice(),
+            )
+            .unwrap();
+
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(204)
+            .expect(1)
+            .create_async()
+            .await;
+        let sent = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        abort.assert_async().await;
+        sent.assert_async().await;
+        assert!(
+            error.contains("part 2 is saved with two different ranges"),
+            "{error}"
+        );
+        assert_eq!(db.upload_id().unwrap(), None);
+    }
 }
