@@ -58,6 +58,11 @@ abort_listed() {
   return "$status"
 }
 
+# One JSON document with an array of uploads, each with a key and an upload id that
+# are non-empty strings without a tab or a line break (the rows are passed on as
+# tab-separated lines).
+valid_uploads='length == 1 and (.[0].uploads | type) == "array" and all(.[0].uploads[]; ([.key, .upload_id] | all(type == "string" and length > 0 and (test("[\t\n\r]") | not))))'
+
 cleanup() {
   local status=$? failed=0 key streams uploads listed
   trap - EXIT
@@ -71,7 +76,7 @@ cleanup() {
   # uploads this run recorded in its own state.
   if [[ -d "$S3M_HOME" ]]; then
     if streams=$(s3m streams --json ls 2>/dev/null) &&
-      jq -e '(.streams | type) == "array"' <<<"$streams" >/dev/null &&
+      jq -es 'length == 1 and (.[0].streams | type) == "array"' <<<"$streams" >/dev/null &&
       listed=$(jq -r --arg bucket "$bucket/" '.streams[] | select(.etag == null and .upload_id != null) | [(.destination | ltrimstr($bucket)), .upload_id] | join("\t")' <<<"$streams"); then
       abort_listed "recorded state" <<<"$listed" || failed=1
     else
@@ -84,7 +89,7 @@ cleanup() {
   # an s3m that is still running. If this script alone is killed while such a child
   # runs, the bucket's lifecycle rule for incomplete multipart uploads is the backstop.
   if uploads=$(s3m ls "$target" --multipart --prefix "$prefix/" --json 2>/dev/null) &&
-    jq -e '(.uploads | type) == "array"' <<<"$uploads" >/dev/null &&
+    jq -es "$valid_uploads" <<<"$uploads" >/dev/null &&
     listed=$(jq -r '.uploads[] | [.key, .upload_id] | join("\t")' <<<"$uploads"); then
     abort_listed "still open on the server" <<<"$listed" || failed=1
   else
