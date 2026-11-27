@@ -186,17 +186,18 @@ async fn complete_upload(
     let checksum = action.checksum()?;
     let rs = match action.request(s3).await {
         Ok(rs) => rs,
-        Err(error) if error.code() == Some("NoSuchUpload") => {
-            return Err(forget_gone_upload(db, &error.to_string()));
+        Err(error) if upload_is_gone(&error, true) => {
+            return Err(forget_gone_upload(s3, db, &error.to_string()));
         }
         Err(error) => return Err(error.into()),
     };
 
+    // Save the returned ETag first: killed between the two steps, the upload is
+    // recorded as complete, not as an upload to resume that the server no longer has.
+    db.save_etag(&rs.e_tag)?;
+
     // cleanup uploads tree
     db.db_uploaded()?.clear()?;
-
-    // save the returned Etag
-    db.save_etag(&rs.e_tag)?;
 
     // upload finished
     log::info!("Upload finished, ETag: {}", rs.e_tag);
@@ -375,7 +376,7 @@ async fn abort_and_forget(
     {
         Ok(_) => {}
         // Already gone on the server.
-        Err(abort) if abort.code() == Some("NoSuchUpload") => {}
+        Err(abort) if upload_is_gone(&abort, false) => {}
         Err(abort) => return Err(abort),
     }
     if let Err(forget) = forget_aborted_upload(db) {
@@ -548,7 +549,7 @@ async fn parts_error(
         Err(error) => error,
     };
     match error.downcast::<UploadGone>() {
-        Ok(gone) => forget_gone_upload(db, &gone.answer),
+        Ok(gone) => forget_gone_upload(s3, db, &gone.answer),
         Err(error) => error,
     }
 }
@@ -696,11 +697,19 @@ fn is_not_implemented(error: &anyhow::Error) -> bool {
         .is_some_and(|error| error.status() == Some(501) && error.code() == Some("NotImplemented"))
 }
 
-/// The S3 error code `NoSuchUpload`: the server has no multipart upload with this id.
+/// The server says it has no multipart upload with this id: the S3 error code
+/// `NoSuchUpload` with status 404, or in the body of a 200 answer to
+/// `CompleteMultipartUpload` (`on_completion`). The same code with another status (a
+/// gateway's 503, for example) doesn't prove the upload is gone.
+fn upload_is_gone(error: &crate::s3::error::Error, on_completion: bool) -> bool {
+    error.code() == Some("NoSuchUpload")
+        && (error.status() == Some(404) || (on_completion && error.status() == Some(200)))
+}
+
 fn is_no_such_upload(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<crate::s3::error::Error>()
-        .is_some_and(|error| error.code() == Some("NoSuchUpload"))
+        .is_some_and(|error| upload_is_gone(error, false))
 }
 
 /// The server no longer has the multipart upload: it was aborted (by hand, or by a
@@ -723,7 +732,22 @@ impl std::error::Error for UploadGone {}
 /// Nothing can be sent to an upload the server no longer has, so every later run would
 /// fail the same way (<https://github.com/s3m/s3m/issues/84>). Its saved state is
 /// removed, and the next run starts a new upload. Returns the error to report.
-fn forget_gone_upload(db: &Db, answer: &str) -> anyhow::Error {
+///
+/// The state is kept when the answer comes from somewhere else than the upload was
+/// started on: `streams resume` opens a saved state by its key, whatever the host's
+/// configuration is now, and the server that has the upload may still have it.
+fn forget_gone_upload(s3: &S3, db: &Db, answer: &str) -> anyhow::Error {
+    let started_here = s3
+        .hash()
+        .get(..8)
+        .is_some_and(|host| db.state_key().starts_with(host));
+    if !started_here {
+        return anyhow!(
+            "the server has no such multipart upload, but the host's endpoint, bucket or \
+             keys are not the ones this upload was started with, so its saved state was \
+             kept.\n{answer}"
+        );
+    }
     if let Err(forget) = forget_aborted_upload(db) {
         return anyhow!(
             "the multipart upload saved for this file no longer exists on the server, and \
@@ -2064,5 +2088,82 @@ mod tests {
         assert_eq!(db.upload_id().unwrap(), None);
         assert!(db.db_uploaded().unwrap().is_empty());
         assert_eq!(db.check().unwrap(), None);
+    }
+
+    // #84 review: only a 404 proves the upload is gone. The same error code from
+    // something in between (a 503 here) is retried like any other error, and the
+    // upload id is kept.
+    #[tokio::test]
+    async fn no_such_upload_with_another_status_keeps_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.create_parts([(1, 0, 4), (2, 4, 4), (3, 8, 2)], None)
+            .unwrap();
+
+        let unavailable = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(503)
+            .with_body(NO_SUCH_UPLOAD)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        unavailable.assert_async().await;
+        assert!(!error.contains("no longer exists"), "{error}");
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.db_parts().unwrap().len(), 3);
+    }
+
+    // #84 review: `streams resume` opens a saved state by its key. If the host now
+    // points to another server (or bucket, or account), that one never had the upload:
+    // its NoSuchUpload must not erase the state of an upload that may still be open
+    // where it was started.
+    #[tokio::test]
+    async fn no_such_upload_from_another_host_keeps_the_upload() {
+        let mut server = Server::new_async().await;
+        let started_on = S3::new(
+            &Credentials::new("AKIA", &SecretString::new("secret".into())),
+            &Region::custom("us-east-1", "http://127.0.0.1:9"),
+            Some("bucket".to_string()),
+            false,
+        );
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&started_on, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.create_parts([(1, 0, 4), (2, 4, 4), (3, 8, 2)], None)
+            .unwrap();
+
+        let elsewhere = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_status(404)
+            .with_body(NO_SUCH_UPLOAD)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        elsewhere.assert_async().await;
+        assert!(error.contains("its saved state was kept"), "{error}");
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.db_parts().unwrap().len(), 3);
     }
 }

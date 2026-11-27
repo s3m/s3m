@@ -425,7 +425,8 @@ fn validate_resume_db(
 
     if entry.parts_total == 0 {
         return Err(anyhow!(
-            "Stream state {id} has no multipart parts to resume"
+            "Stream state {id} has no multipart parts to resume; run the upload again \
+             (s3m <file> <host>/<bucket>/<key>), which plans them"
         ));
     }
 
