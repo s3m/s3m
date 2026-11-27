@@ -11,7 +11,7 @@ use anyhow::{Result, anyhow};
 use futures::stream::{FuturesUnordered, StreamExt};
 use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 use sled::transaction::{TransactionError, Transactional};
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, time::SystemTime};
 use tokio::time::{Duration, sleep};
 
 pub struct MultipartUploadRequest<'a> {
@@ -48,6 +48,8 @@ struct UploadPartRequest<'a> {
 /// # Errors
 /// Will return an error if the upload fails
 pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<String> {
+    let source = check_source_size(&request).await?;
+
     log::debug!(
         "Starting multi part upload:
         key: {}
@@ -90,22 +92,13 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     // and if every part was uploaded but CompleteMultipartUpload failed (S3 can answer
     // 200 OK with an <Error>), only the completion is retried. The parts the saved plan
     // lacks are added, so that it always covers the whole file.
-    if let Err(error) = complete_part_plan(
+    let plan = complete_part_plan(
         request.sdb,
         request.file_size,
         request.chunk_size,
         additional_checksum.as_ref(),
-    ) {
-        // Only parts that can't belong to this file end the upload. Anything else (the
-        // state could not be read or written) leaves it as it is, to be resumed.
-        return Err(match error.downcast::<PlanMismatch>() {
-            Ok(mismatch) => {
-                abort_unusable_state(request.s3, request.key, &upload_id, request.sdb, &mismatch)
-                    .await
-            }
-            Err(error) => error,
-        });
-    }
+    );
+    check_part_plan(plan, request.s3, request.key, &upload_id, request.sdb).await?;
 
     // Upload parts progress bar
     let pb = if request.quiet {
@@ -144,6 +137,17 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
         return Err(anyhow!("could not upload all parts"));
     }
 
+    if let Some(change) = source.change(request.file).await {
+        return Err(changed_file_error(
+            request.s3,
+            request.key,
+            Some(&upload_id),
+            request.sdb,
+            &change,
+        )
+        .await);
+    }
+
     complete_upload(
         request.s3,
         request.key,
@@ -153,6 +157,93 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
         additional_checksum,
     )
     .await
+}
+
+struct SourceFile {
+    size: u64,
+    modified: SystemTime,
+}
+
+impl SourceFile {
+    async fn read(file: &Path) -> std::io::Result<Self> {
+        let metadata = tokio::fs::metadata(file).await?;
+        Ok(Self {
+            size: metadata.len(),
+            modified: metadata.modified()?,
+        })
+    }
+
+    async fn change(&self, file: &Path) -> Option<String> {
+        match Self::read(file).await {
+            Ok(now) if now.size != self.size => Some(size_change(self.size, now.size)),
+            Ok(now) if now.modified != self.modified => {
+                Some("modification time changed".to_string())
+            }
+            Ok(_) => None,
+            Err(error) => Some(format!(
+                "could not verify the file's size and modification time: {error}"
+            )),
+        }
+    }
+}
+
+fn size_change(before: u64, after: u64) -> String {
+    format!("size changed from {before} to {after} bytes")
+}
+
+async fn check_source_size(request: &MultipartUploadRequest<'_>) -> Result<SourceFile> {
+    let source = SourceFile::read(request.file).await?;
+    if source.size != request.file_size {
+        let upload_id = request.sdb.upload_id()?;
+        let change = size_change(request.file_size, source.size);
+        return Err(changed_file_error(
+            request.s3,
+            request.key,
+            upload_id.as_deref(),
+            request.sdb,
+            &change,
+        )
+        .await);
+    }
+    Ok(source)
+}
+
+async fn changed_file_error(
+    s3: &S3,
+    key: &str,
+    upload_id: Option<&str>,
+    db: &Db,
+    change: &str,
+) -> anyhow::Error {
+    let reason = format!("the file changed during the upload: {change}");
+    let Some(upload_id) = upload_id else {
+        return anyhow!("{reason}. Run the upload again.");
+    };
+    match abort_and_forget(s3, key, upload_id, db).await {
+        Ok(()) => anyhow!("{reason}. The multipart upload was aborted; run the upload again."),
+        Err(abort) => anyhow!(
+            "{reason}. The multipart upload could not be aborted ({abort}); abort it with \
+             `s3m rm <host>/<bucket>/{key} --abort {upload_id}` and run the upload again."
+        ),
+    }
+}
+
+async fn check_part_plan(
+    plan: Result<()>,
+    s3: &S3,
+    key: &str,
+    upload_id: &str,
+    db: &Db,
+) -> Result<()> {
+    // Only parts that can't belong to this file end the upload. Anything else (the
+    // state could not be read or written) leaves it as it is, to be resumed.
+    match plan {
+        Err(error) => Err(match error.downcast::<PlanMismatch>() {
+            Ok(mismatch) => abort_unusable_state(s3, key, upload_id, db, &mismatch).await,
+            Err(error) => error,
+        }),
+        Ok(()) => Ok(()),
+    }
 }
 
 /// Complete the multipart upload once every part is uploaded, and return its report.
@@ -878,7 +969,7 @@ mod tests {
     use mockito::{Matcher, Server};
     use rkyv::{rancor::Error as RkyvError, to_bytes};
     use secrecy::SecretString;
-    use std::io::Write;
+    use std::{fs, io::Write, time::UNIX_EPOCH};
 
     // Regression: a fresh upload id kept the parts another upload of the same content had
     // already sent, and CompleteMultipartUpload listed them (S3 answers InvalidPart).
@@ -1625,6 +1716,116 @@ mod tests {
             .with_body(COMPLETED_3)
     }
 
+    #[tokio::test]
+    async fn verifies_the_source_again_before_completing() {
+        for (replacement, expected_change) in [
+            (Some("1123456789"), Some("modification time changed")),
+            (
+                Some("0123456789+"),
+                Some("size changed from 10 to 11 bytes"),
+            ),
+            (None, None),
+        ] {
+            let mut server = Server::new_async().await;
+            let s3 = checksum_s3(&server);
+            let dir = tempfile::tempdir().unwrap();
+            let file = tempfile::NamedTempFile::new().unwrap();
+            fs::write(file.path(), "0123456789").unwrap();
+            file.as_file().set_modified(UNIX_EPOCH).unwrap();
+            let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+            db.save_upload_id("uid").unwrap();
+
+            let path = file.path().to_owned();
+            let first = part_mock(&mut server, 1, "0123")
+                .with_body_from_request(move |_| {
+                    if let Some(replacement) = replacement {
+                        fs::write(&path, replacement).unwrap();
+                    }
+                    Vec::new()
+                })
+                .create_async()
+                .await;
+            let second = part_mock(&mut server, 2, "4567").create_async().await;
+            let third = part_mock(&mut server, 3, "89").create_async().await;
+            let complete = complete_three_parts(&mut server)
+                .expect(usize::from(expected_change.is_none()))
+                .create_async()
+                .await;
+            let abort = server
+                .mock("DELETE", "/bucket/key")
+                .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+                .with_status(204)
+                .expect(usize::from(expected_change.is_some()))
+                .create_async()
+                .await;
+
+            let result = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path())).await;
+
+            for mock in [first, second, third, complete, abort] {
+                mock.assert_async().await;
+            }
+            if let Some(expected) = expected_change {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains("the file changed during the upload"),
+                    "{error}"
+                );
+                assert!(error.contains(expected), "{error}");
+                assert!(error.contains("run the upload again"), "{error}");
+                assert_eq!(db.upload_id().unwrap(), None);
+                assert_eq!(db.cached_etag().unwrap(), None);
+                assert!(db.db_parts().unwrap().is_empty());
+                assert!(db.db_uploaded().unwrap().is_empty());
+            } else {
+                assert_eq!(result.unwrap(), "ETag: \"done-3\"");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn aborts_saved_upload_when_source_size_is_already_wrong() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789+").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+
+        let parts = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_header("ETag", "part")
+            .expect(0)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Any)
+            .with_body(COMPLETED_3)
+            .expect(0)
+            .create_async()
+            .await;
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let result = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path())).await;
+
+        for mock in [parts, complete, abort] {
+            mock.assert_async().await;
+        }
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("size changed from 10 to 11 bytes"),
+            "{error}"
+        );
+        assert_eq!(db.upload_id().unwrap(), None);
+    }
+
     // <https://github.com/s3m/s3m/issues/83>: s3m was killed while it wrote the part
     // plan, and the state kept the upload id with only the first of three parts. The
     // resume uploaded that part and completed the upload: a 4-byte object for a
@@ -1830,6 +2031,7 @@ mod tests {
         let s3 = checksum_s3(&server);
         let dir = tempfile::tempdir().unwrap();
         let file = tempfile::NamedTempFile::new().unwrap();
+        file.as_file().set_len(70_000).unwrap();
         let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
         db.save_upload_id("uid").unwrap();
         db.create_part(1, 0, 1, None).unwrap();
@@ -2200,11 +2402,16 @@ mod tests {
         let s3 = checksum_s3(&server);
         let dir = tempfile::tempdir().unwrap();
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        file.write_all(b"012345").unwrap();
+        file.write_all(b"0123456789").unwrap();
         let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
         db.save_upload_id("uid").unwrap();
 
+        let path = file.path().to_owned();
         let first = part_mock(&mut server, 1, "0123")
+            .with_body_from_request(move |_| {
+                fs::write(&path, b"012345").unwrap();
+                Vec::new()
+            })
             .expect(1)
             .create_async()
             .await;

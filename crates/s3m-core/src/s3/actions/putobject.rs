@@ -153,7 +153,68 @@ mod tests {
     use crate::s3::{
         tools, {Credentials, Region, S3},
     };
+    use base64ct::{Base64, Encoding};
+    use log::{LevelFilter, Log, Metadata, Record};
     use secrecy::SecretString;
+    use std::{cell::Cell, fs, path::PathBuf};
+
+    thread_local! {
+        static FILE_TO_REWRITE: Cell<Option<PathBuf>> = const { Cell::new(None) };
+    }
+
+    struct RewriteAfterChecksum;
+
+    impl Log for RewriteAfterChecksum {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &Record<'_>) {
+            // PutObject logs this after calculating the digest and before opening the body.
+            if record.args().to_string().starts_with("URL to sign: ")
+                && let Some(path) = FILE_TO_REWRITE.take()
+            {
+                fs::write(path, "changed!").unwrap();
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    #[tokio::test]
+    async fn put_object_propagates_bad_digest_for_a_file_changed_after_hashing() {
+        log::set_logger(&RewriteAfterChecksum).unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let s3 = S3::new(
+            &Credentials::new("test", &SecretString::new("test".into())),
+            &Region::custom("test", server.url()),
+            Some("bucket".into()),
+            false,
+        );
+        let file = tempfile::NamedTempFile::new().unwrap();
+        fs::write(file.path(), "original").unwrap();
+        let reject = server.mock("PUT", "/bucket/key")
+            .match_header("content-md5", Base64::encode_string(&md5::compute(b"original").0).as_str())
+            .match_body("changed!")
+            .match_request(|request| {
+                let digest = Base64::encode_string(&md5::compute(request.body().unwrap()).0);
+                request.header("content-md5").iter().all(|value| value.as_bytes() != digest.as_bytes())
+            })
+            .with_status(400)
+            .with_body("<Error><Code>BadDigest</Code><Message>Content-MD5 does not match the body</Message></Error>")
+            .create_async().await;
+
+        let previous_level = log::max_level();
+        log::set_max_level(LevelFilter::Info);
+        FILE_TO_REWRITE.set(Some(file.path().to_owned()));
+        let result = PutObject::new("key", file.path(), None, None, None, None, None)
+            .request(&s3, RequestOptions::default())
+            .await;
+        log::set_max_level(previous_level);
+
+        reject.assert_async().await;
+        assert_eq!(result.unwrap_err().code(), Some("BadDigest"));
+    }
 
     #[test]
     fn test_method() {
