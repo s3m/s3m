@@ -907,7 +907,7 @@ fn started_here(s3: &S3, db: &Db) -> bool {
         return false;
     };
     if host.starts_with("v2-") {
-        host == s3.upload_host()
+        s3.matches_upload_host(host)
     } else {
         s3.hash().get(..8) == Some(host)
     }
@@ -2528,6 +2528,77 @@ mod tests {
         assert!(!error.contains("no longer exists"), "{error}");
         assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
         assert_eq!(db.db_parts().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn equivalent_endpoints_find_the_same_upload_and_pass_the_host_check() {
+        let s3_at = |endpoint: &str| {
+            S3::new(
+                &Credentials::new("id", &SecretString::new("secret".into())),
+                &Region::custom("region", endpoint),
+                Some("bucket".into()),
+                false,
+            )
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let original = s3_at("storage.example/base");
+        let db = Db::new(&original, "key", "hash", 1, dir.path()).unwrap();
+        let path = db.path().to_owned();
+        db.save_upload_id("original").unwrap();
+        drop(db);
+        for endpoint in [
+            "https://storage.example/base",
+            "https://STORAGE.EXAMPLE:443/base/",
+        ] {
+            let s3 = s3_at(endpoint);
+            let reopened = Db::new(&s3, "key", "hash", 1, dir.path()).unwrap();
+            assert_eq!(reopened.path(), path);
+            assert_eq!(reopened.upload_id().unwrap().as_deref(), Some("original"));
+            assert!(super::started_here(&original, &reopened));
+            assert!(super::started_here(&s3, &reopened));
+            assert_eq!(s3.endpoint().unwrap(), original.endpoint().unwrap());
+            assert!(!super::started_here(
+                &s3_at("http://storage.example/base"),
+                &reopened
+            ));
+            assert!(!super::started_here(
+                &s3_at("https://storage.example/other"),
+                &reopened
+            ));
+        }
+        for endpoint in [
+            "https://token@storage.example",
+            "storage.example?token",
+            "storage.example#token",
+        ] {
+            let key = s3_at(endpoint).upload_host();
+            assert!(key.contains("blake3") && !key.contains("token"));
+        }
+    }
+
+    #[test]
+    fn previous_v2_endpoint_spelling_keeps_its_saved_upload() {
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = Credentials::new("id", &SecretString::new("secret".into()));
+        let at = |endpoint| {
+            S3::new(
+                &credentials,
+                &Region::custom("region", endpoint),
+                Some("bucket".into()),
+                false,
+            )
+        };
+        let key = "v2-endpoint=STORAGE.EXAMPLE%3A443%2F&bucket=bucket key 1";
+        let id = format!("v2-{}", blake3::hash(format!("hash\0{key}").as_bytes()));
+        let path = Db::state_dir(dir.path(), &id);
+        let db = Db::open_existing(&path, key.into()).unwrap();
+        db.save_upload_id("previous-v2").unwrap();
+        assert!(super::started_here(&at("https://storage.example"), &db));
+        drop(db);
+
+        let db = Db::new(&at("STORAGE.EXAMPLE:443/"), "key", "hash", 1, dir.path()).unwrap();
+        assert_eq!(db.path(), path);
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("previous-v2"));
     }
 
     #[tokio::test]

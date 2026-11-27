@@ -1,9 +1,30 @@
 //! Ownership of the single database older s3m versions kept for a file hash.
-use super::state::{StreamEntry, StreamMetadata, StreamStatus, read_record};
+use super::{
+    db::{is_lock_error, open_state, open_state_once},
+    state::{StreamEntry, StreamMetadata, StreamStatus, load_metadata, read_record},
+};
 use anyhow::Result;
 use std::{collections::BTreeSet, path::Path};
 
-pub(super) fn owners(db: &sled::Db, metadata: Option<&StreamMetadata>) -> Result<BTreeSet<String>> {
+/// An unlocked legacy database can list several destinations even when the YAML
+/// names just one. If it is busy, only wait for a matching or unknown owner.
+pub(super) fn open_for_key(path: &Path, key: &str) -> sled::Result<Option<sled::Db>> {
+    match open_state_once(path) {
+        Err(error) if is_lock_error(&error.to_string()) => {
+            if load_metadata(path).is_ok_and(|metadata| metadata.db_key != key) {
+                Ok(None)
+            } else {
+                open_state(path).map(Some)
+            }
+        }
+        result => result.map(Some),
+    }
+}
+
+pub(super) fn unfinished_owners(
+    db: &sled::Db,
+    metadata: Option<&StreamMetadata>,
+) -> Result<BTreeSet<String>> {
     let mut owners = BTreeSet::new();
     if let Some(metadata) = metadata {
         owners.insert(metadata.db_key.clone());
@@ -14,7 +35,17 @@ pub(super) fn owners(db: &sled::Db, metadata: Option<&StreamMetadata>) -> Result
         let owner = record_owner(key).unwrap_or(key);
         owners.insert(owner.to_owned());
     }
-    Ok(owners)
+    let mut unfinished = BTreeSet::new();
+    for key in owners {
+        if !is_complete(db, &key)? {
+            unfinished.insert(key);
+        }
+    }
+    Ok(unfinished)
+}
+
+pub(super) fn is_complete(db: &sled::Db, key: &str) -> sled::Result<bool> {
+    Ok(db.contains_key(format!("etag {key}"))? && !db.contains_key(format!("abort {key}"))?)
 }
 
 pub(super) fn record_owner(key: &str) -> Option<&str> {
@@ -34,7 +65,10 @@ pub(super) fn shared_entries(
     metadata: Option<&StreamMetadata>,
     owners: &BTreeSet<String>,
 ) -> Result<Vec<StreamEntry>> {
-    let original = metadata.map(|m| &m.db_key).or_else(|| owners.first());
+    let original = metadata
+        .map(|m| &m.db_key)
+        .filter(|key| owners.contains(*key))
+        .or_else(|| owners.first());
     owners
         .iter()
         .map(|key| {

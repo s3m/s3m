@@ -704,42 +704,49 @@ mod tests {
 
     #[test]
     fn test_clean_streams_state_keeps_resumable_entries() {
-        let dir = tempdir().unwrap();
-        let db = Db::open_existing(
-            &Db::state_dir(dir.path(), "good"),
-            "legacy key 1".to_owned(),
-        )
-        .unwrap();
-        db.save_upload_id("upload-1").unwrap();
-        db.create_part(1, 0, 1, None).unwrap();
-        db.db_parts().unwrap().flush().unwrap();
-        write_metadata(
-            dir.path(),
-            &StreamMetadata {
-                version: 1,
-                id: "good".to_string(),
-                host: "s3".to_string(),
-                bucket: "bucket".to_string(),
-                key: "key".to_string(),
-                source_path: PathBuf::from("/tmp/file"),
-                checksum: "good".to_string(),
-                file_size: 1,
-                file_mtime: 1,
-                part_size: 1,
-                db_key: db.state_key().to_string(),
-                created_at: 1,
-                updated_at: Some(1),
-                pipe: false,
-                compress: false,
-                encrypt: false,
-                mode: StreamMode::FileMultipart,
-            },
-        )
-        .unwrap();
+        for legacy in [true, false] {
+            let dir = tempdir().unwrap();
+            let db = if legacy {
+                Db::open_existing(
+                    &Db::state_dir(dir.path(), "good"),
+                    "legacy key 1".to_owned(),
+                )
+            } else {
+                Db::new(&test_s3("bucket"), "key", "good", 1, dir.path())
+            }
+            .unwrap();
+            let id = db.path().file_name().unwrap().to_str().unwrap().to_owned();
+            db.save_upload_id("upload-1").unwrap();
+            db.create_part(1, 0, 1, None).unwrap();
+            db.db_parts().unwrap().flush().unwrap();
+            write_metadata(
+                dir.path(),
+                &StreamMetadata {
+                    version: 1,
+                    id: id.clone(),
+                    host: "s3".to_string(),
+                    bucket: "bucket".to_string(),
+                    key: "key".to_string(),
+                    source_path: PathBuf::from("/tmp/file"),
+                    checksum: "good".to_string(),
+                    file_size: 1,
+                    file_mtime: 1,
+                    part_size: 1,
+                    db_key: db.state_key().to_string(),
+                    created_at: 1,
+                    updated_at: Some(1),
+                    pipe: false,
+                    compress: false,
+                    encrypt: false,
+                    mode: StreamMode::FileMultipart,
+                },
+            )
+            .unwrap();
 
-        let summary = clean_streams_state(dir.path()).unwrap();
-        assert_eq!(summary.removed, Vec::<String>::new());
-        assert_eq!(summary.kept, vec!["good".to_string()]);
+            let summary = clean_streams_state(dir.path()).unwrap();
+            assert_eq!(summary.removed, Vec::<String>::new());
+            assert_eq!(summary.kept, [id]);
+        }
     }
 
     #[test]

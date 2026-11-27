@@ -203,7 +203,12 @@ fn forgetting_one_destination_leaves_the_other_resumable_after_clean() {
 fn shared_legacy_parts_are_never_used_and_each_upload_id_is_visible() {
     let home = tempdir().unwrap();
     write_config(home.path());
-    let (metadata, db) = create_state(home.path(), "legacy", Some("id-with-metadata"));
+    let (metadata, db) = create_state(
+        Layout::Legacy,
+        home.path(),
+        "legacy",
+        Some("id-with-metadata"),
+    );
     // Raw records as written by a second destination in the old directory.
     // Its key can contain spaces. No source or host alias was recorded for it.
     let other = format!(

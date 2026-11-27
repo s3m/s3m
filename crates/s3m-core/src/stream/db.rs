@@ -87,20 +87,27 @@ impl Db {
     /// Will return `Err` if can not create the db
     pub fn new(s3: &S3, key: &str, checksum: &str, mtime: u128, path: &Path) -> Result<Self> {
         let state_key = format!("{} {key} {mtime}", s3.upload_host());
-        let mut hash = blake3::Hasher::new();
-        hash.update(checksum.as_bytes());
-        hash.update(&[0]);
-        hash.update(state_key.as_bytes());
-        let id = format!("v2-{}", hash.finalize().to_hex());
-        let state_dir = Self::state_dir(path, &id);
+        let state_dir = Self::destination_dir(path, checksum, &state_key);
+        if state_dir.try_exists()? {
+            return Self::open(&state_dir, state_key);
+        }
+        let previous_key = format!("{} {key} {mtime}", s3.previous_upload_host());
+        if previous_key != state_key {
+            let previous_dir = Self::destination_dir(path, checksum, &previous_key);
+            if previous_dir.try_exists()? {
+                return Self::open(&previous_dir, previous_key);
+            }
+        }
 
+        let mut completed_etag = None;
         let old_dir = Self::state_dir(path, checksum);
-        if !state_dir.try_exists()? && old_dir.try_exists()? {
-            let storage = open_state(&old_dir)?;
+        let host: String = s3.hash().chars().take(8).collect();
+        let old_key = format!("{host} {key} {mtime}");
+        if old_dir.try_exists()?
+            && let Some(storage) = legacy::open_for_key(&old_dir, &old_key)?
+        {
             let metadata = state::load_metadata(&old_dir).ok();
-            let owners = legacy::owners(&storage, metadata.as_ref())?;
-            let host: String = s3.hash().chars().take(8).collect();
-            let old_key = format!("{host} {key} {mtime}");
+            let owners = legacy::unfinished_owners(&storage, metadata.as_ref())?;
             if owners.contains(&old_key) {
                 ensure!(
                     owners.len() == 1,
@@ -114,13 +121,34 @@ impl Db {
                     state_dir: old_dir,
                 });
             }
+            // A completed key can still have a cached ETag and multipart ID.
+            // Carry only the ETag for the HEAD check into its own directory.
+            completed_etag = storage.get(format!("etag {old_key}"))?;
         }
 
-        let storage = open_state(&state_dir)?;
+        let db = Self::open(&state_dir, state_key)?;
+        if let Some(etag) = completed_etag
+            && db.storage.is_empty()
+        {
+            db.storage.insert(format!("etag {}", db.key), etag)?;
+            db.storage.flush()?;
+        }
+        Ok(db)
+    }
+
+    fn destination_dir(base: &Path, checksum: &str, key: &str) -> PathBuf {
+        let mut hash = blake3::Hasher::new();
+        hash.update(checksum.as_bytes());
+        hash.update(&[0]);
+        hash.update(key.as_bytes());
+        Self::state_dir(base, &format!("v2-{}", hash.finalize()))
+    }
+
+    fn open(path: &Path, key: String) -> Result<Self> {
         Ok(Self {
-            storage,
-            key: state_key,
-            state_dir,
+            storage: open_state(path)?,
+            key,
+            state_dir: path.to_owned(),
         })
     }
 
@@ -130,10 +158,12 @@ impl Db {
     pub fn open_existing(path: &Path, key: String) -> Result<Self> {
         let storage = open_state(path)?;
         let metadata = state::load_metadata(path).ok();
-        let owners = legacy::owners(&storage, metadata.as_ref())?;
+        let owners = legacy::unfinished_owners(&storage, metadata.as_ref())?;
         ensure!(owners.len() <= 1, "{}: {}", path.display(), legacy::SHARED);
         ensure!(
-            owners.is_empty() || owners.contains(&key),
+            owners.contains(&key)
+                || (owners.is_empty()
+                    && (storage.is_empty() || legacy::is_complete(&storage, &key)?)),
             "upload state belongs to another destination"
         );
         Ok(Self {

@@ -199,15 +199,24 @@ fn visit_streams(
 }
 
 fn inspect_directory(id: &str, path: &Path, db: &sled::Db) -> Result<(Vec<StreamEntry>, bool)> {
-    let metadata = load_metadata(path);
+    let mut metadata = load_metadata(path);
+    let mut key = metadata.as_ref().ok().map(|m| m.db_key.clone());
     if !id.starts_with("v2-") {
-        let owners = legacy::owners(db, metadata.as_ref().ok())?;
+        let owners = legacy::unfinished_owners(db, metadata.as_ref().ok())?;
         if owners.len() > 1 {
             let states = legacy::shared_entries(id, path, db, metadata.as_ref().ok(), &owners)?;
             return Ok((states, !has_upload_id(db)?));
         }
+        if let Some(owner) = owners.into_iter().next() {
+            if key.as_ref().is_some_and(|key| *key != owner) {
+                metadata = Err(anyhow::anyhow!(
+                    "metadata belongs to a completed destination"
+                ));
+            }
+            key = Some(owner);
+        }
     }
-    let snapshot = inspect_db(db, metadata.as_ref().ok());
+    let snapshot = inspect_db(db, key);
     let mut entry = load_entry(id, path, metadata, snapshot);
     let removable = match entry.status {
         StreamStatus::Broken if has_upload_id(db)? => {
@@ -316,11 +325,11 @@ fn determine_status(updated_at: Option<u64>, timestamp_trust: TimestampTrust) ->
     }
 }
 
-fn inspect_db(db: &sled::Db, metadata: Option<&StreamMetadata>) -> Result<DbSnapshot> {
-    let db_key = metadata
-        .map(|metadata| metadata.db_key.clone())
-        .or_else(|| infer_db_key(db))
-        .context("missing stream db key")?;
+fn inspect_db(db: &sled::Db, key: Option<String>) -> Result<DbSnapshot> {
+    let db_key = match key {
+        Some(key) => key,
+        None => infer_db_key(db)?.context("missing stream db key")?,
+    };
 
     let upload_id = read_record(db, &db_key)?;
     let etag = read_record(db, &format!("etag {db_key}"))?;
@@ -364,18 +373,24 @@ fn has_upload_id(db: &sled::Db) -> Result<bool> {
     Ok(false)
 }
 
-fn infer_db_key(db: &sled::Db) -> Option<String> {
-    let mut keys = db
-        .iter()
-        .keys()
-        .filter_map(Result::ok)
-        .filter_map(|key| String::from_utf8(key.to_vec()).ok())
-        // The upload id is stored under the db key; the other records are prefixed.
-        .filter(|key| legacy::record_owner(key).is_none())
-        .collect::<Vec<_>>();
-    keys.sort();
-    keys.dedup();
-    if keys.len() == 1 { keys.pop() } else { None }
+// A single PUT leaves just an ETag. With no YAML, prefer the multipart
+// upload ID when available so broken entries still identify the open upload.
+fn infer_db_key(db: &sled::Db) -> Result<Option<String>> {
+    let mut upload = None;
+    let mut etag = None;
+    for key in db.iter().keys() {
+        let key = key?;
+        let key = std::str::from_utf8(&key)?;
+        if let Some(owner) = key.strip_prefix("etag ") {
+            etag = Some(owner.to_owned());
+        } else if legacy::record_owner(key).is_none() && !legacy::is_complete(db, key)? {
+            if upload.is_some() {
+                return Ok(None);
+            }
+            upload = Some(key.to_owned());
+        }
+    }
+    Ok(upload.or(etag))
 }
 
 pub(super) fn load_metadata(state_dir: &Path) -> Result<StreamMetadata> {
@@ -455,11 +470,14 @@ mod tests {
         db.save_upload_checksum(Some(&ChecksumAlgorithm::Sha256))
             .unwrap();
         // Only the checksum record, as after a stop before the upload id was saved.
-        assert_eq!(infer_db_key(db.db()), None);
+        assert_eq!(infer_db_key(db.db()).unwrap(), None);
 
         db.save_upload_id("upload-1").unwrap();
         db.save_etag("\"etag\"").unwrap();
-        assert_eq!(infer_db_key(db.db()), Some(db.state_key().to_string()));
+        assert_eq!(
+            infer_db_key(db.db()).unwrap(),
+            Some(db.state_key().to_string())
+        );
     }
 
     fn test_s3() -> S3 {
@@ -474,12 +492,25 @@ mod tests {
         )
     }
 
+    mod legacy_tests;
+
     fn legacy_db(id: &str, base: &Path) -> Db {
         Db::open_existing(
             &state_dir(base, id),
             format!("{} key 1", &test_s3().hash()[..8]),
         )
         .unwrap()
+    }
+
+    fn fixture_db(legacy: bool, hash: &str, base: &Path) -> (Db, String) {
+        let db = if legacy {
+            legacy_db(hash, base)
+        } else {
+            Db::new(&test_s3(), "key", hash, 1, base).unwrap()
+        };
+        let id = db.path().file_name().unwrap().to_str().unwrap().to_owned();
+        assert_eq!(id.starts_with("v2-"), !legacy);
+        (db, id)
     }
 
     #[test]
@@ -518,93 +549,97 @@ mod tests {
 
     #[test]
     fn test_scan_valid_state() {
-        let dir = tempdir().unwrap();
-        let db = legacy_db("stream-1", dir.path());
-        db.save_upload_id("upload-1").unwrap();
-        db.create_part(1, 0, 10, None).unwrap();
-        db.db_parts().unwrap().flush().unwrap();
-        write_metadata(
-            dir.path(),
-            &StreamMetadata {
-                version: 1,
-                id: "stream-1".to_string(),
-                host: "s3".to_string(),
-                bucket: "bucket".to_string(),
-                key: "key".to_string(),
-                source_path: PathBuf::from("/tmp/source"),
-                checksum: "stream-1".to_string(),
-                file_size: 10,
-                file_mtime: 1,
-                part_size: 10,
-                db_key: db.state_key().to_string(),
-                created_at: now_secs(),
-                updated_at: Some(now_secs()),
-                pipe: false,
-                compress: false,
-                encrypt: false,
-                mode: StreamMode::FileMultipart,
-            },
-        )
-        .unwrap();
-        drop(db);
-        wait_for_state_lock(&state_dir(dir.path(), "stream-1"));
+        for legacy in [true, false] {
+            let dir = tempdir().unwrap();
+            let (db, id) = fixture_db(legacy, "stream-1", dir.path());
+            db.save_upload_id("upload-1").unwrap();
+            db.create_part(1, 0, 10, None).unwrap();
+            db.db_parts().unwrap().flush().unwrap();
+            write_metadata(
+                dir.path(),
+                &StreamMetadata {
+                    version: 1,
+                    id: id.clone(),
+                    host: "s3".to_string(),
+                    bucket: "bucket".to_string(),
+                    key: "key".to_string(),
+                    source_path: PathBuf::from("/tmp/source"),
+                    checksum: "stream-1".to_string(),
+                    file_size: 10,
+                    file_mtime: 1,
+                    part_size: 10,
+                    db_key: db.state_key().to_string(),
+                    created_at: now_secs(),
+                    updated_at: Some(now_secs()),
+                    pipe: false,
+                    compress: false,
+                    encrypt: false,
+                    mode: StreamMode::FileMultipart,
+                },
+            )
+            .unwrap();
+            drop(db);
+            wait_for_state_lock(&state_dir(dir.path(), &id));
 
-        let entries = scan_streams(dir.path()).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "stream-1");
-        assert!(
-            matches!(
-                entries[0].status,
-                StreamStatus::Active | StreamStatus::Resumable
-            ),
-            "{:?}",
-            entries[0]
-        );
-        assert_eq!(entries[0].parts_total, 1);
-        assert_eq!(entries[0].upload_id.as_deref(), Some("upload-1"));
+            let entries = scan_streams(dir.path()).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].id, id);
+            assert!(
+                matches!(
+                    entries[0].status,
+                    StreamStatus::Active | StreamStatus::Resumable
+                ),
+                "{:?}",
+                entries[0]
+            );
+            assert_eq!(entries[0].parts_total, 1);
+            assert_eq!(entries[0].upload_id.as_deref(), Some("upload-1"));
+        }
     }
 
     #[test]
     fn test_scan_locked_state_is_active_not_broken() {
-        let dir = tempdir().unwrap();
-        let db = legacy_db("locked", dir.path());
-        db.save_upload_id("upload-1").unwrap();
-        db.create_part(1, 0, 10, None).unwrap();
-        db.db_parts().unwrap().flush().unwrap();
-        write_metadata(
-            dir.path(),
-            &StreamMetadata {
-                version: 1,
-                id: "locked".to_string(),
-                host: "s3".to_string(),
-                bucket: "bucket".to_string(),
-                key: "key".to_string(),
-                source_path: PathBuf::from("/tmp/source"),
-                checksum: "locked".to_string(),
-                file_size: 10,
-                file_mtime: 1,
-                part_size: 10,
-                db_key: db.state_key().to_string(),
-                created_at: now_secs(),
-                updated_at: Some(now_secs()),
-                pipe: false,
-                compress: false,
-                encrypt: false,
-                mode: StreamMode::FileMultipart,
-            },
-        )
-        .unwrap();
+        for legacy in [true, false] {
+            let dir = tempdir().unwrap();
+            let (db, id) = fixture_db(legacy, "locked", dir.path());
+            db.save_upload_id("upload-1").unwrap();
+            db.create_part(1, 0, 10, None).unwrap();
+            db.db_parts().unwrap().flush().unwrap();
+            write_metadata(
+                dir.path(),
+                &StreamMetadata {
+                    version: 1,
+                    id: id.clone(),
+                    host: "s3".to_string(),
+                    bucket: "bucket".to_string(),
+                    key: "key".to_string(),
+                    source_path: PathBuf::from("/tmp/source"),
+                    checksum: "locked".to_string(),
+                    file_size: 10,
+                    file_mtime: 1,
+                    part_size: 10,
+                    db_key: db.state_key().to_string(),
+                    created_at: now_secs(),
+                    updated_at: Some(now_secs()),
+                    pipe: false,
+                    compress: false,
+                    encrypt: false,
+                    mode: StreamMode::FileMultipart,
+                },
+            )
+            .unwrap();
 
-        let entries = scan_streams(dir.path()).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].status, StreamStatus::Active);
-        assert!(
-            entries[0]
-                .error
-                .as_deref()
-                .unwrap()
-                .contains("could not acquire lock")
-        );
+            let entries = scan_streams(dir.path()).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].status, StreamStatus::Active);
+            assert!(
+                entries[0]
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("could not acquire lock")
+            );
+        }
     }
 
     #[test]
@@ -755,44 +790,46 @@ mod tests {
 
     #[test]
     fn test_clean_removes_broken_and_keeps_resumable() {
-        let dir = tempdir().unwrap();
-        let resumable_db = legacy_db("good", dir.path());
-        resumable_db.save_upload_id("upload-1").unwrap();
-        resumable_db.create_part(1, 0, 10, None).unwrap();
-        resumable_db.db_parts().unwrap().flush().unwrap();
-        write_metadata(
-            dir.path(),
-            &StreamMetadata {
-                version: 1,
-                id: "good".to_string(),
-                host: "s3".to_string(),
-                bucket: "bucket".to_string(),
-                key: "key".to_string(),
-                source_path: PathBuf::from("/tmp/source"),
-                checksum: "good".to_string(),
-                file_size: 10,
-                file_mtime: 1,
-                part_size: 10,
-                db_key: resumable_db.state_key().to_string(),
-                created_at: now_secs(),
-                updated_at: Some(now_secs()),
-                pipe: false,
-                compress: false,
-                encrypt: false,
-                mode: StreamMode::FileMultipart,
-            },
-        )
-        .unwrap();
+        for legacy in [true, false] {
+            let dir = tempdir().unwrap();
+            let (resumable_db, id) = fixture_db(legacy, "good", dir.path());
+            resumable_db.save_upload_id("upload-1").unwrap();
+            resumable_db.create_part(1, 0, 10, None).unwrap();
+            resumable_db.db_parts().unwrap().flush().unwrap();
+            write_metadata(
+                dir.path(),
+                &StreamMetadata {
+                    version: 1,
+                    id: id.clone(),
+                    host: "s3".to_string(),
+                    bucket: "bucket".to_string(),
+                    key: "key".to_string(),
+                    source_path: PathBuf::from("/tmp/source"),
+                    checksum: "good".to_string(),
+                    file_size: 10,
+                    file_mtime: 1,
+                    part_size: 10,
+                    db_key: resumable_db.state_key().to_string(),
+                    created_at: now_secs(),
+                    updated_at: Some(now_secs()),
+                    pipe: false,
+                    compress: false,
+                    encrypt: false,
+                    mode: StreamMode::FileMultipart,
+                },
+            )
+            .unwrap();
 
-        let broken_dir = state_dir(dir.path(), "broken");
-        fs::create_dir_all(&broken_dir).unwrap();
-        fs::write(broken_dir.join(STATE_FILE), "not: [valid").unwrap();
+            let broken_dir = state_dir(dir.path(), "broken");
+            fs::create_dir_all(&broken_dir).unwrap();
+            fs::write(broken_dir.join(STATE_FILE), "not: [valid").unwrap();
 
-        let summary = clean_streams(dir.path()).unwrap();
-        assert_eq!(summary.removed, vec!["broken".to_string()]);
-        assert_eq!(summary.kept, vec!["good".to_string()]);
-        assert!(state_dir(dir.path(), "good").exists());
-        assert!(!state_dir(dir.path(), "broken").exists());
+            let summary = clean_streams(dir.path()).unwrap();
+            assert_eq!(summary.removed, vec!["broken".to_string()]);
+            assert_eq!(summary.kept, std::slice::from_ref(&id));
+            assert!(state_dir(dir.path(), &id).exists());
+            assert!(!state_dir(dir.path(), "broken").exists());
+        }
     }
 
     #[test]
@@ -831,27 +868,29 @@ mod tests {
 
     #[test]
     fn test_scan_legacy_state_without_updated_at_is_not_active() {
-        let dir = tempdir().unwrap();
-        let db = legacy_db("legacy", dir.path());
-        let db_key = db.state_key().to_string();
-        db.save_upload_id("upload-1").unwrap();
-        db.create_part(1, 0, 10, None).unwrap();
-        db.flush().unwrap();
-        drop(db);
-        wait_for_state_lock(&state_dir(dir.path(), "legacy"));
+        for legacy in [true, false] {
+            let dir = tempdir().unwrap();
+            let (db, id) = fixture_db(legacy, "legacy", dir.path());
+            let db_key = db.state_key().to_string();
+            db.save_upload_id("upload-1").unwrap();
+            db.create_part(1, 0, 10, None).unwrap();
+            db.flush().unwrap();
+            drop(db);
+            wait_for_state_lock(&state_dir(dir.path(), &id));
 
-        let legacy_dir = state_dir(dir.path(), "legacy");
-        fs::write(
+            let legacy_dir = state_dir(dir.path(), &id);
+            fs::write(
             legacy_dir.join(STATE_FILE),
             format!(
-                "version: 1\nid: legacy\nhost: s3\nbucket: bucket\nkey: key\nsource_path: /tmp/source\nchecksum: legacy\nfile_size: 10\nfile_mtime: 1\npart_size: 10\ndb_key: {db_key}\ncreated_at: 1\npipe: false\ncompress: false\nencrypt: false\nmode: FileMultipart\n"
+                "version: 1\nid: {id}\nhost: s3\nbucket: bucket\nkey: key\nsource_path: /tmp/source\nchecksum: legacy\nfile_size: 10\nfile_mtime: 1\npart_size: 10\ndb_key: {db_key}\ncreated_at: 1\npipe: false\ncompress: false\nencrypt: false\nmode: FileMultipart\n"
             ),
         )
         .unwrap();
 
-        let entries = scan_streams(dir.path()).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "legacy");
-        assert!(!matches!(entries[0].status, StreamStatus::Active));
+            let entries = scan_streams(dir.path()).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].id, id);
+            assert!(!matches!(entries[0].status, StreamStatus::Active));
+        }
     }
 }

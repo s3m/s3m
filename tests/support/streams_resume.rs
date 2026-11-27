@@ -10,7 +10,7 @@ mod resume_peer;
 /// pending parts of 5, 5 and 1 bytes for upload `upload-1`. Only the first
 /// `saved_parts` are saved: fewer than three is the state s3m left when it was
 /// killed while writing the plan.
-fn create_part_state(home: &Path, id: &str, saved_parts: usize) {
+fn create_part_state(layout: Layout, home: &Path, saved_parts: usize) -> String {
     let s3m_dir = s3m_dir(home);
     let source = home.join("source-parts.bin");
     fs::write(&source, b"hello world").unwrap();
@@ -21,7 +21,9 @@ fn create_part_state(home: &Path, id: &str, saved_parts: usize) {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let db = legacy_db(&test_s3(), "key", id, file_mtime, &s3m_dir);
+    let checksum = calculate_file_hash(&source);
+    let db = layout.open(&test_s3(), "key", &checksum, file_mtime, &s3m_dir);
+    let id = state_id(&db);
     db.save_upload_id("upload-1").unwrap();
     for (number, seek, chunk) in PartIterator::new(11, 5).take(saved_parts) {
         db.create_part(number, seek, chunk, None).unwrap();
@@ -35,11 +37,11 @@ fn create_part_state(home: &Path, id: &str, saved_parts: usize) {
         &s3m_dir,
         &StreamMetadata {
             version: 1,
-            id: id.to_string(),
+            id: id.clone(),
             host: "s3".to_string(),
             bucket: "bucket".to_string(),
             key: "key".to_string(),
-            checksum: calculate_file_hash(&source),
+            checksum,
             source_path: source,
             file_size: 11,
             file_mtime,
@@ -55,14 +57,17 @@ fn create_part_state(home: &Path, id: &str, saved_parts: usize) {
     )
     .unwrap();
     drop(db);
-    wait_for_state_lock(home, id);
+    wait_for_state_lock(home, &id);
+    id
 }
 
 #[tokio::test]
 async fn test_streams_resume_preserves_parts_and_bounds_inflight_requests() -> Result<()> {
-    for slots in [1, 2] {
-        let peak = resume_three_parts(slots, 3).await?;
-        assert_eq!(peak, slots, "resume --number {slots}");
+    for layout in LAYOUTS {
+        for slots in [1, 2] {
+            let peak = resume_three_parts(layout, slots, 3).await?;
+            assert_eq!(peak, slots, "resume --number {slots}");
+        }
     }
     Ok(())
 }
@@ -72,14 +77,16 @@ async fn test_streams_resume_preserves_parts_and_bounds_inflight_requests() -> R
 // object was 5 bytes of an 11-byte file, with exit 0. It now uploads all three.
 #[tokio::test]
 async fn test_streams_resume_uploads_the_parts_an_interrupted_plan_lacks() -> Result<()> {
-    resume_three_parts(1, 1).await?;
+    for layout in LAYOUTS {
+        resume_three_parts(layout, 1, 1).await?;
+    }
     Ok(())
 }
 
 /// Resume the upload of [`create_part_state`] against a peer that records what it
 /// receives, and check that the three parts and one completion arrive. Returns the
 /// peak of requests in flight.
-async fn resume_three_parts(slots: usize, saved_parts: usize) -> Result<usize> {
+async fn resume_three_parts(layout: Layout, slots: usize, saved_parts: usize) -> Result<usize> {
     {
         let home = tempdir()?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -92,19 +99,13 @@ async fn resume_three_parts(slots: usize, saved_parts: usize) -> Result<usize> {
                 "---\nhosts:\n  s3:\n    endpoint: {url}\n    access_key: XXX\n    secret_key: YYY\n"
             ),
         )?;
-        create_part_state(home.path(), "parts-id", saved_parts);
+        let id = create_part_state(layout, home.path(), saved_parts);
         let transcript = home.path().join("resume.log");
         let mut child = Command::new(get_s3m_binary())
             .env("HOME", home.path())
+            .env("S3M_HOME", s3m_dir(home.path()))
             .env("RUST_LOG_STYLE", "never")
-            .args([
-                "-vv",
-                "-n",
-                &slots.to_string(),
-                "streams",
-                "resume",
-                "parts-id",
-            ])
+            .args(["-vv", "-n", &slots.to_string(), "streams", "resume", &id])
             .kill_on_drop(true)
             .stdout(Stdio::piped())
             .stderr(fs::File::create(&transcript)?)
@@ -144,7 +145,7 @@ async fn resume_three_parts(slots: usize, saved_parts: usize) -> Result<usize> {
                 (3, b"d".to_vec())
             ])
         );
-        let shown = show_json(home.path(), "parts-id");
+        let shown = show_json(home.path(), &id);
         assert_eq!(shown["status"], "complete");
         assert_eq!(shown["etag"], "\"final-etag\"");
         println!(

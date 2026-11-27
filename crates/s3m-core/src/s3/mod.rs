@@ -107,13 +107,51 @@ impl S3 {
     /// An endpoint containing userinfo or query parameters may itself carry a
     /// secret. In that case only its fingerprint goes on disk.
     pub(crate) fn upload_host(&self) -> String {
-        let mut endpoint = self.region.endpoint();
-        if endpoint.contains(['@', '?', '#']) {
-            endpoint = format!("blake3:{}", blake3::hash(endpoint.as_bytes()));
+        Self::encode_upload_host(
+            &self.region.endpoint(),
+            self.bucket().unwrap_or_default(),
+            true,
+        )
+    }
+
+    /// Early v2 directories hashed the configured spelling directly.
+    pub(crate) fn previous_upload_host(&self) -> String {
+        Self::encode_upload_host(
+            &self.region.endpoint(),
+            self.bucket().unwrap_or_default(),
+            false,
+        )
+    }
+
+    pub(crate) fn matches_upload_host(&self, saved: &str) -> bool {
+        let current = self.upload_host();
+        if current == saved {
+            return true;
         }
+        let Some(fields) = saved.strip_prefix("v2-") else {
+            return false;
+        };
+        let mut pairs = url::form_urlencoded::parse(fields.as_bytes());
+        matches!((pairs.next(), pairs.next(), pairs.next()),
+            (Some((name, endpoint)), Some((field, bucket)), None)
+                if name == "endpoint" && field == "bucket"
+                && Self::encode_upload_host(&endpoint, &bucket, true) == current)
+    }
+
+    fn encode_upload_host(raw: &str, bucket: &str, normalize: bool) -> String {
+        let endpoint = if raw.contains(['@', '?', '#']) {
+            format!("blake3:{}", blake3::hash(raw.as_bytes()))
+        } else if normalize {
+            Self::base_url(raw).map_or_else(
+                |_| raw.to_owned(),
+                |url| url.as_str().trim_end_matches('/').to_owned(),
+            )
+        } else {
+            raw.to_owned()
+        };
         let host = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("endpoint", &endpoint)
-            .append_pair("bucket", self.bucket().unwrap_or_default())
+            .append_pair("bucket", bucket)
             .finish();
         format!("v2-{host}")
     }
@@ -121,24 +159,19 @@ impl S3 {
     /// # Errors
     /// Will return an error if the endpoint is invalid
     pub fn endpoint(&self) -> Result<Url> {
-        let endpoint_str = self.region.endpoint();
+        let mut base = Self::base_url(&self.region.endpoint())?;
+        if let Some(bucket) = &self.bucket {
+            base.set_path(&format!("{}/{bucket}", base.path().trim_end_matches('/')));
+        }
+        Ok(base)
+    }
 
-        // Check if endpoint already has a scheme (http:// or https://)
-        let base_url =
-            if endpoint_str.starts_with("http://") || endpoint_str.starts_with("https://") {
-                // Endpoint already has scheme, use it as-is
-                endpoint_str
-            } else {
-                // No scheme, prepend https://
-                format!("https://{endpoint_str}")
-            };
-
-        let url = if let Some(bucket) = &self.bucket {
-            Url::parse(&format!("{base_url}/{bucket}"))?
+    fn base_url(endpoint: &str) -> Result<Url> {
+        let url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            Url::parse(endpoint)?
         } else {
-            Url::parse(&base_url)?
+            Url::parse(&format!("https://{endpoint}"))?
         };
-
         Ok(url)
     }
 }
