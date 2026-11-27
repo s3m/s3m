@@ -2166,4 +2166,56 @@ mod tests {
         assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
         assert_eq!(db.db_parts().unwrap().len(), 3);
     }
+
+    // <https://github.com/s3m/s3m/issues/89>: the file was cut to 6 bytes after its
+    // 10 bytes were planned as parts of 4. The second part read the 2 bytes that were
+    // left and sent them; the server accepted the shorter part and the upload was
+    // completed, with exit 0 and an object that was not the file. A part with fewer
+    // bytes than planned is now an error, before anything is sent for it.
+    #[tokio::test]
+    async fn a_part_shorter_than_planned_is_not_sent() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"012345").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+
+        let first = part_mock(&mut server, 1, "0123")
+            .expect(1)
+            .create_async()
+            .await;
+        let short = server
+            .mock("PUT", "/bucket/key")
+            .match_query(Matcher::Regex("partNumber=[23]".into()))
+            .expect(0)
+            .create_async()
+            .await;
+        let complete = server
+            .mock("POST", "/bucket/key")
+            .match_query(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        first.assert_async().await;
+        short.assert_async().await;
+        complete.assert_async().await;
+        assert!(
+            error.contains(
+                "the file changed during the upload: part 2 has 2 bytes at offset 4, not the 4 \
+                 it was planned with"
+            ),
+            "{error}"
+        );
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.db_uploaded().unwrap().len(), 1);
+        assert_eq!(db.check().unwrap(), None);
+    }
 }

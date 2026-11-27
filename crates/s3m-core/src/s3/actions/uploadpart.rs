@@ -69,6 +69,17 @@ impl<'a> UploadPart<'a> {
         )
         .await?;
 
+        // The part was planned with `chunk` bytes. Fewer means the file was truncated
+        // or replaced since: sent as it is, the server would accept a shorter part and
+        // the object would not be the file (<https://github.com/s3m/s3m/issues/89>).
+        if u64::try_from(length).ok() != Some(self.chunk) {
+            return Err(Error::Other(format!(
+                "the file changed during the upload: part {} has {length} bytes at offset {}, \
+                 not the {} it was planned with",
+                self.part_number, self.seek, self.chunk
+            )));
+        }
+
         // Update self.additional_checksum with the modified checksum, if any
         if let Some(ref mut additional_checksum) = self.additional_checksum
             && let Some(ref new_checksum) = checksum
