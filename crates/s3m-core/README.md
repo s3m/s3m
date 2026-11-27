@@ -113,6 +113,14 @@ number of attempts.
 The `s3m` crate also changed `s3m::cli::Host::enc_key` from `Option<String>` to
 `Option<SecretString>`.
 
+The streamed upload functions (`stream_stdin`, `stream_compressed`,
+`stream_encrypted` and their combinations) return the upload's report, like
+`upload` and `upload_multipart`: `ETag: "..."` followed by a line for each
+response header of the completion (`Version ID`, `Server-side encryption`,
+`Expiration`, `Previous object size`). They used to return the bare `ETag`, so
+code that used the returned string as the ETag has to read it from the
+`ETag: ` line.
+
 The Zstandard encoder moved with the dependency update (`zstd-safe` 8.2 to
 8.3). Newly compressed streams aren't byte-identical to older output, but
 frames from either build decode with the other.

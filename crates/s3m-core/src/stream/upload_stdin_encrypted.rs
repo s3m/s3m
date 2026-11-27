@@ -17,6 +17,9 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 
 /// Read from STDIN and encrypt the data.
 ///
+/// Returns the upload's report: `ETag: "..."` and a line for each response header
+/// of the completion (`Version ID`, `Server-side encryption`, `Expiration`, ...).
+///
 /// # Errors
 /// Will return an error if the upload fails.
 pub async fn stream_stdin_encrypted(

@@ -9,6 +9,10 @@ use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 /// Read file in chunks of 512MB
+///
+/// Returns the upload's report: `ETag: "..."` and a line for each response header
+/// of the completion (`Version ID`, `Server-side encryption`, `Expiration`, ...).
+///
 /// # Errors
 /// Will return an error if the upload fails
 pub async fn stream_compressed(request: FileStreamUpload<'_>) -> Result<String> {

@@ -14,6 +14,10 @@ use tokio::io::stdin;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 /// Read from STDIN, since the size is unknown we use the max chunk size = 512MB, to handle the max supported file object of 5TB
+///
+/// Returns the upload's report: `ETag: "..."` and a line for each response header
+/// of the completion (`Version ID`, `Server-side encryption`, `Expiration`, ...).
+///
 /// # Errors
 /// Will return an error if the upload fails
 pub async fn stream_stdin(

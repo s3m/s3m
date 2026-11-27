@@ -141,7 +141,7 @@ fn add_transfer_args(cmd: Command, config_streams_path: &Path) -> Command {
         .arg(
             Arg::new("checksum")
             .help("Additional checksums algorithms")
-            .long_help("Request an additional object checksum.\n\nSupported values: crc32, crc32c, sha1, sha256.\nOnly applies to file uploads, not --pipe.\nThe checksum replaces Content-MD5 on the upload requests.\nNot every server supports every algorithm on multipart uploads: Cloudflare R2 accepts crc32 and crc32c there, but not sha1 or sha256.")
+            .long_help("Request an additional object checksum.\n\nSupported values: crc32, crc32c, sha1, sha256.\nOnly applies to plain file uploads: not --pipe, and not with compression or encryption (the --compress flag, or compress / enc_key in the host's config).\nThe checksum replaces Content-MD5 on the upload requests.\nNot every server supports every algorithm on multipart uploads: Cloudflare R2 accepts crc32 and crc32c there, but not sha1 or sha256.")
             .long("checksum")
             .value_parser([
                 "crc32",
