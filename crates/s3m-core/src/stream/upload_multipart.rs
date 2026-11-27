@@ -90,20 +90,21 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     // and if every part was uploaded but CompleteMultipartUpload failed (S3 can answer
     // 200 OK with an <Error>), only the completion is retried. The parts the saved plan
     // lacks are added, so that it always covers the whole file.
-    if let Err(mismatch) = complete_part_plan(
+    if let Err(error) = complete_part_plan(
         request.sdb,
         request.file_size,
         request.chunk_size,
         additional_checksum.as_ref(),
     ) {
-        return Err(abort_unusable_state(
-            request.s3,
-            request.key,
-            &upload_id,
-            request.sdb,
-            &mismatch,
-        )
-        .await);
+        // Only parts that can't belong to this file end the upload. Anything else (the
+        // state could not be read or written) leaves it as it is, to be resumed.
+        return Err(match error.downcast::<PlanMismatch>() {
+            Ok(mismatch) => {
+                abort_unusable_state(request.s3, request.key, &upload_id, request.sdb, &mismatch)
+                    .await
+            }
+            Err(error) => error,
+        });
     }
 
     // Upload parts progress bar
@@ -164,14 +165,22 @@ async fn complete_upload(
     file_size: u64,
     additional_checksum: Option<Checksum>,
 ) -> Result<String> {
-    if let Err(mismatch) = uploaded_parts_cover(db, file_size) {
+    let uploaded = db.uploaded_parts()?;
+    let ranges = db.uploaded_part_ranges()?;
+    let cover = if uploaded.keys().eq(ranges.keys()) {
+        parts_cover(&ranges, file_size)
+    } else {
+        Err(PlanMismatch(
+            "the uploaded parts changed while they were read".to_string(),
+        ))
+    };
+    if let Err(mismatch) = cover {
         return Err(anyhow!(
             "the uploaded parts don't match the file ({mismatch}); the multipart upload was \
              not completed"
         ));
     }
 
-    let uploaded = db.uploaded_parts()?;
     let action =
         actions::CompleteMultipartUpload::new(key, upload_id, uploaded, additional_checksum);
     let checksum = action.checksum()?;
@@ -195,6 +204,21 @@ async fn complete_upload(
     Ok(upload_report(rs, checksum.as_ref()))
 }
 
+/// The saved parts are not the parts of this file.
+#[derive(Debug)]
+struct PlanMismatch(String);
+
+impl std::fmt::Display for PlanMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PlanMismatch {}
+
+/// S3 allows 10,000 parts in a multipart upload.
+const MAX_PARTS: u64 = 10_000;
+
 /// Make the saved part plan cover the file: plan every part of a new upload, and add
 /// the parts a saved plan lacks. A plan can be cut short when s3m is killed while it
 /// writes it (older versions wrote it part by part); resuming it used to complete the
@@ -205,20 +229,44 @@ async fn complete_upload(
 ///
 /// # Errors
 ///
-/// Will return `Err`, with what doesn't match, if the saved parts are not parts of
-/// this file cut at one part size
+/// Will return a [`PlanMismatch`], with what doesn't match, if the saved parts are not
+/// parts of this file cut at one part size; any other error if the state can't be
+/// read or written
 fn complete_part_plan(
     db: &Db,
     file_size: u64,
     chunk_size: u64,
     checksum: Option<&Checksum>,
 ) -> Result<()> {
-    let saved = db.part_ranges()?;
+    let mismatch = |what: String| anyhow::Error::new(PlanMismatch(what));
+
+    let mut saved = db.uploaded_part_ranges()?;
+    for (number, range) in db.pending_part_ranges()? {
+        if let Some(uploaded) = saved.insert(number, range)
+            && uploaded != range
+        {
+            return Err(mismatch(format!(
+                "part {number} is saved with two different ranges"
+            )));
+        }
+    }
+
     let part_size = match saved.get(&1) {
         Some(&(_, chunk)) => chunk,
         None if saved.is_empty() => chunk_size,
-        None => return Err(anyhow!("part 1 is missing from the saved parts")),
+        None => {
+            return Err(mismatch(
+                "part 1 is missing from the saved parts".to_string(),
+            ));
+        }
     };
+    // A saved size that can't be a part size of this file must not be planned with.
+    if !saved.is_empty() && (part_size == 0 || file_size.div_ceil(part_size) > MAX_PARTS) {
+        return Err(mismatch(format!(
+            "part 1 is saved as {part_size} bytes, which can't be the part size of a file of \
+             {file_size} bytes"
+        )));
+    }
 
     let mut missing = Vec::new();
     let mut planned = 0;
@@ -227,19 +275,19 @@ fn complete_part_plan(
         match saved.get(&number) {
             Some(&range) if range == (seek, chunk) => {}
             Some(&(saved_seek, saved_chunk)) => {
-                return Err(anyhow!(
+                return Err(mismatch(format!(
                     "part {number} is saved as {saved_chunk} bytes at {saved_seek}, the file \
                      has {chunk} bytes at {seek} for it"
-                ));
+                )));
             }
             None => missing.push((number, seek, chunk)),
         }
     }
     if saved.len() + missing.len() != planned {
-        return Err(anyhow!(
+        return Err(mismatch(format!(
             "{} parts are saved, the file of {file_size} bytes has {planned}",
             saved.len()
-        ));
+        )));
     }
 
     if !missing.is_empty() {
@@ -254,25 +302,32 @@ fn complete_part_plan(
     Ok(())
 }
 
-/// Whether the uploaded parts are the whole file: numbered from 1 without gaps, each
-/// starting where the previous one ends, ending at `file_size`.
+/// Whether the parts, `(seek, chunk)` by number, are the whole file: numbered from 1
+/// without gaps, each starting where the previous one ends, ending at `file_size`.
 ///
 /// # Errors
 ///
 /// Will return `Err` with what doesn't match
-fn uploaded_parts_cover(db: &Db, file_size: u64) -> Result<()> {
+fn parts_cover(
+    parts: &BTreeMap<u16, (u64, u64)>,
+    file_size: u64,
+) -> std::result::Result<(), PlanMismatch> {
     let mut end = 0;
-    for (expected, (number, (seek, chunk))) in (1_u16..).zip(db.uploaded_part_ranges()?) {
+    for (expected, (&number, &(seek, chunk))) in (1_u16..).zip(parts) {
         if number != expected {
-            return Err(anyhow!("part {expected} is missing"));
+            return Err(PlanMismatch(format!("part {expected} is missing")));
         }
         if seek != end {
-            return Err(anyhow!("part {number} starts at byte {seek}, not at {end}"));
+            return Err(PlanMismatch(format!(
+                "part {number} starts at byte {seek}, not at {end}"
+            )));
         }
         end += chunk;
     }
     if end != file_size {
-        return Err(anyhow!("they hold {end} bytes, the file has {file_size}"));
+        return Err(PlanMismatch(format!(
+            "they hold {end} bytes, the file has {file_size}"
+        )));
     }
     Ok(())
 }
@@ -287,17 +342,17 @@ async fn abort_unusable_state(
     key: &str,
     upload_id: &str,
     db: &Db,
-    mismatch: &anyhow::Error,
+    mismatch: &PlanMismatch,
 ) -> anyhow::Error {
     match abort_and_forget(s3, key, upload_id, db).await {
         Ok(()) => anyhow!(
             "the saved state of this upload doesn't match the file ({mismatch}). The \
-             multipart upload was aborted; run the command again to start a new one."
+             multipart upload was aborted; run the upload again to start a new one."
         ),
         Err(abort) => anyhow!(
             "the saved state of this upload doesn't match the file ({mismatch}). The \
              multipart upload could not be aborted ({abort}); abort it with \
-             `s3m rm <host>/<bucket>/{key} --abort {upload_id}` and run the command again."
+             `s3m rm <host>/<bucket>/{key} --abort {upload_id}` and run the upload again."
         ),
     }
 }
@@ -766,7 +821,7 @@ async fn try_upload_part(request: UploadPartRequest<'_>) -> Result<String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use super::{MultipartUploadRequest, upload_multipart, uploaded_parts_cover};
+    use super::{MultipartUploadRequest, complete_upload, parts_cover, upload_multipart};
     use crate::{
         s3::{
             Credentials, Region, RequestOptions, S3,
@@ -1487,6 +1542,22 @@ mod tests {
         }
     }
 
+    /// Mocks that fail the test if any request for the object arrives.
+    async fn no_requests(server: &mut Server) -> Vec<mockito::Mock> {
+        let mut mocks = Vec::new();
+        for method in ["PUT", "POST", "DELETE", "GET", "HEAD"] {
+            mocks.push(
+                server
+                    .mock(method, "/bucket/key")
+                    .match_query(Matcher::Any)
+                    .expect(0)
+                    .create_async()
+                    .await,
+            );
+        }
+        mocks
+    }
+
     fn part_mock(server: &mut Server, number: u16, body: &str) -> mockito::Mock {
         server
             .mock("PUT", "/bucket/key")
@@ -1654,9 +1725,125 @@ mod tests {
             error.contains("The multipart upload was aborted"),
             "{error}"
         );
+        assert!(
+            error.contains("run the upload again to start a new one"),
+            "{error}"
+        );
         assert_eq!(db.upload_id().unwrap(), None);
         assert!(db.db_parts().unwrap().is_empty());
         assert!(db.db_uploaded().unwrap().is_empty());
+    }
+
+    // #83 review: only saved parts that can't belong to the file end the upload. When
+    // the state can't be written (here its metadata file is unreadable), the upload on
+    // the server is left alone: nothing is aborted, and the upload id is kept.
+    #[tokio::test]
+    async fn a_state_that_cannot_be_written_does_not_abort_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"0123456789").unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        let uploaded = Part::new(1, 0, 4, None).set_etag("\"p1\"".to_string());
+        db.db_uploaded()
+            .unwrap()
+            .insert(
+                1_u16.to_be_bytes(),
+                to_bytes::<RkyvError>(&uploaded).unwrap().as_slice(),
+            )
+            .unwrap();
+        // Adding the missing parts refreshes the metadata file, which fails on this one.
+        std::fs::write(
+            Db::state_dir(dir.path(), "checksum").join(crate::stream::state::STATE_FILE),
+            "not: [the metadata",
+        )
+        .unwrap();
+
+        let no_requests = no_requests(&mut server).await;
+
+        let error = upload_multipart(ten_bytes_in_parts_of_four(&s3, &db, file.path()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        for mock in no_requests {
+            mock.assert_async().await;
+        }
+        assert!(!error.contains("doesn't match the file"), "{error}");
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.db_uploaded().unwrap().len(), 1);
+    }
+
+    // #83 review: a saved part size that can't be this file's is a mismatch, not a plan
+    // of more parts than S3 allows (one byte per part here).
+    #[tokio::test]
+    async fn a_saved_part_size_that_needs_too_many_parts_aborts_the_upload() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        db.create_part(1, 0, 1, None).unwrap();
+
+        let abort = server
+            .mock("DELETE", "/bucket/key")
+            .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
+            .with_status(204)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut request = ten_bytes_in_parts_of_four(&s3, &db, file.path());
+        request.file_size = 70_000;
+        let error = upload_multipart(request).await.unwrap_err().to_string();
+
+        abort.assert_async().await;
+        assert!(
+            error.contains(
+                "part 1 is saved as 1 bytes, which can't be the part size of a file of 70000 bytes"
+            ),
+            "{error}"
+        );
+        assert_eq!(db.db_parts().unwrap().len(), 0);
+    }
+
+    // #83 review: the last line of defence, on its own: uploaded parts that don't hold
+    // the whole file send no CompleteMultipartUpload.
+    #[tokio::test]
+    async fn uploaded_parts_that_do_not_cover_the_file_are_never_completed() {
+        let mut server = Server::new_async().await;
+        let s3 = checksum_s3(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path()).unwrap();
+        db.save_upload_id("uid").unwrap();
+        let uploaded = Part::new(1, 0, 4, None).set_etag("\"p1\"".to_string());
+        db.db_uploaded()
+            .unwrap()
+            .insert(
+                1_u16.to_be_bytes(),
+                to_bytes::<RkyvError>(&uploaded).unwrap().as_slice(),
+            )
+            .unwrap();
+        let no_requests = no_requests(&mut server).await;
+
+        let error = complete_upload(&s3, "key", "uid", &db, 10, None)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        for mock in no_requests {
+            mock.assert_async().await;
+        }
+        assert_eq!(
+            error,
+            "the uploaded parts don't match the file (they hold 4 bytes, the file has 10); \
+             the multipart upload was not completed"
+        );
+        assert_eq!(db.upload_id().unwrap().as_deref(), Some("uid"));
+        assert_eq!(db.check().unwrap(), None);
     }
 
     // #83: when that abort fails the upload is still open, so the state is kept and
@@ -1737,11 +1924,8 @@ mod tests {
                 )
                 .unwrap();
         };
-        let mismatch = |file_size: u64| {
-            uploaded_parts_cover(&db, file_size)
-                .unwrap_err()
-                .to_string()
-        };
+        let cover = |file_size: u64| parts_cover(&db.uploaded_part_ranges().unwrap(), file_size);
+        let mismatch = |file_size: u64| cover(file_size).unwrap_err().to_string();
 
         assert_eq!(mismatch(10), "they hold 0 bytes, the file has 10");
         upload(1, 0, 4);
@@ -1751,7 +1935,7 @@ mod tests {
         upload(2, 5, 3);
         assert_eq!(mismatch(10), "part 2 starts at byte 5, not at 4");
         upload(2, 4, 4);
-        uploaded_parts_cover(&db, 10).unwrap();
+        cover(10).unwrap();
         assert_eq!(mismatch(11), "they hold 10 bytes, the file has 11");
     }
 

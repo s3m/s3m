@@ -5,11 +5,10 @@ use crate::{
     },
     stream::{part::Part, state},
 };
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 use std::{
     collections::BTreeMap,
-    convert::Into,
     path::{Path, PathBuf},
     thread::sleep,
     time::Duration,
@@ -354,28 +353,13 @@ impl Db {
         Ok(())
     }
 
-    /// The byte range, `(seek, chunk)`, of every part saved for the upload, by part
-    /// number: the parts still to upload and the uploaded ones.
+    /// The byte range, `(seek, chunk)`, of every part still to upload, by part number.
     ///
     /// # Errors
     ///
-    /// Will return `Err` if can not read the parts, or if a part number is saved both
-    /// as pending and as uploaded with different ranges
-    pub fn part_ranges(&self) -> Result<BTreeMap<u16, (u64, u64)>> {
-        let mut ranges = self.uploaded_part_ranges()?;
-        for part in self.db_parts()?.iter().values() {
-            let part = from_bytes::<Part, RkyvError>(&part?)?;
-            let range = (part.get_seek(), part.get_chunk());
-            if let Some(uploaded) = ranges.insert(part.get_number(), range)
-                && uploaded != range
-            {
-                return Err(anyhow!(
-                    "part {} is saved with two different ranges",
-                    part.get_number()
-                ));
-            }
-        }
-        Ok(ranges)
+    /// Will return `Err` if can not read the parts
+    pub fn pending_part_ranges(&self) -> Result<BTreeMap<u16, (u64, u64)>> {
+        Self::ranges(&self.db_parts()?)
     }
 
     /// The byte range, `(seek, chunk)`, of every uploaded part, by part number.
@@ -384,8 +368,11 @@ impl Db {
     ///
     /// Will return `Err` if can not read the parts
     pub fn uploaded_part_ranges(&self) -> Result<BTreeMap<u16, (u64, u64)>> {
-        self.db_uploaded()?
-            .iter()
+        Self::ranges(&self.db_uploaded()?)
+    }
+
+    fn ranges(tree: &sled::Tree) -> Result<BTreeMap<u16, (u64, u64)>> {
+        tree.iter()
             .values()
             .map(|part| {
                 let part = from_bytes::<Part, RkyvError>(&part?)?;
@@ -410,26 +397,23 @@ impl Db {
     ///
     /// Will return `Err` if can not create the `BTreeMap<u16, actions::Part>`
     pub fn uploaded_parts(&self) -> Result<BTreeMap<u16, actions::Part>> {
+        // A part that can't be read is an error: left out, the upload would be
+        // completed without it.
         self.db_uploaded()?
-            .into_iter()
+            .iter()
             .values()
-            .flat_map(|part| {
-                part.map(|part| {
-                    from_bytes::<Part, RkyvError>(&part)
-                        .map(|p| {
-                            (
-                                p.get_number(),
-                                actions::Part {
-                                    etag: p.get_etag().to_string(),
-                                    number: p.get_number(),
-                                    checksum: p.get_checksum(),
-                                },
-                            )
-                        })
-                        .map_err(Into::into)
-                })
+            .map(|part| {
+                let part = from_bytes::<Part, RkyvError>(&part?)?;
+                Ok((
+                    part.get_number(),
+                    actions::Part {
+                        etag: part.get_etag().to_string(),
+                        number: part.get_number(),
+                        checksum: part.get_checksum(),
+                    },
+                ))
             })
-            .collect::<Result<BTreeMap<u16, actions::Part>>>()
+            .collect()
     }
 }
 
@@ -517,7 +501,7 @@ mod tests {
     fn test_create_parts_and_part_ranges() {
         let dir = tempdir().unwrap();
         let db = Db::new(&test_s3(), "key", "checksum", 1, dir.path()).unwrap();
-        assert!(db.part_ranges().unwrap().is_empty());
+        assert!(db.pending_part_ranges().unwrap().is_empty());
 
         let checksum = Checksum::new(ChecksumAlgorithm::Crc32c);
         db.create_parts([(1, 0, 5), (2, 5, 5), (3, 10, 1)], Some(&checksum))
@@ -528,11 +512,13 @@ mod tests {
             db.parts_checksum_algorithm().unwrap(),
             Some(ChecksumAlgorithm::Crc32c)
         );
-        let planned = BTreeMap::from([(1, (0, 5)), (2, (5, 5)), (3, (10, 1))]);
-        assert_eq!(db.part_ranges().unwrap(), planned);
+        assert_eq!(
+            db.pending_part_ranges().unwrap(),
+            BTreeMap::from([(1, (0, 5)), (2, (5, 5)), (3, (10, 1))])
+        );
         assert!(db.uploaded_part_ranges().unwrap().is_empty());
 
-        // Part 2 uploaded: it moves to the other tree, the plan is the same.
+        // Part 2 uploaded: it moves to the other tree.
         let part = db
             .get_part(2)
             .unwrap()
@@ -546,16 +532,33 @@ mod tests {
             )
             .unwrap();
         db.db_parts().unwrap().remove(2_u16.to_be_bytes()).unwrap();
-        assert_eq!(db.part_ranges().unwrap(), planned);
+        assert_eq!(
+            db.pending_part_ranges().unwrap(),
+            BTreeMap::from([(1, (0, 5)), (3, (10, 1))])
+        );
         assert_eq!(
             db.uploaded_part_ranges().unwrap(),
             BTreeMap::from([(2, (5, 5))])
         );
+        assert_eq!(
+            db.uploaded_parts().unwrap().keys().collect::<Vec<_>>(),
+            [&2]
+        );
+    }
 
-        // The same number pending with another range can't be trusted.
-        db.create_part(2, 4, 6, None).unwrap();
-        let error = db.part_ranges().unwrap_err().to_string();
-        assert_eq!(error, "part 2 is saved with two different ranges");
+    // #83: an uploaded part that can't be decoded is an error for both readers, never a
+    // part left out of the completion.
+    #[test]
+    fn test_uploaded_parts_reports_a_part_it_cannot_read() {
+        let dir = tempdir().unwrap();
+        let db = Db::new(&test_s3(), "key", "checksum", 1, dir.path()).unwrap();
+        db.db_uploaded()
+            .unwrap()
+            .insert(1_u16.to_be_bytes(), &b"not a part"[..])
+            .unwrap();
+
+        assert!(db.uploaded_parts().is_err());
+        assert!(db.uploaded_part_ranges().is_err());
     }
 
     // <https://github.com/s3m/s3m/issues/77>: the algorithm of the upload in progress
