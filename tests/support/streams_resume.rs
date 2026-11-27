@@ -7,8 +7,10 @@ use tokio::{net::TcpListener, process::Command, time::timeout};
 mod resume_peer;
 
 /// Saved state for `home/source-parts.bin` ("hello world") split into three
-/// pending parts of 5, 5 and 1 bytes for upload `upload-1`.
-fn create_three_part_state(home: &Path, id: &str) {
+/// pending parts of 5, 5 and 1 bytes for upload `upload-1`. Only the first
+/// `saved_parts` are saved: fewer than three is the state s3m left when it was
+/// killed while writing the plan.
+fn create_part_state(home: &Path, id: &str, saved_parts: usize) {
     let s3m_dir = s3m_dir(home);
     let source = home.join("source-parts.bin");
     fs::write(&source, b"hello world").unwrap();
@@ -21,7 +23,7 @@ fn create_three_part_state(home: &Path, id: &str) {
         .as_millis();
     let db = Db::new(&test_s3(), "key", id, file_mtime, &s3m_dir).unwrap();
     db.save_upload_id("upload-1").unwrap();
-    for (number, seek, chunk) in PartIterator::new(11, 5) {
+    for (number, seek, chunk) in PartIterator::new(11, 5).take(saved_parts) {
         db.create_part(number, seek, chunk, None).unwrap();
     }
     db.flush().unwrap();
@@ -59,6 +61,26 @@ fn create_three_part_state(home: &Path, id: &str) {
 #[tokio::test]
 async fn test_streams_resume_preserves_parts_and_bounds_inflight_requests() -> Result<()> {
     for slots in [1, 2] {
+        let peak = resume_three_parts(slots, 3).await?;
+        assert_eq!(peak, slots, "resume --number {slots}");
+    }
+    Ok(())
+}
+
+// <https://github.com/s3m/s3m/issues/83>: with only the first of the three parts in
+// the saved plan, `streams resume` uploaded that part and completed the upload: the
+// object was 5 bytes of an 11-byte file, with exit 0. It now uploads all three.
+#[tokio::test]
+async fn test_streams_resume_uploads_the_parts_an_interrupted_plan_lacks() -> Result<()> {
+    resume_three_parts(1, 1).await?;
+    Ok(())
+}
+
+/// Resume the upload of [`create_part_state`] against a peer that records what it
+/// receives, and check that the three parts and one completion arrive. Returns the
+/// peak of requests in flight.
+async fn resume_three_parts(slots: usize, saved_parts: usize) -> Result<usize> {
+    {
         let home = tempdir()?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}", listener.local_addr()?);
@@ -70,7 +92,7 @@ async fn test_streams_resume_preserves_parts_and_bounds_inflight_requests() -> R
                 "---\nhosts:\n  s3:\n    endpoint: {url}\n    access_key: XXX\n    secret_key: YYY\n"
             ),
         )?;
-        create_three_part_state(home.path(), "parts-id");
+        create_part_state(home.path(), "parts-id", saved_parts);
         let transcript = home.path().join("resume.log");
         let mut child = Command::new(get_s3m_binary())
             .env("HOME", home.path())
@@ -126,10 +148,9 @@ async fn test_streams_resume_preserves_parts_and_bounds_inflight_requests() -> R
         assert_eq!(shown["status"], "complete");
         assert_eq!(shown["etag"], "\"final-etag\"");
         println!(
-            "resume number={slots} peak={} parts=[5,5,1] bytes=verified completions=1 state=complete exit={status}",
+            "resume number={slots} saved={saved_parts} peak={} parts=[5,5,1] bytes=verified completions=1 state=complete exit={status}",
             probe.peak
         );
-        assert_eq!(probe.peak, slots, "resume --number {slots}");
+        Ok(probe.peak)
     }
-    Ok(())
 }

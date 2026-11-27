@@ -5,7 +5,7 @@ use crate::{
     },
     stream::{part::Part, state},
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 use std::{
     collections::BTreeMap,
@@ -328,6 +328,72 @@ impl Db {
         Ok(previous)
     }
 
+    /// Record the parts to upload, `(number, seek, chunk)` each, in one atomic write:
+    /// after a crash the state has all of them or none. A plan written part by part
+    /// could be cut short, and an upload resumed from it would be completed without
+    /// the missing parts (<https://github.com/s3m/s3m/issues/83>).
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not write the parts
+    pub fn create_parts(
+        &self,
+        parts: impl IntoIterator<Item = (u16, u64, u64)>,
+        checksum: Option<&Checksum>,
+    ) -> Result<()> {
+        let mut batch = sled::Batch::default();
+        for (number, seek, chunk) in parts {
+            let part = Part::new(number, seek, chunk, checksum.cloned());
+            let bytes = to_bytes::<RkyvError>(&part)?;
+            batch.insert(&number.to_be_bytes(), bytes.as_slice());
+        }
+        let tree = self.db_parts()?;
+        tree.apply_batch(batch)?;
+        tree.flush()?;
+        state::touch_metadata(&self.state_dir)?;
+        Ok(())
+    }
+
+    /// The byte range, `(seek, chunk)`, of every part saved for the upload, by part
+    /// number: the parts still to upload and the uploaded ones.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not read the parts, or if a part number is saved both
+    /// as pending and as uploaded with different ranges
+    pub fn part_ranges(&self) -> Result<BTreeMap<u16, (u64, u64)>> {
+        let mut ranges = self.uploaded_part_ranges()?;
+        for part in self.db_parts()?.iter().values() {
+            let part = from_bytes::<Part, RkyvError>(&part?)?;
+            let range = (part.get_seek(), part.get_chunk());
+            if let Some(uploaded) = ranges.insert(part.get_number(), range)
+                && uploaded != range
+            {
+                return Err(anyhow!(
+                    "part {} is saved with two different ranges",
+                    part.get_number()
+                ));
+            }
+        }
+        Ok(ranges)
+    }
+
+    /// The byte range, `(seek, chunk)`, of every uploaded part, by part number.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if can not read the parts
+    pub fn uploaded_part_ranges(&self) -> Result<BTreeMap<u16, (u64, u64)>> {
+        self.db_uploaded()?
+            .iter()
+            .values()
+            .map(|part| {
+                let part = from_bytes::<Part, RkyvError>(&part?)?;
+                Ok((part.get_number(), (part.get_seek(), part.get_chunk())))
+            })
+            .collect()
+    }
+
     /// # Errors
     ///
     /// Will return `Err` if can not insert a `Part`
@@ -442,6 +508,54 @@ mod tests {
         db.create_part(2, 5, 5, checksum(ChecksumAlgorithm::Crc32c))
             .unwrap();
         assert_eq!(db.parts_checksum_algorithm().unwrap(), None);
+    }
+
+    // <https://github.com/s3m/s3m/issues/83>: the plan is written in one batch, with
+    // its checksum algorithm, and the ranges of pending and uploaded parts read back
+    // by part number.
+    #[test]
+    fn test_create_parts_and_part_ranges() {
+        let dir = tempdir().unwrap();
+        let db = Db::new(&test_s3(), "key", "checksum", 1, dir.path()).unwrap();
+        assert!(db.part_ranges().unwrap().is_empty());
+
+        let checksum = Checksum::new(ChecksumAlgorithm::Crc32c);
+        db.create_parts([(1, 0, 5), (2, 5, 5), (3, 10, 1)], Some(&checksum))
+            .unwrap();
+
+        assert_eq!(db.db_parts().unwrap().len(), 3);
+        assert_eq!(
+            db.parts_checksum_algorithm().unwrap(),
+            Some(ChecksumAlgorithm::Crc32c)
+        );
+        let planned = BTreeMap::from([(1, (0, 5)), (2, (5, 5)), (3, (10, 1))]);
+        assert_eq!(db.part_ranges().unwrap(), planned);
+        assert!(db.uploaded_part_ranges().unwrap().is_empty());
+
+        // Part 2 uploaded: it moves to the other tree, the plan is the same.
+        let part = db
+            .get_part(2)
+            .unwrap()
+            .unwrap()
+            .set_etag("\"e\"".to_string());
+        db.db_uploaded()
+            .unwrap()
+            .insert(
+                2_u16.to_be_bytes(),
+                to_bytes::<RkyvError>(&part).unwrap().as_slice(),
+            )
+            .unwrap();
+        db.db_parts().unwrap().remove(2_u16.to_be_bytes()).unwrap();
+        assert_eq!(db.part_ranges().unwrap(), planned);
+        assert_eq!(
+            db.uploaded_part_ranges().unwrap(),
+            BTreeMap::from([(2, (5, 5))])
+        );
+
+        // The same number pending with another range can't be trusted.
+        db.create_part(2, 4, 6, None).unwrap();
+        let error = db.part_ranges().unwrap_err().to_string();
+        assert_eq!(error, "part 2 is saved with two different ranges");
     }
 
     // <https://github.com/s3m/s3m/issues/77>: the algorithm of the upload in progress
