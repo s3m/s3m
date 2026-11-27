@@ -751,7 +751,7 @@ fn forget_gone_upload(s3: &S3, db: &Db, answer: &str) -> anyhow::Error {
         return anyhow!(
             "the server has no such multipart upload, but the host's endpoint, bucket or \
              keys are not the ones this upload was started with, so its saved state was \
-             kept.\n{answer}"
+             kept. Run the upload again to start a new one with the host as it is now.\n{answer}"
         );
     }
     if let Err(forget) = forget_aborted_upload(db) {
