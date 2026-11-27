@@ -2532,8 +2532,7 @@ mod tests {
 
     // #84: every part is uploaded, and the completion answers NoSuchUpload (the upload
     // was aborted, or an earlier completion went through and its answer was lost).
-    #[tokio::test]
-    async fn a_completion_for_an_upload_the_server_no_longer_has_forgets_the_upload() {
+    async fn assert_completion_no_such_upload_forgets_state(status: usize) {
         let mut server = Server::new_async().await;
         let s3 = checksum_s3(&server);
         let dir = tempfile::tempdir().unwrap();
@@ -2561,7 +2560,7 @@ mod tests {
         let complete = server
             .mock("POST", "/bucket/key")
             .match_query(Matcher::UrlEncoded("uploadId".into(), "uid".into()))
-            .with_status(404)
+            .with_status(status)
             .with_body(NO_SUCH_UPLOAD)
             .expect(1)
             .create_async()
@@ -2574,10 +2573,23 @@ mod tests {
 
         sent.assert_async().await;
         complete.assert_async().await;
-        assert!(error.contains("no longer exists on the server"), "{error}");
+        assert!(
+            error.contains("no longer exists on the server"),
+            "HTTP {status} NoSuchUpload at completion must clear the upload: {error}"
+        );
         assert_eq!(db.upload_id().unwrap(), None);
         assert!(db.db_uploaded().unwrap().is_empty());
         assert_eq!(db.check().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_completion_for_an_upload_the_server_no_longer_has_forgets_the_upload() {
+        assert_completion_no_such_upload_forgets_state(404).await;
+    }
+
+    #[tokio::test]
+    async fn an_embedded_no_such_upload_at_completion_forgets_the_upload() {
+        assert_completion_no_such_upload_forgets_state(200).await;
     }
 
     // #84 review: only a 404 proves the upload is gone. The same error code from
