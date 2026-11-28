@@ -83,6 +83,7 @@ jobs:
   test-portable:
     name: Test (Portable)
     strategy:
+      fail-fast: false
       matrix:
         os:
           - macOS-latest

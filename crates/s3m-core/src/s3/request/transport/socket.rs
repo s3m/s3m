@@ -20,6 +20,16 @@ use tokio::{
 };
 use tower_service::Service;
 
+#[cfg(all(
+    test,
+    any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        windows
+    )
+))]
+mod native_queue_tests;
 #[cfg(test)]
 pub(crate) mod test_dns;
 
@@ -99,6 +109,11 @@ pub(super) struct Progress {
 }
 
 impl Activity {
+    #[cfg(test)]
+    pub(super) fn test_socket_written(&self) -> u64 {
+        self.socket_written.load(Ordering::Relaxed)
+    }
+
     pub(in crate::s3::request) fn last_read(&self) -> Option<Instant> {
         self.progress().and_then(|progress| progress.read_at)
     }

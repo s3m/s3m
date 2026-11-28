@@ -43,6 +43,7 @@ pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(test)]
 tokio::task_local! {
     pub(crate) static TEST_CONNECT_TIMEOUT: Duration;
+    pub(crate) static TEST_UPLOAD_TRACE: (Instant, std::cell::RefCell<Vec<String>>);
 }
 
 fn connect_timeout() -> Duration {
@@ -339,7 +340,8 @@ impl UploadWatch {
     ) -> (&'static str, Instant) {
         // Once the upload is drained, TLS control writes cannot put the
         // request back in the upload phase. More HTTP writes reopen the check.
-        let queue = if self.drained_at == Some(progress.written) {
+        let already_drained = self.drained_at == Some(progress.written);
+        let queue = if already_drained {
             Some(0)
         } else {
             tcp.queued()
@@ -399,6 +401,18 @@ impl UploadWatch {
         } else {
             *last_progress
         };
+        #[cfg(test)]
+        let _ = TEST_UPLOAD_TRACE.try_with(|(started, samples)| {
+            let elapsed = now.saturating_duration_since(*started).as_millis();
+            let idle_for = now.saturating_duration_since(*last_progress).as_millis();
+            let socket_written = tcp.test_socket_written();
+            samples.borrow_mut().push(format!(
+                "t={elapsed}ms queue={queue:?} already_drained={already_drained} \
+                 socket_written={socket_written} request_written={written} phase={phase:?} \
+                 idle_for={idle_for}ms budget={}ms",
+                budget.as_millis()
+            ));
+        });
         (phase, start + budget)
     }
 }

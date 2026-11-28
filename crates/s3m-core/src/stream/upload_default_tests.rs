@@ -3,7 +3,9 @@ use crate::{
     s3::{
         Credentials, Error, Region, RequestOptions, S3,
         actions::PutObject,
-        request::{TEST_IDLE_TIMEOUT, TEST_QUEUE_UNAVAILABLE, TEST_RESOLVE, Transport},
+        request::{
+            TEST_IDLE_TIMEOUT, TEST_QUEUE_UNAVAILABLE, TEST_RESOLVE, TEST_UPLOAD_TRACE, Transport,
+        },
     },
     stream::db::Db,
 };
@@ -11,11 +13,11 @@ use anyhow::{Context, Result, ensure};
 use rustls::{ClientConfig, RootCertStore, ServerConfig, pki_types::PrivatePkcs8KeyDer};
 use secrecy::SecretString;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     io::{self, Write as _},
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, UNIX_EPOCH},
@@ -235,16 +237,29 @@ async fn timeout_allows_a_slow_receiver_without_queue_statistics() -> Result<()>
         .context("a failed queue sample must allow a slowly draining upload to finish")
 }
 
+#[derive(Default)]
+struct SlowReceiverStats {
+    recv_buffer: OnceLock<io::Result<usize>>,
+    body_read: AtomicUsize,
+}
+
 async fn slow_receiver(size: usize, chunk: usize, delay: Duration, idle: Duration) -> Result<()> {
     let listener = small_window_listener()?;
     let payload = vec![42; size];
     let fixture = Fixture::new(format!("http://{}", listener.local_addr()?), &payload)?;
+    let receiver = Arc::new(SlowReceiverStats::default());
+    let server_stats = Arc::clone(&receiver);
     let server = tokio::spawn(async move {
-        let mut socket = read_put_headers(&listener).await?;
+        let (socket, _) = listener.accept().await?;
+        let _ = server_stats
+            .recv_buffer
+            .set(socket2::SockRef::from(&socket).recv_buffer_size());
+        let mut socket = read_headers(socket).await?;
         let mut block = vec![0; chunk];
         for expected in payload.chunks_exact(chunk) {
             tokio::time::sleep(delay).await;
             socket.read_exact(&mut block).await?;
+            server_stats.body_read.fetch_add(chunk, Ordering::Relaxed);
             assert_eq!(block, expected);
         }
         reply_stored(socket).await
@@ -253,20 +268,41 @@ async fn slow_receiver(size: usize, chunk: usize, delay: Duration, idle: Duratio
     let start = Instant::now();
     let mut request = fixture.request();
     request.globals.retries = 1;
-    let result = timeout(
-        Duration::from_secs(30),
-        TEST_IDLE_TIMEOUT.scope(idle, upload(request)),
-    )
-    .await
-    .context("the slow loopback receiver must finish within the watchdog")
-    .and_then(|result| result);
+    let (result, samples) = TEST_UPLOAD_TRACE
+        .scope((start, RefCell::default()), async {
+            let result = timeout(
+                Duration::from_secs(30),
+                TEST_IDLE_TIMEOUT.scope(idle, upload(request)),
+            )
+            .await
+            .context("the slow loopback receiver must finish within the watchdog")
+            .and_then(|result| result);
+            (
+                result,
+                TEST_UPLOAD_TRACE.with(|(_, samples)| samples.take()),
+            )
+        })
+        .await;
     if result.is_err() {
         server.abort();
     }
-    let report = result.context("TCP send queue progress must keep the PUT alive")?;
-    server.await??;
-    assert!(start.elapsed() > idle);
-    assert_eq!(report, format!("ETag: {ETAG}\n"));
+    let diagnostics = || {
+        let body_read = receiver.body_read.load(Ordering::Relaxed);
+        let recv_buffer = receiver.recv_buffer.get();
+        format!(
+            "server_body_read={body_read}/{size} bytes, accepted SO_RCVBUF={recv_buffer:?}\n{}",
+            samples.join("\n")
+        )
+    };
+    let report = result
+        .context("TCP send queue progress must keep the PUT alive")
+        .with_context(diagnostics)?;
+    server
+        .await
+        .with_context(diagnostics)?
+        .with_context(diagnostics)?;
+    assert!(start.elapsed() > idle, "{}", diagnostics());
+    assert_eq!(report, format!("ETag: {ETAG}\n"), "{}", diagnostics());
     Ok(())
 }
 

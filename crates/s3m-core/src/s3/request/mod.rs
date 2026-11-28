@@ -31,9 +31,12 @@ mod upload_stream;
 
 #[cfg(test)]
 pub(crate) use timeout::TEST_IDLE_TIMEOUT;
-#[cfg(test)]
-pub(crate) use transport::socket::{TEST_QUEUE_UNAVAILABLE, test_dns::TEST_RESOLVE};
 pub(crate) use transport::{CONNECT_TIMEOUT, Transport};
+#[cfg(test)]
+pub(crate) use transport::{
+    TEST_UPLOAD_TRACE,
+    socket::{TEST_QUEUE_UNAVAILABLE, test_dns::TEST_RESOLVE},
+};
 
 const DEFAULT_FRAMED_CHUNK_SIZE_BYTES: usize = 1024 * 128;
 
