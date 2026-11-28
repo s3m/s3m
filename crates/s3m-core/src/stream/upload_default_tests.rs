@@ -217,11 +217,16 @@ async fn timeout_preserves_the_status_of_a_stalled_error_body() -> Result<()> {
 
 #[tokio::test]
 async fn timeout_allows_a_slow_receiver_to_drain_the_buffered_put_tail() -> Result<()> {
+    // macOS loopback ignores the small receive buffer (CI measured 326,640 bytes), so the
+    // receiver works through ~320 KiB the client can't see, then the window reopens in a
+    // burst: at ~200 KiB/s the client's send queue stays flat for up to ~1.6 s. The idle
+    // budget must exceed that burst, and the transfer must outlast the budget, for the test
+    // to show that send-queue drain keeps the upload alive.
     slow_receiver(
-        1024 * 1024,
+        2 * 1024 * 1024,
         1024,
         Duration::from_millis(5),
-        Duration::from_secs(2),
+        Duration::from_secs(4),
     )
     .await
 }
