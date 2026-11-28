@@ -416,3 +416,50 @@ fn queued(socket: &Socket, written: u64) -> Option<u64> {
 fn queued(_: &Socket, _: u64) -> Option<u64> {
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        super::{UploadProgress, UploadState, UploadWatch},
+        *,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn timeout_fallback_caps_a_stalled_streaming_put() {
+        let body_ready = Instant::now();
+        let last_write = body_ready + Duration::from_secs(30);
+        let progress = Progress {
+            written_at: Some(last_write),
+            written: 1024 * 1024,
+            ..Progress::default()
+        };
+        // A ready body stalled after a partial write. With no socket statistics,
+        // the 1 MiB tail makes the uncapped allowance longer than 15 minutes.
+        let activity = Activity {
+            monitor: Mutex::new(None),
+            progress: Mutex::new(Some(progress)),
+            socket_written: AtomicU64::new(progress.written),
+            stale: std::sync::atomic::AtomicBool::new(false),
+        };
+        let upload = UploadProgress {
+            state: UploadState::Ready(body_ready),
+            written_before: Some(0),
+        };
+        let mut last_progress = last_write;
+        let (phase, deadline) = UploadWatch::default().deadline(
+            &upload,
+            &activity,
+            progress,
+            Duration::from_secs(60),
+            last_write + Duration::from_secs(5),
+            &mut last_progress,
+        );
+        assert_eq!(phase, "upload");
+        assert_eq!(
+            deadline - last_write,
+            Duration::from_mins(15),
+            "a stalled streaming PUT must use the fallback cap from its last write"
+        );
+    }
+}

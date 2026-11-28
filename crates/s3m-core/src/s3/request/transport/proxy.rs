@@ -62,7 +62,6 @@ mod tests {
         *,
     };
     use crate::s3::request::{TEST_IDLE_TIMEOUT, TEST_QUEUE_UNAVAILABLE};
-    use futures::StreamExt as _;
     use rustls::{RootCertStore, ServerConfig, pki_types::PrivatePkcs8KeyDer};
     use std::{
         cell::Cell,
@@ -205,6 +204,8 @@ mod tests {
             .await
             .expect("the last PUT must reuse the same connection")
             .unwrap();
+        // The peer has read the entire fixed-length body and sends no reply.
+        // No request writes or response bytes remain to extend the watchdog.
         tokio::time::pause();
         let start = Instant::now();
         let result = timeout(Duration::from_mins(30), request)
@@ -245,54 +246,6 @@ mod tests {
         assert!(
             waited <= Duration::from_secs(15 * 60 + 2),
             "a buffered upload must time out within the fallback cap: {waited:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn timeout_fallback_caps_a_stalled_streaming_put() {
-        let listener = tokio::net::TcpSocket::new_v4().unwrap();
-        listener.set_recv_buffer_size(4096).unwrap();
-        listener.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-        let listener = listener.listen(1).unwrap();
-        let url = format!("http://{}/key", listener.local_addr().unwrap());
-        let transport = Transport::build(tls().0, Matcher::builder().build());
-        let size = 16 * 1024 * 1024;
-        let body = reqwest::Body::wrap_stream(
-            futures::stream::iter([Ok::<_, std::io::Error>(vec![0; size])])
-                .chain(futures::stream::pending()),
-        );
-        let put = reqwest::Client::new().put(url).body(body);
-        let request =
-            tokio::spawn(
-                async move { TEST_QUEUE_UNAVAILABLE.scope((), transport.send(put)).await },
-            );
-        let (socket, _) = timeout(Duration::from_secs(5), listener.accept())
-            .await
-            .unwrap()
-            .unwrap();
-        let mut socket = BufReader::new(socket);
-        assert!(headers(&mut socket).await.starts_with("PUT /key "));
-        tokio::time::pause();
-        let start = Instant::now();
-        let result = timeout(Duration::from_mins(15) + Duration::from_secs(5), request)
-            .await
-            .expect("an unread socket must time out within the streaming fallback cap")
-            .unwrap();
-        let waited = start.elapsed();
-        assert!(
-            (Duration::from_secs(298)..=Duration::from_secs(902)).contains(&waited),
-            "a stalled streaming PUT must use the bounded drain allowance: {waited:?}"
-        );
-        println!("stalled streaming PUT: {waited:?}");
-        assert!(
-            matches!(
-                result,
-                Err(crate::s3::Error::ResponseTimeout {
-                    phase: "upload",
-                    ..
-                })
-            ),
-            "{result:?}"
         );
     }
 
@@ -412,7 +365,16 @@ mod tests {
                 socket.flush().await.unwrap();
             }
             socket.write_all(b"x").await.unwrap();
-            socket.flush().await.unwrap();
+            socket.shutdown().await.unwrap();
+            // The client can send TLS key updates in reply to the server's updates.
+            let tcp = socket.get_mut().get_mut().0;
+            timeout(
+                Duration::from_secs(5),
+                tokio::io::copy(tcp, &mut tokio::io::sink()),
+            )
+            .await
+            .expect("the client must close after the TLS response")
+            .unwrap();
         });
         let request = reqwest::Client::new().get(url);
         let body = timeout(

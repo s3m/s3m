@@ -415,8 +415,8 @@ mod tests {
     };
     use tokio::time::Duration;
     use tokio::{
-        io::{AsyncWriteExt, ReadBuf},
-        net::TcpListener,
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadBuf},
+        net::{TcpListener, TcpStream},
         time::{Instant, sleep, timeout},
     };
 
@@ -427,6 +427,30 @@ mod tests {
             Some("bucket".into()),
             true,
         )
+    }
+
+    async fn read_request_headers(socket: &mut TcpStream) {
+        let mut reader = BufReader::new(socket);
+        let mut line = String::new();
+        loop {
+            assert!(reader.read_line(&mut line).await.unwrap() > 0);
+            if line == "\r\n" {
+                return;
+            }
+            line.clear();
+        }
+    }
+
+    async fn finish_response(mut socket: TcpStream) {
+        socket.shutdown().await.unwrap();
+        // Keep the read side open until the client has finished with the connection.
+        timeout(
+            Duration::from_secs(5),
+            tokio::io::copy(&mut socket, &mut tokio::io::sink()),
+        )
+        .await
+        .expect("the client must close after the response")
+        .unwrap();
     }
 
     #[tokio::test]
@@ -525,14 +549,16 @@ mod tests {
         let s3 = loopback_s3(format!("http://{addr}"));
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
+            read_request_headers(&mut socket).await;
             socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n")
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
                 .await
                 .unwrap();
             for byte in b"abcdefgh" {
                 sleep(Duration::from_millis(100)).await;
                 socket.write_u8(*byte).await.unwrap();
             }
+            finish_response(socket).await;
         });
 
         let start = Instant::now();
@@ -566,17 +592,17 @@ mod tests {
         let idle = Duration::from_millis(500);
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 256];
-            assert!(socket.read(&mut request).await.unwrap() > 0);
+            read_request_headers(&mut socket).await;
             socket.write_all(b"HTTP/1.1 200 OK\r\n").await.unwrap();
             for _ in 0..6 {
                 sleep(Duration::from_millis(125)).await;
                 socket.write_all(b"X-Progress: yes\r\n").await.unwrap();
             }
             socket
-                .write_all(b"Content-Length: 0\r\n\r\n")
+                .write_all(b"Content-Length: 0\r\nConnection: close\r\n\r\n")
                 .await
                 .unwrap();
+            finish_response(socket).await;
         });
         let result = timeout(
             Duration::from_secs(10),
