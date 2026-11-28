@@ -436,7 +436,11 @@ async fn an_append_during_the_put_fails_after_success_without_caching_the_etag()
     let file = fixture.file.clone();
     // Preserve mtime so the regression exercises the post-PUT size check.
     let mtime = UNIX_EPOCH + Duration::from_secs(10);
-    std::fs::File::open(&file)?.set_modified(mtime)?;
+    // Windows needs write access to change a file's times.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&file)?
+        .set_modified(mtime)?;
     let server = tokio::spawn(async move {
         let mut socket = read_put_headers(&listener).await?;
         let mut stored = [0; 4];

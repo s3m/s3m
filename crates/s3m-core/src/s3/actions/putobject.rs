@@ -458,11 +458,21 @@ mod tests {
         };
 
         fs::write(&file, "original").unwrap();
-        fs::File::open(&file).unwrap().set_modified(mtime).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
         let path = file.clone();
         on_next_body_open(move || {
             fs::write(&path, "changed!").unwrap();
-            fs::File::open(path).unwrap().set_modified(mtime).unwrap();
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
         });
 
         let request = unsigned_upload(&s3, &file, &db, blake3.as_str(), checksum);
