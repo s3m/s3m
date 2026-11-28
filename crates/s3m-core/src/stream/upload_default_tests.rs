@@ -94,6 +94,19 @@ async fn read_put_headers(listener: &TcpListener) -> Result<BufReader<TcpStream>
     read_headers(socket).await
 }
 
+/// A loopback listener whose accepted sockets advertise a small receive window, so an
+/// upload to a slow reader waits in the client's send queue, where s3m sees it drain.
+/// Without it, macOS loopback buffers a whole MiB on the receiving side at once, and the
+/// client can't tell a slow reader from a stuck one (the documented limit).
+fn small_window_listener() -> Result<TcpListener> {
+    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
+    socket.set_recv_buffer_size(4096)?;
+    socket.bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into())?;
+    socket.listen(16)?;
+    socket.set_nonblocking(true)?;
+    Ok(TcpListener::from_std(socket.into())?)
+}
+
 async fn read_headers<T: AsyncRead + Unpin>(socket: T) -> Result<BufReader<T>> {
     let mut socket = BufReader::new(socket);
     let mut line = String::new();
@@ -223,7 +236,7 @@ async fn timeout_allows_a_slow_receiver_without_queue_statistics() -> Result<()>
 }
 
 async fn slow_receiver(size: usize, chunk: usize, delay: Duration, idle: Duration) -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener = small_window_listener()?;
     let payload = vec![42; size];
     let fixture = Fixture::new(format!("http://{}", listener.local_addr()?), &payload)?;
     let server = tokio::spawn(async move {
