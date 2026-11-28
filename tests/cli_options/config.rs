@@ -1,7 +1,14 @@
 use super::support::*;
 use anyhow::{Context, Result};
 use mockito::{Matcher, Server};
+use std::{path::Path, process::Command};
 use tempfile::tempdir;
+
+fn default_config_command(home: &Path) -> Command {
+    let mut command = s3m_command(home);
+    command.env_remove("S3M_HOME");
+    command
+}
 
 #[test]
 fn test_config_flag_selects_endpoint_and_home_config_is_default() -> Result<()> {
@@ -36,7 +43,14 @@ fn test_config_flag_selects_endpoint_and_home_config_is_default() -> Result<()> 
 
     #[cfg(unix)]
     {
-        let output = s3m(home.path(), &["get", "s3/bucket/key", "--meta"])?;
+        let mut command = default_config_command(home.path());
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "S3M_HOME" && value.is_none()),
+            "the default-config test must exercise HOME with S3M_HOME unset"
+        );
+        let output = command.args(["get", "s3/bucket/key", "--meta"]).output()?;
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(meta_origin(&output), "home");
         home_head.assert();
@@ -92,7 +106,11 @@ fn test_config_errors_fail_before_any_request() -> Result<()> {
     for (config_args, expected) in cases {
         let mut args = config_args.clone();
         args.extend(["get", "s3/bucket/key", "--meta"]);
-        let output = s3m(home.path(), &args)?;
+        let output = if config_args.is_empty() {
+            default_config_command(home.path()).args(args).output()?
+        } else {
+            s3m(home.path(), &args)?
+        };
         let err = stderr(&output);
         assert!(!output.status.success(), "{config_args:?} succeeded");
         assert!(err.contains(&expected), "{config_args:?}: {err}");

@@ -146,6 +146,13 @@ impl Checksum {
 /// # Errors
 /// Will return an error if the file cannot be opened
 pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)> {
+    sha256_md5_digest_with(file_path, |_| {}).await
+}
+
+pub(crate) async fn sha256_md5_digest_with(
+    file_path: &Path,
+    mut on_chunk: impl FnMut(&[u8]),
+) -> Result<(Bytes, Bytes, usize)> {
     let mut md5hasher = Checksum::new(ChecksumAlgorithm::Md5).hasher();
     let mut sha256hasher = Checksum::new(ChecksumAlgorithm::Sha256).hasher();
 
@@ -158,6 +165,7 @@ pub async fn sha256_md5_digest(file_path: &Path) -> Result<(Bytes, Bytes, usize)
     while let Some(bytes) = stream.try_next().await? {
         md5hasher.update(&bytes);
         sha256hasher.update(&bytes);
+        on_chunk(&bytes);
         length += &bytes.len();
     }
 

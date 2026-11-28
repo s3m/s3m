@@ -6,13 +6,20 @@ use crate::{
         checksum::{Checksum, ChecksumAlgorithm},
         responses::CompleteMultipartUploadResult,
     },
-    stream::{db::Db, iterator::PartIterator, part::Part, retry::backoff_secs, upload_report},
+    stream::{
+        db::Db,
+        iterator::PartIterator,
+        part::Part,
+        retry::backoff_secs,
+        source_file::{SourceFile, changed_file_reason},
+        upload_report,
+    },
 };
 use anyhow::{Context, Result, anyhow};
 use futures::stream::{FuturesUnordered, StreamExt};
 use rkyv::{from_bytes, rancor::Error as RkyvError, to_bytes};
 use sled::transaction::{TransactionError, Transactional};
-use std::{collections::BTreeMap, path::Path, time::SystemTime};
+use std::{collections::BTreeMap, path::Path};
 use tokio::time::{Duration, sleep};
 
 pub struct MultipartUploadRequest<'a> {
@@ -165,58 +172,9 @@ pub async fn upload_multipart(request: MultipartUploadRequest<'_>) -> Result<Str
     .await
 }
 
-struct SourceFile {
-    size: u64,
-    modified: SystemTime,
-}
-
-impl SourceFile {
-    async fn read(file: &Path) -> std::io::Result<Self> {
-        let metadata = tokio::fs::metadata(file).await?;
-        Ok(Self {
-            size: metadata.len(),
-            modified: metadata.modified()?,
-        })
-    }
-
-    fn modified_millis(&self) -> Option<u128> {
-        self.modified
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|since| since.as_millis())
-    }
-
-    async fn change(&self, file: &Path) -> Option<String> {
-        match Self::read(file).await {
-            Ok(now) if now.size != self.size => Some(size_change(self.size, now.size)),
-            Ok(now) if now.modified != self.modified => {
-                Some("modification time changed".to_string())
-            }
-            Ok(_) => None,
-            Err(error) => Some(format!(
-                "could not verify the file's size and modification time: {error}"
-            )),
-        }
-    }
-}
-
-fn size_change(before: u64, after: u64) -> String {
-    format!("size changed from {before} to {after} bytes")
-}
-
 async fn check_source_size(request: &MultipartUploadRequest<'_>) -> Result<SourceFile> {
     let source = SourceFile::read(request.file).await?;
-    let change = if source.size == request.file_size {
-        // The file can also have been rewritten with the same size while its hash was
-        // computed, before the upload started.
-        request
-            .file_mtime
-            .filter(|expected| source.modified_millis() != Some(*expected))
-            .map(|_| "modification time changed since it was read".to_string())
-    } else {
-        Some(size_change(request.file_size, source.size))
-    };
-    if let Some(change) = change {
+    if let Some(change) = source.change_since_hash(request.file_size, request.file_mtime) {
         let upload_id = request.sdb.upload_id()?;
         return Err(changed_file_error(
             request.s3,
@@ -237,7 +195,7 @@ async fn changed_file_error(
     db: &Db,
     change: &str,
 ) -> anyhow::Error {
-    let reason = format!("the file changed during the upload: {change}");
+    let reason = changed_file_reason(change);
     let Some(upload_id) = upload_id else {
         return anyhow!("{reason}. Run the upload again.");
     };

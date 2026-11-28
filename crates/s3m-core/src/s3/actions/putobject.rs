@@ -1,12 +1,17 @@
-use crate::s3::error::Result;
+use crate::s3::error::{Error, Result};
 use crate::s3::{
     S3,
     actions::{Action, response_error, upload_response_headers},
-    checksum::{Checksum, sha256_md5_digest},
+    checksum::{
+        Checksum, ChecksumAlgorithm, hasher::ChecksumHasher, sha256_md5_digest,
+        sha256_md5_digest_with,
+    },
     object_lock::ObjectLock,
     options::RequestOptions,
-    request,
+    request::{self, source_changed},
 };
+use base64ct::{Base64, Encoding};
+use bytes::Bytes;
 use reqwest::Method;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -50,10 +55,75 @@ impl<'a> PutObject<'a> {
     ///
     /// Will return `Err` if can not make the request
     pub async fn request(self, s3: &S3, globals: RequestOptions) -> Result<BTreeMap<&str, String>> {
-        let (sha, md5, length) = sha256_md5_digest(self.file).await?;
+        self.send(s3, globals, None)
+            .await
+            .map(|(headers, _)| headers)
+    }
+
+    pub(crate) async fn request_checked(
+        self,
+        s3: &S3,
+        globals: RequestOptions,
+        file_size: u64,
+        file_blake3: &str,
+    ) -> Result<(BTreeMap<&'static str, String>, Option<Checksum>)> {
+        self.send(s3, globals, Some((file_size, file_blake3))).await
+    }
+
+    async fn digests(
+        &mut self,
+        size: u64,
+        expected_blake3: &str,
+    ) -> Result<(Bytes, Bytes, usize, blake3::Hash)> {
+        let mut blake3 = blake3::Hasher::new();
+        let checksum = self.additional_checksum.as_mut();
+        let mut extra = checksum
+            .as_deref()
+            .filter(|checksum| checksum.algorithm != ChecksumAlgorithm::Sha256)
+            .map(Checksum::hasher);
+        let (sha, md5, length) = sha256_md5_digest_with(self.file, |bytes| {
+            blake3.update(bytes);
+            if let Some(hasher) = &mut extra {
+                hasher.update(bytes);
+            }
+        })
+        .await?;
+        if u64::try_from(length).ok() != Some(size) {
+            return Err(source_changed(&format!(
+                "size changed from {size} to {length} bytes"
+            )));
+        }
+        let digest = blake3.finalize();
+        if digest.to_hex().as_str() != expected_blake3 {
+            return Err(source_changed("BLAKE3 checksum changed since it was read"));
+        }
+        // PutObject's x-amz-checksum-* describes the same payload as the signing digests.
+        // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
+        if let Some(checksum) = checksum {
+            let bytes = extra.map_or_else(|| sha.clone(), ChecksumHasher::finalize);
+            checksum.checksum = Base64::encode_string(&bytes);
+        }
+        Ok((sha, md5, length, digest))
+    }
+
+    async fn send(
+        mut self,
+        s3: &S3,
+        globals: RequestOptions,
+        source: Option<(u64, &str)>,
+    ) -> Result<(BTreeMap<&'static str, String>, Option<Checksum>)> {
+        let (sha, md5, length, expected_blake3) = if let Some((size, digest)) = source {
+            let (sha, md5, length, digest) = self.digests(size, digest).await?;
+            (sha, md5, length, Some(digest))
+        } else {
+            let (sha, md5, length) = sha256_md5_digest(self.file).await?;
+            (sha, md5, length, None)
+        };
 
         let (url, headers) = &self.sign(s3, sha.as_ref(), Some(md5.as_ref()), Some(length))?;
-        let progress = self.sender.clone().map(|sender| {
+        #[cfg(test)]
+        tests::before_body_open();
+        let progress = self.sender.take().map(|sender| {
             let callback: request::ProgressCallback = Arc::new(move |bytes_count| {
                 if sender.send(bytes_count).is_err() {
                     log::trace!("Progress receiver dropped");
@@ -62,12 +132,12 @@ impl<'a> PutObject<'a> {
             callback
         });
 
-        let response = request::request(
+        let response = request::request_with_file(
             s3.client(),
             url.clone(),
             self.http_method()?,
             headers,
-            Some(Path::new(self.file)),
+            Some((self.file, expected_blake3)),
             progress,
             globals.throttle,
         )
@@ -78,9 +148,28 @@ impl<'a> PutObject<'a> {
             if let Some(etag) = response.headers().get("ETag") {
                 h.insert("ETag", etag.to_str()?.to_string());
             }
-            Ok(h)
+            Ok((h, self.additional_checksum))
         } else {
-            Err(response_error(response).await)
+            let error = response_error(response).await;
+            if let Some((size, digest)) = source
+                && matches!(
+                    error.code(),
+                    Some("BadDigest" | "XAmzContentSHA256Mismatch")
+                )
+            {
+                // The body is read after signing. Check if a rewrite caused the rejection.
+                match self.digests(size, digest).await {
+                    Err(Error::Io(error)) => {
+                        return Err(source_changed(&format!(
+                            "could not verify the file: {error}"
+                        )));
+                    }
+                    result => {
+                        result?;
+                    }
+                }
+            }
+            Err(error)
         }
     }
 }
@@ -150,82 +239,315 @@ impl Action for PutObject<'_> {
 )]
 mod tests {
     use super::*;
-    use crate::s3::{
-        tools, {Credentials, Region, S3},
+    use crate::{
+        s3::{Credentials, Region, tools},
+        stream::{
+            db::Db,
+            upload_default::{UploadRequest, upload},
+        },
     };
     use base64ct::{Base64, Encoding};
-    use log::{LevelFilter, Log, Metadata, Record};
+    use mockito::Matcher;
     use secrecy::SecretString;
-    use std::{cell::Cell, fs, path::PathBuf};
+    use std::{
+        cell::Cell,
+        fs, io,
+        path::PathBuf,
+        time::{Duration, UNIX_EPOCH},
+    };
 
     thread_local! {
-        static FILE_TO_REWRITE: Cell<Option<PathBuf>> = const { Cell::new(None) };
+        static ON_BODY_OPEN: Cell<Option<Box<dyn FnOnce()>>> = const { Cell::new(None) };
     }
 
-    struct RewriteAfterChecksum;
-
-    impl Log for RewriteAfterChecksum {
-        fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
+    pub(super) fn before_body_open() {
+        if let Some(hook) = ON_BODY_OPEN.take() {
+            hook();
         }
-
-        fn log(&self, record: &Record<'_>) {
-            // PutObject logs this after calculating the digest and before opening the body.
-            if record.args().to_string().starts_with("URL to sign: ")
-                && let Some(path) = FILE_TO_REWRITE.take()
-            {
-                fs::write(path, "changed!").unwrap();
-            }
-        }
-
-        fn flush(&self) {}
     }
 
-    /// Restores the maximum log level when the test ends, also when it fails.
-    struct RestoreLevel(LevelFilter);
+    fn on_next_body_open(hook: impl FnOnce() + 'static) {
+        ON_BODY_OPEN.set(Some(Box::new(hook)));
+    }
 
-    impl Drop for RestoreLevel {
-        fn drop(&mut self) {
-            log::set_max_level(self.0);
-            FILE_TO_REWRITE.take();
+    #[tokio::test]
+    async fn put_object_checks_the_source_after_a_server_digest_rejection() {
+        for (code, checked, rewrite) in [
+            ("BadDigest", false, true),
+            ("BadDigest", true, false),
+            ("XAmzContentSHA256Mismatch", true, false),
+        ] {
+            assert_digest_rejection(code, checked, rewrite).await;
+        }
+    }
+
+    async fn assert_digest_rejection(code: &str, checked: bool, rewrite: bool) {
+        let mut server = mockito::Server::new_async().await;
+        let s3 = loopback_s3(server.url());
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("body");
+        fs::write(&file, "original").unwrap();
+        let reject = server
+            .mock("PUT", "/bucket/key")
+            .match_header(
+                "content-md5",
+                Base64::encode_string(&md5::compute(b"original").0).as_str(),
+            )
+            .match_body(if rewrite { "changed!" } else { "original" })
+            .with_status(400)
+            .with_body(format!("<Error><Code>{code}</Code></Error>"))
+            .create_async()
+            .await;
+
+        if rewrite {
+            let path = file.clone();
+            on_next_body_open(move || fs::write(path, "changed!").unwrap());
+        }
+        let action = PutObject::new("key", &file, None, None, None, None, None);
+        let options = RequestOptions::default();
+        let result = if checked {
+            let digest = blake3::hash(b"original").to_hex();
+            action
+                .request_checked(&s3, options, 8, digest.as_str())
+                .await
+                .map(|(headers, _)| headers)
+        } else {
+            action.request(&s3, options).await
+        };
+
+        reject.assert_async().await;
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), Some(code));
+    }
+
+    fn loopback_s3(endpoint: String) -> S3 {
+        loopback_s3_with_signing(endpoint, false)
+    }
+
+    fn loopback_s3_with_signing(endpoint: String, no_sign_request: bool) -> S3 {
+        S3::new(
+            &Credentials::new("test", &SecretString::new("test".into())),
+            &Region::custom("test", endpoint),
+            Some("bucket".into()),
+            no_sign_request,
+        )
+    }
+
+    fn sha256_of(bytes: &[u8]) -> Checksum {
+        let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
+        checksum.digest(bytes).unwrap();
+        checksum
+    }
+
+    fn unsigned_upload<'a>(
+        s3: &'a S3,
+        file: &'a Path,
+        db: &'a Db,
+        blake3: &'a str,
+        checksum: Checksum,
+    ) -> UploadRequest<'a> {
+        UploadRequest {
+            s3,
+            key: "key",
+            file,
+            file_size: 8,
+            file_mtime: None,
+            file_blake3: blake3,
+            sdb: db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: Some(checksum),
+            globals: RequestOptions {
+                retries: 2,
+                ..RequestOptions::default()
+            },
         }
     }
 
     #[tokio::test]
-    async fn put_object_propagates_bad_digest_for_a_file_changed_after_hashing() {
-        // The only test in this crate that installs a logger: a logger can be set once
-        // per process, and the hook only acts on this test's thread.
-        log::set_logger(&RewriteAfterChecksum).unwrap();
+    async fn unsigned_put_derives_its_checksum_from_the_verified_read_on_every_attempt() {
         let mut server = mockito::Server::new_async().await;
-        let s3 = S3::new(
-            &Credentials::new("test", &SecretString::new("test".into())),
-            &Region::custom("test", server.url()),
-            Some("bucket".into()),
-            false,
-        );
-        let file = tempfile::NamedTempFile::new().unwrap();
-        fs::write(file.path(), "original").unwrap();
-        let reject = server.mock("PUT", "/bucket/key")
-            .match_header("content-md5", Base64::encode_string(&md5::compute(b"original").0).as_str())
+        let s3 = loopback_s3_with_signing(server.url(), true);
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("body");
+        fs::write(&file, "original").unwrap();
+        let blake3 = blake3::hash(b"original").to_hex();
+        let db = Db::new(&s3, "key", blake3.as_str(), 0, dir.path()).unwrap();
+        let expected = sha256_of(b"original");
+        let response = |server: &mut mockito::Server, status| {
+            server
+                .mock("PUT", "/bucket/key")
+                .match_header("authorization", Matcher::Missing)
+                .match_header("content-md5", Matcher::Missing)
+                .match_header("x-amz-content-sha256", Matcher::Missing)
+                .match_header("x-amz-checksum-sha256", expected.checksum.as_str())
+                .match_body("original")
+                .with_status(status)
+                .with_header("ETag", "\"original\"")
+                .expect(1)
+        };
+        let throttled = response(&mut server, 503).create_async().await;
+        let stored = response(&mut server, 200).create_async().await;
+
+        let request = unsigned_upload(&s3, &file, &db, blake3.as_str(), sha256_of(b"changed!"));
+        let report = upload(request)
+            .await
+            .expect("both attempts must send SHA-256 from the BLAKE3-verified read");
+        assert!(report.contains(&expected.report()), "{report}");
+        assert_eq!(db.cached_etag().unwrap().as_deref(), Some("\"original\""));
+        throttled.assert_async().await;
+        stored.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn unsigned_put_with_checksum_rejects_a_flip_after_signing_without_caching() {
+        assert_unsigned_flip_is_rejected(true).await;
+    }
+
+    #[tokio::test]
+    async fn unsigned_put_rejects_a_flip_even_when_the_peer_ignores_checksum_headers() {
+        assert_unsigned_flip_is_rejected(false).await;
+    }
+
+    async fn assert_unsigned_flip_is_rejected(validates_checksum: bool) {
+        let mut server = mockito::Server::new_async().await;
+        let s3 = loopback_s3_with_signing(server.url(), true);
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("body");
+        let blake3 = blake3::hash(b"original").to_hex();
+        let db = Db::new(&s3, "key", blake3.as_str(), 0, dir.path()).unwrap();
+        let mtime = UNIX_EPOCH + Duration::from_secs(10);
+
+        // Reproduce the old extra-checksum read seeing different bytes from BLAKE3.
+        fs::write(&file, "changed!").unwrap();
+        let mut checksum = Checksum::new(ChecksumAlgorithm::Sha256);
+        checksum.calculate(&file).await.unwrap();
+        let match_checksum = if validates_checksum {
+            Matcher::Exact(checksum.checksum.clone())
+        } else {
+            Matcher::Any
+        };
+        let otherwise_accepted = server
+            .mock("PUT", "/bucket/key")
+            .match_header("authorization", Matcher::Missing)
+            .match_header("x-amz-checksum-sha256", match_checksum)
             .match_body("changed!")
-            .match_request(|request| {
-                let digest = Base64::encode_string(&md5::compute(request.body().unwrap()).0);
-                request.header("content-md5").iter().all(|value| value.as_bytes() != digest.as_bytes())
-            })
-            .with_status(400)
-            .with_body("<Error><Code>BadDigest</Code><Message>Content-MD5 does not match the body</Message></Error>")
-            .create_async().await;
-
-        let restore = RestoreLevel(log::max_level());
-        log::set_max_level(LevelFilter::Info);
-        FILE_TO_REWRITE.set(Some(file.path().to_owned()));
-        let result = PutObject::new("key", file.path(), None, None, None, None, None)
-            .request(&s3, RequestOptions::default())
+            .with_status(200)
+            .with_header("ETag", "\"changed\"")
+            .expect(0)
+            .create_async()
             .await;
-        drop(restore);
+        let bad_digest = if validates_checksum {
+            Some(
+                server
+                    .mock("PUT", "/bucket/key")
+                    .match_header(
+                        "x-amz-checksum-sha256",
+                        sha256_of(b"original").checksum.as_str(),
+                    )
+                    .match_body("changed!")
+                    .with_status(400)
+                    .with_body("<Error><Code>BadDigest</Code></Error>")
+                    .expect(0)
+                    .create_async()
+                    .await,
+            )
+        } else {
+            None
+        };
 
-        reject.assert_async().await;
-        assert_eq!(result.unwrap_err().code(), Some("BadDigest"));
+        fs::write(&file, "original").unwrap();
+        fs::File::open(&file).unwrap().set_modified(mtime).unwrap();
+        let path = file.clone();
+        on_next_body_open(move || {
+            fs::write(&path, "changed!").unwrap();
+            fs::File::open(path).unwrap().set_modified(mtime).unwrap();
+        });
+
+        let request = unsigned_upload(&s3, &file, &db, blake3.as_str(), checksum);
+        let error = upload(request)
+            .await
+            .expect_err("an unsigned PUT must fail when the body flips after signing");
+        assert!(
+            error.to_string().contains(
+                "the file changed during the upload: BLAKE3 checksum changed since it was read"
+            ),
+            "{error}"
+        );
+        assert!(db.cached_etag().unwrap().is_none());
+        otherwise_accepted.assert_async().await;
+        if let Some(bad_digest) = bad_digest {
+            bad_digest.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_short_body_is_a_local_read_error_and_is_never_retried() {
+        assert_local_read_failure(io::ErrorKind::UnexpectedEof, |path| {
+            fs::write(path, "part").unwrap();
+        })
+        .await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_local_body_read_error_is_never_retried() {
+        assert_local_read_failure(io::ErrorKind::IsADirectory, |path| {
+            fs::remove_file(&path).unwrap();
+            fs::create_dir(path).unwrap();
+        })
+        .await;
+    }
+
+    async fn assert_local_read_failure(
+        expected: io::ErrorKind,
+        change_after_signing: impl FnOnce(PathBuf) + 'static,
+    ) {
+        let mut server = mockito::Server::new_async().await;
+        let s3 = loopback_s3(server.url());
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("body");
+        fs::write(&file, "original").unwrap();
+        let file_blake3 = blake3::hash(b"original").to_hex();
+        let db = Db::new(&s3, "key", file_blake3.as_str(), 0, dir.path()).unwrap();
+        let unexpected = server
+            .mock("PUT", "/bucket/key")
+            .with_header("etag", "\"wrong\"")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let path = file.clone();
+        on_next_body_open(move || change_after_signing(path));
+        let request = UploadRequest {
+            s3: &s3,
+            key: "key",
+            file: &file,
+            file_size: 8,
+            file_mtime: None,
+            file_blake3: file_blake3.as_str(),
+            sdb: &db,
+            acl: None,
+            meta: None,
+            quiet: true,
+            additional_checksum: None,
+            globals: RequestOptions {
+                retries: 2,
+                ..RequestOptions::default()
+            },
+        };
+        let error = tokio::time::timeout(Duration::from_secs(10), upload(request))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(error.downcast_ref::<Error>(), Some(Error::Io(error))
+                if error.kind() == expected),
+            "{error:?}"
+        );
+        assert!(db.cached_etag().unwrap().is_none());
+        unexpected.assert_async().await;
     }
 
     #[test]

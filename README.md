@@ -395,11 +395,19 @@ The flag is `--kilobytes/-k`. There is no `--throttle` option.
 s3m --retries 5 big-file.dat s3/bucket/big-file.dat
 ```
 
-`--retries N` is the number of **attempts**, not the number of retries after the
-first try. It applies to multipart parts and streaming requests. A plain upload
-smaller than the buffer is a single `PutObject` request and is never retried,
-whatever the value. `--retries 1` and `--retries 0` both make a single attempt,
-and a failure on that attempt is reported as an error.
+`--retries N` sets the total number of **attempts** for single-part uploads,
+multipart parts, and streaming requests. `--retries 1` and `--retries 0` both
+make a single attempt. Single-part uploads retry temporary connection or service
+failures with exponential backoff and jitter. Each attempt checks the source
+size and modification time before sending, computes all payload checksums in
+the same read that verifies the original BLAKE3, and verifies the streamed
+body against it. If the source changes during a successful PUT, s3m reports
+the change and leaves the ETag out of local upload state.
+
+On a versioned bucket, a successful single-part attempt whose response is lost
+can leave an earlier identical version when the retry succeeds. The earlier
+version keeps its retention and legal hold. s3m reports the version ID returned
+by the successful retry.
 
 ### Behavior notes
 

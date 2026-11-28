@@ -26,7 +26,6 @@ use std::{
     collections::BTreeMap,
     fs::metadata,
     path::{Path, PathBuf},
-    str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -283,12 +282,7 @@ async fn handle_standard_file_upload(
     }
 
     let requested_checksum = request.checksum_algorithm.clone();
-    let additional_checksum = calculate_additional_checksum(
-        &local_file.path,
-        request.checksum_algorithm,
-        local_file.size <= part_size,
-    )
-    .await;
+    let additional_checksum = requested_checksum.as_deref().and_then(additional_checksum);
     log::debug!("additional checksum: {additional_checksum:#?}");
 
     if local_file.size > part_size {
@@ -319,6 +313,8 @@ async fn handle_standard_file_upload(
         key: &request.key,
         file: &local_file.path,
         file_size: local_file.size,
+        file_mtime: Some(local_file.mtime),
+        file_blake3: &blake3_checksum,
         sdb: &db,
         acl: request.acl,
         meta: request.meta,
@@ -543,58 +539,12 @@ pub fn blake3_checksum(file: &Path, quiet: bool) -> Result<String> {
     Ok(checksum)
 }
 
-async fn additional_checksum(file: &Path, algorithm: String, calculate: bool) -> Result<Checksum> {
-    let algorithm = ChecksumAlgorithm::from_str(&algorithm.to_lowercase())
-        .map_err(|()| anyhow!("invalid checksum algorithm: {algorithm}"))?;
-
-    let mut checksum = Checksum::new(algorithm);
-
-    if calculate {
-        checksum
-            .calculate(file)
-            .await
-            .context("could not calculate the checksum")?;
-    }
-
-    Ok(checksum)
-}
-
-async fn calculate_additional_checksum(
-    file: &Path,
-    checksum_algorithm: Option<String>,
-    calculate: bool,
-) -> Option<Checksum> {
-    if let Some(algorithm) = checksum_algorithm {
-        let file_path = file.to_path_buf(); // Proper cloning for owned data
-
-        // Spawn the task with owned data
-        let handle =
-            tokio::spawn(
-                async move { additional_checksum(&file_path, algorithm, calculate).await },
-            );
-
-        // Await the spawned task and handle all errors by returning None
-        match handle.await {
-            Ok(Ok(checksum)) => {
-                log::debug!("Additional checksum calculated successfully: {checksum:?}");
-                Some(checksum)
-            }
-            Ok(Err(checksum_error)) => {
-                log::warn!(
-                    "Failed to calculate additional checksum: {checksum_error}. Upload will continue without it."
-                );
-                None
-            }
-            Err(join_error) => {
-                log::error!(
-                    "Checksum task panicked or failed to join: {join_error}. Upload will continue without additional checksum."
-                );
-                None
-            }
-        }
-    } else {
-        None
-    }
+fn additional_checksum(algorithm: &str) -> Option<Checksum> {
+    let Ok(algorithm) = algorithm.parse::<ChecksumAlgorithm>() else {
+        log::warn!("Invalid checksum algorithm: {algorithm}. Upload will continue without it.");
+        return None;
+    };
+    Some(Checksum::new(algorithm))
 }
 
 #[cfg(test)]
@@ -620,6 +570,15 @@ mod tests {
 
     #[tokio::test]
     async fn multipart_put_rejects_a_same_size_source_rewrite_after_stat() {
+        assert_rewrite_after_stat(5 * 1024 * 1024 + 1, "POST").await;
+    }
+
+    #[tokio::test]
+    async fn single_part_put_rejects_a_same_size_source_rewrite_after_stat() {
+        assert_rewrite_after_stat(4, "PUT").await;
+    }
+
+    async fn assert_rewrite_after_stat(size: usize, method: &str) {
         use super::{GlobalArgs, PutObjectRequest, handle_standard_file_upload};
         use std::{
             fs::File,
@@ -633,7 +592,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let source = dir.path().join("source.bin");
         let mut file = File::create(&source).unwrap();
-        file.write_all(&vec![0; PART_SIZE + 1]).unwrap();
+        file.write_all(&vec![0; size]).unwrap();
         file.set_modified(UNIX_EPOCH + Duration::from_secs(10))
             .unwrap();
         let request = PutObjectRequest {
@@ -653,29 +612,30 @@ mod tests {
         let local_file = request.load_local_file().unwrap();
         drop(file);
         let mut replacement = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
-        replacement.write_all(&vec![1; PART_SIZE + 1]).unwrap();
+        replacement.write_all(&vec![1; size]).unwrap();
         replacement
             .as_file()
             .set_modified(UNIX_EPOCH + Duration::from_secs(20))
             .unwrap();
         replacement.persist(&source).unwrap();
 
-        let initiate = server
-            .mock("POST", "/bucket/key")
+        let unexpected = server
+            .mock(method, "/bucket/key")
             .match_query(mockito::Matcher::Any)
-            .with_status(500)
+            .with_status(200)
+            .with_header("etag", "\"unexpected\"")
             .expect(0)
             .create_async()
             .await;
-        let error = handle_standard_file_upload(&s3, request, GlobalArgs::new(), local_file)
-            .await
-            .unwrap_err();
+        let result = handle_standard_file_upload(&s3, request, GlobalArgs::new(), local_file).await;
+        let error =
+            result.expect_err("a same-size rewrite after stat must fail before the first PUT");
 
         assert!(
             format!("{error:#}").contains("modification time changed since it was read"),
-            "multipart PUT must reject a same-size rewrite after stat: {error:#}"
+            "{method} must reject a same-size rewrite after stat: {error:#}"
         );
-        initiate.assert_async().await;
+        unexpected.assert_async().await;
     }
 
     /// A state db that already holds a completed multipart upload of this file to `key`.

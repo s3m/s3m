@@ -30,10 +30,15 @@ pub(super) fn home_config(home: &Path) -> std::path::PathBuf {
 }
 
 pub(super) fn s3m(home: &Path, args: &[&str]) -> Result<Output> {
-    Ok(Command::new(env!("CARGO_BIN_EXE_s3m"))
+    Ok(s3m_command(home).args(args).output()?)
+}
+
+pub(super) fn s3m_command(home: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_s3m"));
+    command
         .env("HOME", home)
-        .args(args)
-        .output()?)
+        .env("S3M_HOME", home.join(".config").join("s3m"));
+    command
 }
 
 pub(super) fn stderr(output: &Output) -> String {

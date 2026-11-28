@@ -4,7 +4,7 @@ use anyhow::Result;
 use rand::{RngExt, rng};
 use tokio::time::{Duration, sleep};
 
-/// Longest wait between two attempts at the same part.
+/// Maximum backoff before jitter.
 const MAX_BACKOFF_SECS: u64 = 30;
 
 /// Seconds to wait before `attempt` (1-based): 1, 2, 4, 8, 16, then 30 for
@@ -12,6 +12,11 @@ const MAX_BACKOFF_SECS: u64 = 30;
 pub(super) fn backoff_secs(attempt: u32) -> u64 {
     2u64.saturating_pow(attempt.saturating_sub(1))
         .min(MAX_BACKOFF_SECS)
+}
+
+pub(super) fn retry_delay(attempt: u32) -> Duration {
+    let jitter_ms = rng().random_range(0_u64..1000);
+    Duration::from_secs(backoff_secs(attempt)) + Duration::from_millis(jitter_ms)
 }
 
 pub(super) async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
@@ -32,13 +37,8 @@ pub(super) async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
     };
 
     for attempt in 1..=attempts {
-        let backoff_time = backoff_secs(attempt);
-
         if attempt > 1 {
-            // Add jitter (0-1000ms) to prevent thundering herd
-            let jitter_ms = rng().random_range(0_u64..1000);
-            let total_backoff =
-                Duration::from_secs(backoff_time) + Duration::from_millis(jitter_ms);
+            let total_backoff = retry_delay(attempt);
 
             log::warn!(
                 "Error streaming part number {}, retrying in {:.1} seconds",

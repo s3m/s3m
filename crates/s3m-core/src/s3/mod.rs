@@ -74,6 +74,11 @@ impl S3 {
         &self.client
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_test_client(&mut self, client: Client) {
+        self.client = client;
+    }
+
     #[must_use]
     pub fn bucket(&self) -> Option<&str> {
         self.bucket.as_deref()

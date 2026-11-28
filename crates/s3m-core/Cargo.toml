@@ -37,6 +37,7 @@ rand = "0.10.4"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
 ring = "0.17"
 rkyv = { version = "0.8", features = ["bytecheck"] }
+rustls = { version = "0.23", default-features = false }
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde-saphyr = { version = "2.2", default-features = false, features = ["deserialize", "serialize"] }
@@ -58,5 +59,9 @@ url = "2.5"
 zstd = "0.14"
 
 [dev-dependencies]
+h2 = "0.4"
 mockito = "1.7.2"
+rcgen = { version = "0.14", default-features = false, features = ["ring"] }
+reqwest = { version = "0.13", default-features = false, features = ["http2"] }
 tokio = { version = "1", features = ["test-util"] }
+tokio-rustls = { version = "0.26", default-features = false }

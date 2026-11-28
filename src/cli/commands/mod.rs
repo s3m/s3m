@@ -310,7 +310,7 @@ fn add_runtime_args(cmd: Command, num_threads: String) -> Command {
         .arg(
             Arg::new("retries")
             .help("Number of attempts (0 means one attempt)")
-            .long_help("Number of attempts for each upload part or streaming request.\n\n0 makes a single attempt without retrying.")
+            .long_help("Number of attempts for a single-part upload or for each upload part or streaming request.\n\n0 makes a single attempt without retrying.")
             .long("retries")
             .short('r')
             .default_value("3")

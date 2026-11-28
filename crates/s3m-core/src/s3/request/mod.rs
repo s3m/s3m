@@ -1,17 +1,23 @@
 //!  S3 signature v4
 //! <https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html>
 
-use crate::s3::error::Result;
+use crate::s3::error::{Error, Result};
 use bytes::Bytes;
-use futures::stream::TryStreamExt;
+use futures::stream::{self, TryStreamExt};
 use reqwest::{
-    Body, Client, Response,
+    Body, Client, RequestBuilder, Response,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    error::Error as _,
+    io, iter,
+    path::Path,
+    sync::{Arc, Mutex, PoisonError},
+};
 use tokio::{
     fs::File,
-    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
+    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom},
 };
 use tokio_util::codec::{BytesCodec, FramedRead};
 use upload_stream::paced;
@@ -24,6 +30,49 @@ const DEFAULT_FRAMED_CHUNK_SIZE_BYTES: usize = 1024 * 128;
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 pub type ProgressCallback = Arc<dyn Fn(usize) + Send + Sync + 'static>;
+
+pub(crate) fn is_transient_send_error(error: &reqwest::Error) -> bool {
+    // AWS SDKs retry connection, timeout and other transient transport failures.
+    // <https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html>
+    // Local read errors are returned separately by send_file.
+    (error.is_connect() || error.is_request() || error.is_timeout())
+        && !iter::successors(error.source(), |&cause| {
+            // hyper-rustls uses io::Error::other, whose source can skip the inner error.
+            cause
+                .downcast_ref::<io::Error>()
+                .and_then(io::Error::get_ref)
+                .map(|inner| inner as &(dyn std::error::Error + 'static))
+                .or_else(|| cause.source())
+        })
+        .any(|cause| {
+            cause
+                .downcast_ref::<rustls::Error>()
+                .is_some_and(is_permanent_tls_error)
+        })
+}
+
+fn is_permanent_tls_error(error: &rustls::Error) -> bool {
+    use rustls::{AlertDescription as Alert, Error, InvalidMessage};
+    matches!(
+        error,
+        Error::InvalidCertificate(_)
+            | Error::NoCertificatesPresented
+            | Error::UnsupportedNameType
+            | Error::InvalidMessage(
+                InvalidMessage::InvalidContentType | InvalidMessage::UnknownProtocolVersion
+            )
+            | Error::AlertReceived(
+                Alert::BadCertificate
+                    | Alert::UnsupportedCertificate
+                    | Alert::CertificateRevoked
+                    | Alert::CertificateExpired
+                    | Alert::CertificateUnknown
+                    | Alert::UnknownCA
+                    | Alert::BadCertificateStatusResponse
+                    | Alert::CertificateRequired
+            )
+    )
+}
 
 fn headers_for_log(headers: &HeaderMap) -> HeaderMap {
     let mut headers = headers.clone();
@@ -58,6 +107,27 @@ pub async fn request(
     progress: Option<ProgressCallback>,
     throttle: Option<usize>,
 ) -> Result<Response> {
+    request_with_file(
+        client,
+        url,
+        method,
+        headers,
+        file.map(|path| (path, None)),
+        progress,
+        throttle,
+    )
+    .await
+}
+
+pub(crate) async fn request_with_file(
+    client: &Client,
+    url: Url,
+    method: reqwest::Method,
+    headers: &BTreeMap<String, String>,
+    file: Option<(&Path, Option<blake3::Hash>)>,
+    progress: Option<ProgressCallback>,
+    throttle: Option<usize>,
+) -> Result<Response> {
     let headers = headers
         .iter()
         .map(|(k, v)| Ok((k.parse::<HeaderName>()?, v.parse::<HeaderValue>()?)))
@@ -68,35 +138,99 @@ pub async fn request(
         headers_for_log(&headers)
     );
 
-    let request = if let Some(file_path) = file {
-        let file = File::open(file_path).await?;
+    let length = headers
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok());
+    let request = client
+        .request(method, url)
+        .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+        .headers(headers);
 
-        let stream = {
-            log::debug!("Progress callback is_some: {}", progress.is_some());
-
-            FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES)
-                .inspect_ok(move |chunk| {
-                    if let Some(callback) = &progress {
-                        log::trace!("Sending {} bytes", chunk.len());
-                        callback(chunk.len());
-                    }
-                })
-        };
-
-        let body = Body::wrap_stream(paced(stream, throttle));
-        client
-            .request(method, url)
-            .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
-            .headers(headers)
-            .body(body)
+    if let Some((file, expected_blake3)) = file {
+        send_file(
+            request,
+            File::open(file).await?,
+            length,
+            expected_blake3,
+            progress,
+            throttle,
+        )
+        .await
     } else {
-        client
-            .request(method, url)
-            .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
-            .headers(headers)
-    };
+        Ok(request.send().await?)
+    }
+}
 
-    Ok(request.send().await?)
+async fn send_file(
+    request: RequestBuilder,
+    file: impl AsyncRead + Unpin + Send + 'static,
+    length: Option<u64>,
+    expected_blake3: Option<blake3::Hash>,
+    progress: Option<ProgressCallback>,
+    throttle: Option<usize>,
+) -> Result<Response> {
+    let file = file.take(length.unwrap_or(u64::MAX));
+    let chunks =
+        FramedRead::with_capacity(file, BytesCodec::new(), DEFAULT_FRAMED_CHUNK_SIZE_BYTES);
+    let digest = expected_blake3.map(|expected| (blake3::Hasher::new(), expected));
+    let stream = stream::try_unfold(
+        (chunks, length, digest),
+        |(mut chunks, remaining, mut digest)| async move {
+            match chunks.try_next().await? {
+                Some(chunk) => {
+                    let remaining = remaining.map(|bytes| bytes - chunk.len() as u64);
+                    if let Some((hasher, expected)) = &mut digest {
+                        hasher.update(&chunk);
+                        // Withhold the final bytes if the source changed after signing.
+                        if remaining == Some(0) && hasher.finalize() != *expected {
+                            return Err(source_changed(
+                                "BLAKE3 checksum changed since it was read",
+                            ));
+                        }
+                    }
+                    Ok(Some((chunk, (chunks, remaining, digest))))
+                }
+                None if remaining.unwrap_or(0) > 0 => Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "upload file ended before the signed content length",
+                )
+                .into()),
+                None => Ok(None),
+            }
+        },
+    );
+
+    // HTTP/2 can reset the stream without propagating the body stream's original error.
+    let read_error = Arc::new(Mutex::new(None));
+    let body_error = Arc::clone(&read_error);
+    let stream = stream
+        .inspect_ok(move |chunk| {
+            if let Some(callback) = &progress {
+                log::trace!("Sending {} bytes", chunk.len());
+                callback(chunk.len());
+            }
+        })
+        .map_err(move |error| {
+            *body_error.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+            io::Error::other("could not read upload body")
+        });
+    let body = Body::wrap_stream(paced(stream, throttle));
+    let response = request.body(body).send().await;
+    if let Some(error) = read_error
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+    {
+        return Err(error);
+    }
+    Ok(response?)
+}
+
+pub(crate) fn source_changed(change: &str) -> Error {
+    Error::Other(format!(
+        "the file changed during the upload: {change}. Run the upload again."
+    ))
 }
 
 /// # Errors
@@ -182,9 +316,64 @@ pub async fn upload(
 mod tests {
     use super::upload_stream::calculate_duration_per_chunk;
     use super::*;
+    use crate::s3::Error;
     use mockito::Server;
     use reqwest::StatusCode;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
     use tokio::time::Duration;
+    use tokio::{io::ReadBuf, net::TcpListener, time::timeout};
+
+    struct FailingReader;
+
+    impl AsyncRead for FailingReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "local read failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn http2_returns_the_local_read_error_instead_of_a_stream_reset() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/test", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut connection = h2::server::handshake(socket).await.unwrap();
+            // Keep polling the connection, with no response headers from the server.
+            let mut requests = Vec::new();
+            while let Some(Ok(request)) = connection.accept().await {
+                requests.push(request);
+            }
+        });
+        let client = Client::builder()
+            .no_proxy()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        let request = client.put(url).header(reqwest::header::CONTENT_LENGTH, 8);
+        let reader = b"part".as_slice().chain(FailingReader);
+
+        let error = timeout(
+            Duration::from_secs(10),
+            send_file(request, reader, Some(8), None, None, None),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        server.abort();
+        let _ = server.await;
+        assert!(matches!(error, Error::Io(error)
+            if error.kind() == io::ErrorKind::ConnectionReset && error.to_string() == "local read failure"));
+    }
 
     #[test]
     fn hides_credential_headers_only_in_logs() {

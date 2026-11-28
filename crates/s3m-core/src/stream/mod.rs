@@ -4,6 +4,7 @@ pub mod iterator;
 mod legacy;
 pub mod part;
 mod retry;
+mod source_file;
 pub mod state;
 pub mod upload_compressed;
 pub mod upload_compressed_encrypted;
@@ -306,21 +307,6 @@ impl std::fmt::Display for StreamAbortFailed {
     }
 }
 
-async fn setup_progress(quiet: bool, size: u64) -> Option<UnboundedSender<usize>> {
-    if quiet {
-        return None;
-    }
-
-    let (sender, receiver) = unbounded_channel::<usize>();
-
-    if let Some(pb) = Bar::new(size).progress {
-        spawn_progress_task(receiver, pb, size);
-        return Some(sender);
-    }
-
-    None
-}
-
 async fn setup_stream_progress(quiet: bool) -> Option<UnboundedSender<StreamProgressEvent>> {
     if quiet {
         return None;
@@ -336,25 +322,19 @@ async fn setup_stream_progress(quiet: bool) -> Option<UnboundedSender<StreamProg
     None
 }
 
-fn spawn_progress_task(
+async fn track_progress(
     mut receiver: tokio::sync::mpsc::UnboundedReceiver<usize>,
-    pb: ProgressBar,
+    pb: &ProgressBar,
     size: u64,
-) -> task::JoinHandle<u64> {
-    tokio::spawn(async move {
-        let mut bytes_tracked = 0;
+) -> u64 {
+    let mut bytes_tracked = 0;
 
-        while let Some(bytes_count) = receiver.recv().await {
-            let new = min(bytes_tracked + bytes_count as u64, size);
-            bytes_tracked = new;
-            pb.set_position(new);
-        }
+    while let Some(bytes_count) = receiver.recv().await {
+        bytes_tracked = min(bytes_tracked + bytes_count as u64, size);
+        pb.set_position(bytes_tracked);
+    }
 
-        log::debug!("Progress channel closed — total bytes tracked: {bytes_tracked}");
-
-        pb.finish();
-        bytes_tracked
-    })
+    bytes_tracked
 }
 
 fn spawn_stream_progress_task(
@@ -1116,18 +1096,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_spawn_progress_task_finishes_when_sender_dropped() {
+    async fn test_track_progress_finishes_when_sender_dropped() {
         let (sender, receiver) = unbounded_channel();
-        let handle = spawn_progress_task(receiver, ProgressBar::hidden(), 10);
 
         sender.send(4).unwrap();
         sender.send(10).unwrap();
         drop(sender);
 
-        let uploaded = timeout(Duration::from_secs(1), handle)
-            .await
-            .unwrap()
-            .unwrap();
+        let uploaded = timeout(
+            Duration::from_secs(1),
+            track_progress(receiver, &ProgressBar::hidden(), 10),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(uploaded, 10);
     }

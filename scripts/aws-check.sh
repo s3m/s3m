@@ -250,7 +250,7 @@ jq -e --arg p "$prefix/v/" '
 echo "ok  get --versions with interleaved delete markers"
 
 # More versions than one page of ListObjectVersions (1,000) (#90).
-# s3m's --retries does not cover the single-part PUTs used for this fixture.
+# The shell retries the setup command, so give each single-part PUT one attempt.
 (
   export -f retry
   # shellcheck disable=SC2016 # expanded by the worker Bash

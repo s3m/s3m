@@ -108,7 +108,14 @@ following pages is up to the caller. Code that uses `::new()` or
 
 `RequestOptions::set_retries` now keeps at least one attempt and caps values
 above `u32::MAX`, instead of silently falling back to 3. The retry count is a
-number of attempts.
+number of attempts and applies to single-part uploads too.
+
+`UploadRequest` struct literals now require `file_mtime` and `file_blake3`. Pass
+the modification time in milliseconds since the Unix epoch, read with
+`file_size` before hashing, and the lowercase hexadecimal BLAKE3 checksum used
+to open `sdb`. Pass `None` for `file_mtime` to skip the pre-hash modification time
+check. Every attempt still verifies the size and BLAKE3 checksum.
+`MultipartUploadRequest` struct literals require `file_mtime` as well.
 
 The `s3m` crate also changed `s3m::cli::Host::enc_key` from `Option<String>` to
 `Option<SecretString>`.
