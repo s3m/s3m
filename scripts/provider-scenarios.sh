@@ -186,11 +186,21 @@ check_absent() {
 # Only these scenarios start background uploads. Stop and reap the child before
 # either provider's EXIT trap inventories the bucket.
 upload_pid=
+proxy_pid=
 stop_upload() {
   if [[ -n $upload_pid ]]; then
     kill -KILL "$upload_pid" 2>/dev/null || true
     wait "$upload_pid" 2>/dev/null || true
     upload_pid=
+  fi
+  stop_proxy
+}
+
+stop_proxy() {
+  if [[ -n $proxy_pid ]]; then
+    kill "$proxy_pid" 2>/dev/null || true
+    wait "$proxy_pid" 2>/dev/null || true
+    proxy_pid=
   fi
 }
 
@@ -382,7 +392,37 @@ scenario_verbose_log() {
   echo "ok  verbose.bin  -vv log hides the signature ($redacted redacted headers)"
 }
 
+# A single-part upload survives a connection dropped in the middle of the request
+# (#93). scripts/flaky-proxy.py tunnels the requests (TLS stays end to end with the
+# provider) and closes the first tunnel after 64 KiB of the body: s3m must retry and
+# the stored object must be the file.
+scenario_single_part_retry() {
+  local dir state port output status=0 deadline
+  dir=$(dirname "${BASH_SOURCE[0]}")
+  state="$work/proxy.state"
+  rm -f "$work/proxy.port" "$state"
+  python3 "$dir/flaky-proxy.py" "$work/proxy.port" "$state" &
+  proxy_pid=$!
+  deadline=$((SECONDS + 10))
+  until [[ -s $work/proxy.port ]]; do
+    ((SECONDS < deadline)) || fail "retry.bin: the test proxy did not start"
+    sleep 0.1
+  done
+  port=$(<"$work/proxy.port")
+  track retry.bin || fail "retry.bin: could not record upload key"
+  output=$(HTTPS_PROXY="http://127.0.0.1:$port" s3m --retries 3 "$work/small.bin" "$target/$prefix/retry.bin" 2>&1) ||
+    status=$?
+  stop_proxy
+  ((status == 0)) || fail "retry.bin: the upload did not survive a dropped connection: $output"
+  if ! grep -q '^broken ' "$state" || ! grep -q '^passed ' "$state"; then
+    fail "retry.bin: expected one broken and one passed connection, the proxy saw: $(tr '\n' ' ' <"$state")"
+  fi
+  check_download retry.bin "$work/small.bin"
+  echo "ok  retry.bin  single-part upload retried after a dropped connection"
+}
+
 run_provider_scenarios() {
+  scenario_single_part_retry
   scenario_resume_checksum
   scenario_gone_upload
   scenario_single_part_rerun
