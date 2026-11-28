@@ -49,6 +49,12 @@ or retries:
 - Commit subjects are plain imperative sentences that say what changed, ending with the
   issue (`Retry single-part uploads on transient network errors (#93)`). No
   Conventional Commits prefixes (`fix:`, `feat:` ...) and no AI co-author trailers.
+- **Closing issues.** The commit that fixes an issue puts a closing keyword on its own
+  line in the body (`Closes #93`; `Fixes` and `Resolves` also work), so GitHub closes the
+  issue when the commit reaches `main` with the release. Only do this when the commit
+  includes the regression test that proves the fix (it fails without the fix and passes
+  with it, section 4). Commits without that proof (partial work, docs, tooling, a fix
+  whose test comes later) reference the issue as `(#93)` only, so it stays open.
 - `CHANGELOG.md`: add the entry under `## Unreleased` in the style of the existing ones:
   what was wrong, what changed, and any `s3m-core` API change marked **BREAKING**
   (library) or additive. Breaking library changes also go in the compatibility notes of
