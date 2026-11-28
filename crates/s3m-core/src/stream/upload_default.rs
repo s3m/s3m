@@ -3,7 +3,7 @@ use crate::{
     s3::{
         Error, RequestOptions, S3, actions,
         checksum::Checksum,
-        request::{is_transient_send_error, source_changed},
+        request::{has_permanent_tls_error, is_transient_send_error, source_changed},
     },
     stream::{
         db::Db,
@@ -140,6 +140,8 @@ fn is_retryable(error: &Error) -> bool {
                 || matches!(error.status, 520..=524)
         }
         Error::Http(error) => is_transient_send_error(error),
+        Error::Transport { source, .. } => !has_permanent_tls_error(source.as_ref()),
+        Error::ResponseTimeout { .. } => true,
         _ => false,
     }
 }

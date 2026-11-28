@@ -21,9 +21,14 @@ pub use self::{
 
 use crate::s3::error::Result;
 use crate::s3::tools::{sha256_digest, write_hex_bytes};
+use request::{CONNECT_TIMEOUT, Transport};
 use reqwest::{Client, redirect::Policy};
 use std::fmt;
 use url::Url;
+
+fn endpoint_authority(url: &Url) -> &str {
+    url.authority().rsplit('@').next().unwrap_or_default()
+}
 
 #[allow(clippy::expect_used)]
 fn s3_client() -> Client {
@@ -32,6 +37,7 @@ fn s3_client() -> Client {
     // Like Client::new, keep the infallible API and fail if TLS cannot initialize.
     Client::builder()
         .redirect(Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .expect("initialize S3 HTTP client")
 }
@@ -48,6 +54,7 @@ pub struct S3 {
     no_sign_request: bool,
     // shared HTTP client for connection pooling and TLS session reuse
     client: Client,
+    transport: Transport,
 }
 
 impl fmt::Display for S3 {
@@ -77,17 +84,24 @@ impl S3 {
             bucket,
             no_sign_request,
             client: s3_client(),
+            transport: Transport::new(),
         }
     }
 
+    /// The reqwest client for direct requests. It has a 60-second connect timeout
+    /// and does not follow redirects. S3 actions use the managed transport.
     #[must_use]
     pub const fn client(&self) -> &Client {
         &self.client
     }
 
+    pub(crate) const fn transport(&self) -> &Transport {
+        &self.transport
+    }
+
     #[cfg(test)]
-    pub(crate) fn set_test_client(&mut self, client: Client) {
-        self.client = client;
+    pub(crate) fn set_test_transport(&mut self, transport: Transport) {
+        self.transport = transport;
     }
 
     #[must_use]

@@ -409,6 +409,29 @@ can leave an earlier identical version when the retry succeeds. The earlier
 version keeps its retention and legal hold. s3m reports the version ID returned
 by the successful retry.
 
+### Connection and response timeouts
+
+s3m uses HTTP/1.1 and allows 60 seconds to connect, including DNS, proxy
+negotiation, and TLS, matching the
+[AWS CLI socket connect default](https://docs.aws.amazon.com/cli/latest/reference/s3/ls.html#global-options).
+Once connected, s3m normally times out after 60 seconds of silence. Any bytes
+received from the peer keep the request alive, including partial TLS records
+and TLS control traffic. Successful socket writes and acknowledgements of
+queued upload bytes also count as progress when s3m can observe them.
+
+Once the server has acknowledged the entire upload, a slow server and a stuck
+one look the same from the client. The response wait then has the same
+60-second idle limit. If the send queue cannot be sampled, the kernel can
+deliver buffered upload bytes while the next socket write is blocked. During
+that wait and after body handoff, s3m allows five minutes plus an estimate of
+the time to drain that request's buffered bytes, capped at 15 minutes of
+silence. The estimate assumes at least 1 KiB/s. Slower receivers or larger
+buffered tails can time out when the queue is unavailable.
+
+Transfers have no overall deadline. Waiting for local upload input or deliberate
+pacing does not by itself cause a timeout. Connection and transfer timeouts
+count as transient failures for single-part upload retries.
+
 ### Behavior notes
 
 * S3 redirects report the HTTP status and any S3 error code, region, or

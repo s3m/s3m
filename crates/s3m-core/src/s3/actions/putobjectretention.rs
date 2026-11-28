@@ -73,8 +73,8 @@ impl<'a> PutObjectRetention<'a> {
         let (url, headers) =
             &self.sign(s3, sha256.as_ref(), Some(md5.as_ref()), Some(body.len()))?;
 
-        let response = request::upload(
-            s3.client(),
+        let response = request::send_payload(
+            s3.into(),
             url.clone(),
             self.http_method()?,
             headers,

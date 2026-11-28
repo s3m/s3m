@@ -35,8 +35,8 @@ impl<'a> CreateBucket<'a> {
         );
 
         let (url, headers) = &self.sign(s3, tools::sha256_digest(&xml).as_ref(), None, None)?;
-        let response = request::upload(
-            s3.client(),
+        let response = request::send_payload(
+            s3.into(),
             url.clone(),
             self.http_method()?,
             headers,

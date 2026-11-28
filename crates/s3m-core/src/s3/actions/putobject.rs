@@ -133,7 +133,7 @@ impl<'a> PutObject<'a> {
         });
 
         let response = request::request_with_file(
-            s3.client(),
+            s3.into(),
             url.clone(),
             self.http_method()?,
             headers,

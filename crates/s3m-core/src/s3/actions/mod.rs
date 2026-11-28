@@ -4,6 +4,7 @@
 use crate::s3::{
     S3,
     checksum::ChecksumAlgorithm,
+    endpoint_authority,
     error::{ApiError, Error, Result},
     responses::{ErrorResponse, from_xml_root},
     signature::Signature,
@@ -257,15 +258,10 @@ pub(crate) fn upload_response_headers(headers: &HeaderMap) -> BTreeMap<&'static 
 pub async fn response_error(response: Response) -> Error {
     let status = response.status();
     let headers = response.headers().clone();
+    let endpoint = endpoint_authority(response.url()).to_owned();
 
-    // Try to read the response body, but don't fail if we can't
-    let body = response
-        .text()
-        .await
-        .inspect_err(|e| log::warn!("Failed to read error response body: {e}"))
-        .ok();
-
-    api_error(status, &headers, body)
+    // A failed body read must still return the status for retry decisions.
+    api_error(status, &headers, response.text().await, &endpoint)
 }
 
 #[derive(serde::Deserialize)]
@@ -359,16 +355,24 @@ fn redirect_hint(status: StatusCode, headers: &HeaderMap, body: Option<&str>) ->
     hint
 }
 
-/// Build a structured [`Error::Api`] from a response's status, headers and body
-/// (`None` when the body could not be read). See [`response_error`].
-pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<String>) -> Error {
+/// Build a structured [`Error::Api`] from a response's status, headers and body.
+/// See [`response_error`].
+pub(crate) fn api_error(
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: reqwest::Result<String>,
+    endpoint: &str,
+) -> Error {
     let status_code = status.as_u16();
 
     let mut detail: BTreeMap<&str, String> = BTreeMap::new();
     detail.insert("HTTP Status Code", status.to_string());
 
     if status.is_redirection() {
-        detail.insert("Redirect", redirect_hint(status, headers, body.as_deref()));
+        detail.insert(
+            "Redirect",
+            redirect_hint(status, headers, body.as_deref().ok()),
+        );
     }
 
     if let Some(v) = headers.get("x-amz-id-2").and_then(|h| h.to_str().ok()) {
@@ -386,7 +390,7 @@ pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<St
     let mut message = None;
 
     match body {
-        Some(body) => {
+        Ok(body) => {
             // Only an <Error> document gives the error its code: s3m acts on some
             // codes (NoSuchUpload forgets a saved upload), and another document that
             // happens to have a <Code> must not trigger that.
@@ -404,12 +408,15 @@ pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<St
                 detail.insert("Response", body);
             }
         }
-        None => {
-            // If we can't read the body, still report what we know
-            detail.insert(
-                "Note",
-                "Connection closed before response body could be read".to_string(),
-            );
+        Err(error) => {
+            let verb = if error.is_timeout() {
+                "Timed out reading"
+            } else {
+                "Could not read"
+            };
+            let note = format!("{verb} response body from {endpoint}");
+            log::warn!("{note}: {}", error.without_url());
+            detail.insert("Note", note);
         }
     }
 

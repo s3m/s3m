@@ -42,6 +42,25 @@ pub enum Error {
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 
+    /// HTTP transport failure on a managed S3 request.
+    #[error("S3 request to {endpoint} failed: {source}")]
+    Transport {
+        /// Endpoint host and port, if the port was specified.
+        endpoint: String,
+        /// Failure reported by the transport.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// The connect deadline or the upload or response idle deadline expired.
+    #[error("S3 {phase} timed out at {endpoint}")]
+    ResponseTimeout {
+        /// Endpoint host and non-default port, if specified.
+        endpoint: String,
+        /// Operation waiting on the endpoint.
+        phase: &'static str,
+    },
+
     /// Local I/O failure (e.g. reading a file to upload, writing a download).
     #[error(transparent)]
     Io(#[from] std::io::Error),

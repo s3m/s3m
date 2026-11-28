@@ -7,7 +7,7 @@ use crate::s3::error::Error;
 use crate::{
     s3::actions::{Action, api_error, response_error, upload_response_headers},
     s3::responses::{CompleteMultipartUploadResult, ErrorResponse, from_xml_root},
-    s3::{S3, checksum::Checksum, request, tools},
+    s3::{S3, checksum::Checksum, endpoint_authority, request, tools},
 };
 use base64ct::{Base64, Encoding};
 use bytes::Bytes;
@@ -164,8 +164,8 @@ impl<'a> CompleteMultipartUpload<'a> {
         // sign the request
         let (url, headers) = &self.sign(s3, digest.as_ref(), None, Some(body.len()))?;
 
-        let response = request::upload(
-            s3.client(),
+        let response = request::send_payload(
+            s3.into(),
             url.clone(),
             self.http_method()?,
             headers,
@@ -182,7 +182,12 @@ impl<'a> CompleteMultipartUpload<'a> {
             // in the body (the response is only sent once processing finished).
             // Only an <Error> document: another document with a <Code> is not one.
             if from_xml_root::<ErrorResponse>(&body, "Error").is_ok() {
-                return Err(api_error(status, &headers, Some(body)));
+                return Err(api_error(
+                    status,
+                    &headers,
+                    Ok(body),
+                    endpoint_authority(url),
+                ));
             }
 
             let mut rs: CompleteMultipartUploadResult =

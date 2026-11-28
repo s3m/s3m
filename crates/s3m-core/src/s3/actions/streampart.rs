@@ -49,8 +49,8 @@ impl<'a> StreamPart<'a> {
         let (url, headers) =
             &self.sign(s3, self.digest.0, Some(self.digest.1), Some(self.length))?;
 
-        let response = request::request(
-            s3.client(),
+        let response = request::send_request(
+            s3.into(),
             url.clone(),
             self.http_method()?,
             headers,

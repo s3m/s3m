@@ -24,8 +24,8 @@ impl GetObjectLockConfiguration {
     /// Will return `Err` if can not make the request
     pub async fn request(&self, s3: &S3) -> Result<ObjectLockConfiguration> {
         let (url, headers) = &self.sign(s3, tools::sha256_digest("").as_ref(), None, None)?;
-        let response = request::request(
-            s3.client(),
+        let response = request::send_request(
+            s3.into(),
             url.clone(),
             self.http_method()?,
             headers,

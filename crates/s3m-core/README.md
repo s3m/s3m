@@ -96,8 +96,6 @@ under `s3m_core::s3::actions`, returning `ObjectLockConfiguration` / `ObjectRete
 
 `Error::is_redirect()` is an additive helper for detecting a 3xx S3 response.
 
-`S3::client()` returns a reqwest client that no longer follows redirects.
-
 These changes are source-breaking only for code that builds the affected structs
 with a struct literal (compiler error E0063, missing fields):
 
@@ -120,6 +118,31 @@ the modification time in milliseconds since the Unix epoch, read with
 to open `sdb`. Pass `None` for `file_mtime` to skip the pre-hash modification time
 check. Every attempt still verifies the size and BLAKE3 checksum.
 `MultipartUploadRequest` struct literals require `file_mtime` as well.
+
+The `s3::Error` enum gained `ResponseTimeout { endpoint, phase }` for
+connection, upload, or response-header timeouts, and `Transport { endpoint, source }`
+for other managed HTTP transport failures. Its source is a boxed standard error. Code that exhaustively matches `Error` needs
+to handle both variants. A timeout reading a successful response body is a
+reqwest timeout whose error chain names the endpoint. If the HTTP status
+identifies an S3 error response, the action keeps the status in `Error::Api`
+and includes the timeout in its details.
+
+`S3::client()` returns a reqwest client that no longer follows redirects. Its
+connect timeout is 60 seconds, and direct requests use reqwest's own timeout
+policy. S3 actions use a separate managed HTTP/1.1 pool. It returns redirects
+to the action and applies a 60-second connect deadline and a 60-second idle
+deadline to observed progress. All bytes read from the socket count, including
+incomplete TLS records and TLS control traffic. Socket writes and acknowledged
+upload bytes also count. After the whole upload is acknowledged, the idle
+deadline bounds the wait for a response. If the send queue is unavailable during
+an upload with buffered writes, the allowance is five minutes plus the time to
+drain that request's estimated buffer at 1 KiB/s, capped at 15 minutes of silence.
+This applies during backpressure and after body handoff. A slower receiver or
+larger buffered tail can time out under this estimate.
+
+The low-level `request`, `upload`, and `multipart_upload` helpers in
+`s3::request` use the supplied reqwest client's timeout, redirect, and other
+transport settings. They add no s3m deadline.
 
 The `s3m` crate also changed `s3m::cli::Host::enc_key` from `Option<String>` to
 `Option<SecretString>`.

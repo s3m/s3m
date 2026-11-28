@@ -1000,6 +1000,92 @@ mod tests {
     use secrecy::SecretString;
     use std::{fs, io::Write, time::UNIX_EPOCH};
 
+    #[tokio::test]
+    async fn timeout_retries_a_multipart_part_that_received_no_response() -> anyhow::Result<()> {
+        use crate::s3::request::TEST_IDLE_TIMEOUT;
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+            net::TcpListener,
+            time::{Duration, timeout},
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let s3 = S3::new(
+            &Credentials::new("test", &SecretString::new("test".into())),
+            &Region::custom("us-east-1", format!("http://{}", listener.local_addr()?)),
+            Some("bucket".into()),
+            false,
+        );
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("body");
+        fs::write(&file, b"part")?;
+        let db = Db::new(&s3, "key", "checksum", 1, dir.path())?;
+        let server = tokio::spawn(async move {
+            let mut first = None;
+            for attempt in 1..=2 {
+                let (socket, _) = listener.accept().await?;
+                let mut socket = BufReader::new(socket);
+                let mut line = String::new();
+                socket.read_line(&mut line).await?;
+                assert_eq!(
+                    line,
+                    "PUT /bucket/key?partNumber=1&uploadId=uid HTTP/1.1\r\n"
+                );
+                loop {
+                    line.clear();
+                    anyhow::ensure!(
+                        socket.read_line(&mut line).await? > 0,
+                        "incomplete part headers"
+                    );
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut bytes = [0; 4];
+                socket.read_exact(&mut bytes).await?;
+                assert_eq!(&bytes, b"part");
+                if attempt == 1 {
+                    first = Some(socket);
+                } else {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nETag: \"part\"\r\nContent-Length: 0\r\n\r\n",
+                        )
+                        .await?;
+                }
+            }
+            drop(first);
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let options = RequestOptions {
+            retries: 2,
+            ..RequestOptions::default()
+        };
+        let part = super::upload_part(
+            &s3,
+            "key",
+            &file,
+            "uid",
+            &db,
+            Part::new(1, 0, 4, None),
+            &options,
+        );
+        let result = timeout(
+            Duration::from_secs(10),
+            TEST_IDLE_TIMEOUT.scope(Duration::from_millis(500), part),
+        )
+        .await;
+        let Ok(result) = result else {
+            server.abort();
+            anyhow::bail!("a stalled part must be retried before the test watchdog");
+        };
+        result?;
+        server.await??;
+        assert_eq!(db.db_uploaded()?.len(), 1);
+        Ok(())
+    }
+
     // Regression: a fresh upload id kept the parts another upload of the same content had
     // already sent, and CompleteMultipartUpload listed them (S3 answers InvalidPart).
     #[tokio::test]
