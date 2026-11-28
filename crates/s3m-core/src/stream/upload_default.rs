@@ -107,6 +107,9 @@ async fn source_before_attempt(request: &UploadRequest<'_>) -> Result<SourceFile
 }
 
 fn is_retryable(error: &Error) -> bool {
+    if error.is_redirect() {
+        return false;
+    }
     match error {
         Error::Api(error) if error.status != 501 => {
             // AWS transient and throttling responses, including timeout and gateway failures:

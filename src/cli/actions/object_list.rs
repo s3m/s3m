@@ -388,6 +388,7 @@ where
         let page = match action.request(s3).await {
             Err(error)
                 if page_size_supported
+                    && !error.is_redirect()
                     && (error.status() == Some(501) || error.code() == Some("NotImplemented")) =>
             {
                 log::info!("ListBuckets max-buckets is not implemented, listing without it");

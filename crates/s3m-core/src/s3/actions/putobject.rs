@@ -151,7 +151,8 @@ impl<'a> PutObject<'a> {
             Ok((h, self.additional_checksum))
         } else {
             let error = response_error(response).await;
-            if let Some((size, digest)) = source
+            if !error.is_redirect()
+                && let Some((size, digest)) = source
                 && matches!(
                     error.code(),
                     Some("BadDigest" | "XAmzContentSHA256Mismatch")

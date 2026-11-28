@@ -115,6 +115,92 @@ async fn reply_stored(mut socket: impl AsyncWrite + Unpin) -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn redirects_do_not_follow_put_as_get_or_cache_an_etag() -> Result<()> {
+    let mut server = mockito::Server::new_async().await;
+    let fixture = Fixture::new(server.url(), b"body")?;
+    let redirect = server
+        .mock("PUT", "/bucket/key")
+        .with_status(303)
+        .with_header("location", "/receipt")
+        .with_header("etag", "\"redirect\"")
+        .create_async()
+        .await;
+    let receipt = server
+        .mock("GET", "/receipt")
+        .with_status(200)
+        .with_header("etag", "\"receipt\"")
+        .expect(0)
+        .create_async()
+        .await;
+
+    let result = upload(fixture.request()).await;
+    let cached = fixture.db.cached_etag()?;
+    assert!(
+        result.is_err() && cached.is_none(),
+        "a PUT redirect must fail without caching an ETag: result={result:?}, cached={cached:?}"
+    );
+    let error = result.err().context("the PUT redirect must fail")?;
+    assert!(error.to_string().contains("303"), "{error}");
+    assert!(
+        error.to_string().contains("destination is /receipt"),
+        "{error}"
+    );
+    redirect.assert_async().await;
+    receipt.assert_async().await;
+    Ok(())
+}
+
+async fn rejected_redirect(status: usize, code: &str) -> Result<()> {
+    let mut server = mockito::Server::new_async().await;
+    let fixture = Fixture::new(server.url(), b"body")?;
+    let redirect = server
+        .mock("PUT", "/bucket/key")
+        .with_status(status)
+        .with_body(format!(
+            "<Error><Code>{code}</Code><Endpoint>bucket.example.test</Endpoint></Error>"
+        ))
+        .create_async()
+        .await;
+
+    let error = upload(fixture.request())
+        .await
+        .err()
+        .context("a PUT redirect must fail")?;
+    redirect.assert_async().await;
+    let message = error.to_string();
+    assert!(message.contains(&status.to_string()), "{message}");
+    assert!(message.contains(code), "{message}");
+    assert!(message.contains("is bucket.example.test"), "{message}");
+    assert_eq!(
+        message.contains("Update the host's endpoint or region"),
+        status == 301,
+        "{message}"
+    );
+    assert_eq!(
+        message.contains("for this request"),
+        status == 307,
+        "{message}"
+    );
+    assert!(fixture.db.cached_etag()?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn redirects_report_the_permanent_endpoint_in_s3_xml() -> Result<()> {
+    rejected_redirect(301, "PermanentRedirect").await
+}
+
+#[tokio::test]
+async fn redirects_report_the_temporary_endpoint_in_s3_xml() -> Result<()> {
+    rejected_redirect(307, "TemporaryRedirect").await
+}
+
+#[tokio::test]
+async fn redirects_are_permanent_even_with_a_transient_s3_code() -> Result<()> {
+    rejected_redirect(307, "RequestTimeout").await
+}
+
 #[derive(Debug)]
 struct FlakyDns {
     loopback: SocketAddr,

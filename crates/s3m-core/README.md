@@ -94,6 +94,10 @@ under `s3m_core::s3::actions`, returning `ObjectLockConfiguration` / `ObjectRete
 
 ## Compatibility notes
 
+`Error::is_redirect()` is an additive helper for detecting a 3xx S3 response.
+
+`S3::client()` returns a reqwest client that no longer follows redirects.
+
 These changes are source-breaking only for code that builds the affected structs
 with a struct literal (compiler error E0063, missing fields):
 

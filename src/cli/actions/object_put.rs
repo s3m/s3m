@@ -106,7 +106,7 @@ fn augment_object_lock_error(err: anyhow::Error, has_object_lock: bool) -> anyho
     let missing_lock_config = has_object_lock
         && err
             .downcast_ref::<crate::s3::Error>()
-            .is_some_and(|e| e.code() == Some("InvalidRequest"));
+            .is_some_and(|e| !e.is_redirect() && e.code() == Some("InvalidRequest"));
 
     if missing_lock_config {
         err.context(
@@ -360,9 +360,9 @@ async fn abort_replaced_multipart_upload(s3: &S3, host: &str, key: &str, db: &Db
 
 /// The local state only records that this file was once uploaded to this key. Before
 /// skipping the upload, ask the server: the object may have been deleted or replaced since.
-/// Only a matching `ETag` skips it. A missing object, another `ETag`, or a `HEAD` that fails
-/// (for example credentials allowed to write but not to read) forgets the cached upload so
-/// the file is uploaded again.
+/// Only a matching `ETag` skips it. A redirect leaves the cached upload intact and
+/// stops the command. A missing object, another `ETag`, or other `HEAD` errors (for
+/// example write-only access) clear the cached upload so the file is uploaded again.
 async fn cached_upload_still_current(s3: &S3, key: &str, db: &Db) -> Result<Option<String>> {
     let Some(cached) = db.cached_etag()? else {
         return Ok(None);
@@ -378,6 +378,7 @@ async fn cached_upload_still_current(s3: &S3, key: &str, db: &Db) -> Result<Opti
                 "{key} changed on the server (ETag {remote:?}, uploaded {cached}), uploading again"
             ),
         },
+        Err(error) if error.is_redirect() => return Err(error.into()),
         Err(error) => {
             log::info!("could not confirm the earlier upload of {key} ({error}), uploading again");
         }

@@ -91,7 +91,7 @@ pub(super) async fn try_stream_part(part: &Stream<'_>) -> Result<String> {
                     e
                 );
 
-                if attempt == attempts {
+                if e.is_redirect() || attempt == attempts {
                     return Err(anyhow::anyhow!(
                         "Error uploading part number {}, {}",
                         part.part_number,

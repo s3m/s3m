@@ -21,9 +21,20 @@ pub use self::{
 
 use crate::s3::error::Result;
 use crate::s3::tools::{sha256_digest, write_hex_bytes};
-use reqwest::Client;
+use reqwest::{Client, redirect::Policy};
 use std::fmt;
 use url::Url;
+
+#[allow(clippy::expect_used)]
+fn s3_client() -> Client {
+    // An S3 redirect needs a new signature for the new host. In particular,
+    // following a 303 as GET can mistake a receipt's ETag for a PUT's ETag.
+    // Like Client::new, keep the infallible API and fail if TLS cannot initialize.
+    Client::builder()
+        .redirect(Policy::none())
+        .build()
+        .expect("initialize S3 HTTP client")
+}
 
 #[derive(Debug, Clone)]
 pub struct S3 {
@@ -65,7 +76,7 @@ impl S3 {
             region: region.clone(),
             bucket,
             no_sign_request,
-            client: Client::new(),
+            client: s3_client(),
         }
     }
 

@@ -99,11 +99,20 @@ impl Error {
         }
     }
 
+    /// Whether the API response has a 3xx HTTP status.
+    #[must_use]
+    pub fn is_redirect(&self) -> bool {
+        self.status()
+            .is_some_and(|status| (300..400).contains(&status))
+    }
+
     /// `true` if this is a `404 Not Found` / `NoSuchKey`-style API error.
     #[must_use]
     pub fn is_not_found(&self) -> bool {
         match self {
-            Self::Api(e) => e.status == 404 || e.code.as_deref() == Some("NoSuchKey"),
+            Self::Api(e) => {
+                !self.is_redirect() && (e.status == 404 || e.code.as_deref() == Some("NoSuchKey"))
+            }
             _ => false,
         }
     }

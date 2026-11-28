@@ -783,7 +783,10 @@ async fn upload_part(
                     e
                 );
 
-                if attempt == attempts {
+                if e.downcast_ref::<crate::s3::Error>()
+                    .is_some_and(crate::s3::Error::is_redirect)
+                    || attempt == attempts
+                {
                     return Err(e);
                 }
             }
@@ -831,8 +834,8 @@ fn is_not_implemented(error: &anyhow::Error) -> bool {
 /// `CompleteMultipartUpload` (`on_completion`). The same code with another status (a
 /// gateway's 503, for example) doesn't prove the upload is gone.
 fn upload_is_gone(error: &crate::s3::error::Error, on_completion: bool) -> bool {
-    error.code() == Some("NoSuchUpload")
-        && (error.status() == Some(404) || (on_completion && error.status() == Some(200)))
+    (error.status() == Some(404) || (on_completion && error.status() == Some(200)))
+        && error.code() == Some("NoSuchUpload")
 }
 
 fn is_no_such_upload(error: &anyhow::Error) -> bool {

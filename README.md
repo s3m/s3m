@@ -411,6 +411,10 @@ by the successful retry.
 
 ### Behavior notes
 
+* S3 redirects report the HTTP status and any S3 error code, region, or
+  sanitized destination supplied by the server. For a permanent redirect (301),
+  check the region or endpoint in the host config. A temporary redirect (307)
+  describes the destination for that request.
 * `s3m share --expire` accepts 1 to 604800 seconds. Values outside that range
   exit 2 without printing a URL.
 * `s3m --clean` exits nonzero when it can't remove stale state.
@@ -418,9 +422,10 @@ by the successful retry.
   `$S3M_HOME/config.yml`) exits 1 with an error that names the file.
 * Uploading a file that s3m already uploaded to the same key, unchanged (same
   content and modification time), is skipped when the object on the server still
-  has the `ETag` of that upload. s3m checks with a `HEAD` request. When the object
-  is gone or changed, or the `HEAD` request fails (for example credentials that
-  may write but not read), the file is uploaded again. The skip compares only
+  has the `ETag` of that upload. s3m checks with a `HEAD` request and reports a
+  redirect without re-uploading. When the object is gone or changed, or the `HEAD`
+  request fails for another reason (such as write-only access), the file is
+  uploaded again. The skip compares only
   the `ETag`: `--meta`, `--acl` and Object Lock flags given on that run are not
   applied to the existing object (use `s3m acl` or `s3m object-lock` for that).
 

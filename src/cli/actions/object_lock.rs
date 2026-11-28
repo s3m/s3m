@@ -17,6 +17,9 @@ use serde_json::json;
 /// carrying `NoSuchObjectLockConfiguration` for a missing object or bucket
 /// retention / legal hold. A missing bucket, key or version is a failure.
 fn is_unset(e: &Error) -> bool {
+    if e.is_redirect() {
+        return false;
+    }
     match e.code() {
         Some("NoSuchBucket" | "NoSuchKey" | "NoSuchVersion") => false,
         Some("NoSuchObjectLockConfiguration" | "ObjectLockConfigurationNotFoundError") => true,

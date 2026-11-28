@@ -9,7 +9,10 @@ use crate::s3::{
     signature::Signature,
 };
 use base64ct::{Base64, Encoding};
-use reqwest::{Method, Response, StatusCode, header::HeaderMap};
+use reqwest::{
+    Method, Response, StatusCode,
+    header::{HeaderMap, LOCATION},
+};
 use std::{collections::BTreeMap, fmt::Write};
 use url::Url;
 
@@ -209,6 +212,10 @@ fn has_additional_checksum(headers: &BTreeMap<&str, &str>) -> bool {
 /// `\u{2028}`), so a value can't start a line of its own in s3m's output.
 pub(crate) fn header_text(value: &reqwest::header::HeaderValue) -> String {
     let text = String::from_utf8_lossy(value.as_bytes());
+    display_text(&text)
+}
+
+fn display_text(text: &str) -> String {
     let mut shown = String::with_capacity(text.len());
     for character in text.chars() {
         if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
@@ -261,6 +268,97 @@ pub async fn response_error(response: Response) -> Error {
     api_error(status, &headers, body)
 }
 
+#[derive(serde::Deserialize)]
+struct RedirectEndpoint {
+    #[serde(rename = "Endpoint")]
+    endpoint: String,
+}
+
+fn redirect_destination(value: &str, location: bool) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(|c| c.is_control() || c == '\\') {
+        return None;
+    }
+
+    let (url, show_origin, show_path) =
+        if let Some((scheme, _)) = value.split_once("://").filter(|_| !value.starts_with('/')) {
+            if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
+                return None;
+            }
+            (Url::parse(value).ok()?, true, true)
+        } else if let Some(authority) = value.strip_prefix("//") {
+            (
+                Url::parse(&format!("https://{authority}")).ok()?,
+                false,
+                true,
+            )
+        } else if location {
+            let path = value.split(['?', '#']).next()?;
+            if path.is_empty() || path.contains([':', '@']) {
+                return None;
+            }
+            return Some(display_text(path));
+        } else {
+            let url = Url::parse(&format!("https://{value}")).ok()?;
+            (url, false, false)
+        };
+    let host = url.host_str()?;
+    let mut shown = if show_origin {
+        format!("{}://{host}", url.scheme())
+    } else if show_path {
+        format!("//{host}")
+    } else {
+        host.to_string()
+    };
+    if let Some(port) = url.port() {
+        let _ = write!(shown, ":{port}");
+    }
+    if show_path {
+        shown.push_str(url.path());
+    }
+    Some(shown)
+}
+
+fn redirect_hint(status: StatusCode, headers: &HeaderMap, body: Option<&str>) -> String {
+    // S3 can send an XML Endpoint or Location, and a temporary destination only
+    // applies to the request. See the S3 routing documentation.
+    // <https://docs.aws.amazon.com/AmazonS3/latest/developerguide/UsingRouting.html>
+    let destination = body
+        .and_then(|body| from_xml_root::<RedirectEndpoint>(body, "Error").ok())
+        .and_then(|body| redirect_destination(&body.endpoint, false))
+        .or_else(|| {
+            headers
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| redirect_destination(value, true))
+        });
+    let mut hint = match (status, destination) {
+        (StatusCode::MOVED_PERMANENTLY, Some(endpoint)) => {
+            format!("destination is {endpoint}. Update the host's endpoint or region")
+        }
+        (StatusCode::MOVED_PERMANENTLY, None) => "Update the host's endpoint or region".to_string(),
+        (StatusCode::TEMPORARY_REDIRECT, Some(endpoint)) => {
+            format!("the destination for this request is {endpoint}")
+        }
+        (StatusCode::TEMPORARY_REDIRECT, None) => "temporary redirect for this request".to_string(),
+        (_, Some(endpoint)) => format!("destination is {endpoint}"),
+        (_, None) => "service returned a redirect".to_string(),
+    };
+    if let Some(region) = headers
+        .get("x-amz-bucket-region")
+        .and_then(|value| value.to_str().ok())
+        .filter(|region| {
+            !region.is_empty()
+                && region
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+    {
+        let _ = write!(hint, ". The bucket is in region {region}");
+    }
+    hint
+}
+
 /// Build a structured [`Error::Api`] from a response's status, headers and body
 /// (`None` when the body could not be read). See [`response_error`].
 pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<String>) -> Error {
@@ -268,6 +366,10 @@ pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<St
 
     let mut detail: BTreeMap<&str, String> = BTreeMap::new();
     detail.insert("HTTP Status Code", status.to_string());
+
+    if status.is_redirection() {
+        detail.insert("Redirect", redirect_hint(status, headers, body.as_deref()));
+    }
 
     if let Some(v) = headers.get("x-amz-id-2").and_then(|h| h.to_str().ok()) {
         detail.insert("x-amz-id-2", v.to_string());
@@ -289,11 +391,16 @@ pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<St
             // codes (NoSuchUpload forgets a saved upload), and another document that
             // happens to have a <Code> must not trigger that.
             if let Ok(e) = from_xml_root::<ErrorResponse>(&body, "Error") {
-                code = Some(e.code.clone());
-                message = Some(e.message.clone());
-                detail.insert("Code", e.code);
-                detail.insert("Message", e.message);
-            } else if !body.is_empty() {
+                if !status.is_redirection() || e.code.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                    code = Some(e.code.clone());
+                    detail.insert("Code", e.code);
+                }
+                // Redirects may echo the raw destination in Message or a non-XML body.
+                if !status.is_redirection() {
+                    message = Some(e.message.clone());
+                    detail.insert("Message", e.message);
+                }
+            } else if !status.is_redirection() && !body.is_empty() {
                 detail.insert("Response", body);
             }
         }
@@ -322,6 +429,63 @@ pub(crate) fn api_error(status: StatusCode, headers: &HeaderMap, body: Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn reject_read_redirect(method: &str, path: &str) -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let s3 = S3::new(
+            &crate::s3::Credentials::new("", &secrecy::SecretString::new("".into())),
+            &crate::s3::Region::custom("us-east-1", server.url()),
+            Some("bucket".into()),
+            true,
+        );
+        let redirect = server
+            .mock(method, path)
+            .with_status(301)
+            .with_header("location", "/destination")
+            .create_async()
+            .await;
+        let destination = server
+            .mock(method, "/destination")
+            .with_status(200)
+            .with_body("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let result = match (method, path) {
+            ("HEAD", _) => HeadObject::new("key", None).request(&s3).await.map(drop),
+            (_, "/bucket/key") => GetObject::new("key", None)
+                .request(&s3, &crate::s3::RequestOptions::default())
+                .await
+                .map(drop),
+            _ => ListObjectsV2::default().request(&s3).await.map(drop),
+        };
+        assert_eq!(
+            result.as_ref().err().and_then(Error::status),
+            Some(301),
+            "{method} {path} must fail at the redirect: {result:?}"
+        );
+        let message = result.err().map_or_else(String::new, |e| e.to_string());
+        assert!(message.contains("destination is /destination"), "{message}");
+        redirect.assert_async().await;
+        destination.assert_async().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn redirects_are_not_followed_by_get() -> anyhow::Result<()> {
+        reject_read_redirect("GET", "/bucket/key").await
+    }
+
+    #[tokio::test]
+    async fn redirects_are_not_followed_by_head() -> anyhow::Result<()> {
+        reject_read_redirect("HEAD", "/bucket/key").await
+    }
+
+    #[tokio::test]
+    async fn redirects_are_not_followed_by_listing() -> anyhow::Result<()> {
+        reject_read_redirect("GET", "/bucket?list-type=2").await
+    }
 
     // A server may put bytes outside ASCII in a header s3m only shows (a lifecycle
     // rule id in x-amz-expiration, for example). The upload is stored by then.
